@@ -233,7 +233,7 @@ void main() {
               themeMode: mode,
               localizationsDelegates: AppLocalizations.localizationsDelegates,
               supportedLocales: AppLocalizations.supportedLocales,
-              home: const Scaffold(body: QueueTab()),
+              home: const Scaffold(body: QueueTab(manageLibraries: false)),
             ),
           ),
         ),

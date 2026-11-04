@@ -1,6 +1,7 @@
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:mornye/providers/server_favourite_provider.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mornye/l10n/l10n.dart';
 import 'package:mornye/providers/library_collections_provider.dart';
@@ -71,11 +72,20 @@ class MornyePlayerActionsSheet extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final track = ref.watch(playerCollectionTrackProvider(mediaItem)).value;
-    final loved = ref.watch(
+    final localLoved = ref.watch(
       libraryCollectionsProvider.select(
         (state) => track != null && state.isLoved(track),
       ),
     );
+    final loved =
+        ref
+            .watch(
+              serverFavouriteProvider(
+                mediaItem.extras?['source']?.toString() ?? mediaItem.id,
+              ),
+            )
+            .value ??
+        localLoved;
     return _MornyePlayerMenuSurface(
       mediaItem: mediaItem,
       child: MornyeContextMenu(

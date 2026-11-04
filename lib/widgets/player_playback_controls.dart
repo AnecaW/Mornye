@@ -1,5 +1,6 @@
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
+import 'package:mornye/services/playback_preparation.dart';
 import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_3_expressive/material_3_expressive.dart' show M3ETheme;
@@ -79,6 +80,15 @@ class PlayerPlaybackControls extends ConsumerWidget {
       textDirection: TextDirection.ltr,
       child: Column(
         children: [
+          ValueListenableBuilder<PlaybackPhase>(
+            valueListenable: ref.read(musicPlayerRuntimeProvider).phase,
+            builder: (_, phase, _) => phase == PlaybackPhase.recovering
+                ? Semantics(
+                    liveRegion: true,
+                    child: const Text('Recovering playback...'),
+                  )
+                : const SizedBox.shrink(),
+          ),
           // Position ticks repaint only the timeline.
           RepaintBoundary(
             child: ValueListenableBuilder<Duration?>(

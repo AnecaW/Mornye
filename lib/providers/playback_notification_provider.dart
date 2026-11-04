@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:mornye/providers/server_favourite_provider.dart';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mornye/models/theme_settings.dart';
@@ -26,11 +27,21 @@ final playbackNotificationProvider = Provider.autoDispose
       final track = item == null
           ? null
           : ref.watch(playerCollectionTrackProvider(item)).value;
-      final loved = ref.watch(
+      final localLoved = ref.watch(
         libraryCollectionsProvider.select(
           (state) => track != null && state.isLoved(track),
         ),
       );
+      final loved = item == null
+          ? localLoved
+          : ref
+                    .watch(
+                      serverFavouriteProvider(
+                        item.extras?['source']?.toString() ?? item.id,
+                      ),
+                    )
+                    .value ??
+                localLoved;
       // Publishing playback state inside a provider build would synchronously
       // modify the stream provider this binding is observing.
       var active = true;

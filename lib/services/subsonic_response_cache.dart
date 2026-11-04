@@ -27,6 +27,11 @@ class SubsonicResponseCache {
   final _pending = <String, Future<Map<String, dynamic>>>{};
   final _epochs = <String, int>{};
   static const _methods = {
+    'getGenres',
+    'getStarred2',
+    'getInternetRadioStations',
+    'search3',
+    'getSongsByGenre',
     'getArtists',
     'getArtist',
     'getAlbumList2',

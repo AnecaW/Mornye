@@ -1,6 +1,7 @@
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/material.dart';
+import 'package:mornye/providers/server_favourite_provider.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mornye/l10n/l10n.dart';
 import 'package:mornye/providers/library_collections_provider.dart';
@@ -58,11 +59,15 @@ class _MornyePlayerFavoriteButtonState
     final track = ref
         .watch(playerCollectionTrackProvider(widget.mediaItem))
         .value;
-    final loved = ref.watch(
+    final localLoved = ref.watch(
       libraryCollectionsProvider.select(
         (state) => track != null && state.isLoved(track),
       ),
     );
+    final source =
+        widget.mediaItem.extras?['source']?.toString() ?? widget.mediaItem.id;
+    final loved =
+        ref.watch(serverFavouriteProvider(source)).value ?? localLoved;
     return Semantics(
       toggled: loved,
       child: MornyePlaybackButton(

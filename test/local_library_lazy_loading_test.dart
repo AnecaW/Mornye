@@ -246,7 +246,12 @@ void main() {
                   : AppTheme.light(),
               localizationsDelegates: AppLocalizations.localizationsDelegates,
               supportedLocales: AppLocalizations.supportedLocales,
-              home: const Scaffold(body: QueueTab(librarySection: 'playlists')),
+              home: const Scaffold(
+                body: QueueTab(
+                  manageLibraries: false,
+                  librarySection: 'playlists',
+                ),
+              ),
             ),
           ),
         );
@@ -316,7 +321,12 @@ void main() {
                 : AppTheme.light(),
             localizationsDelegates: AppLocalizations.localizationsDelegates,
             supportedLocales: AppLocalizations.supportedLocales,
-            home: const Scaffold(body: QueueTab(librarySection: 'playlists')),
+            home: const Scaffold(
+              body: QueueTab(
+                manageLibraries: false,
+                librarySection: 'playlists',
+              ),
+            ),
           ),
         ),
       );
@@ -442,7 +452,9 @@ void main() {
             theme: AppTheme.light(),
             localizationsDelegates: AppLocalizations.localizationsDelegates,
             supportedLocales: AppLocalizations.supportedLocales,
-            home: Scaffold(body: QueueTab(librarySection: section)),
+            home: Scaffold(
+              body: QueueTab(manageLibraries: false, librarySection: section),
+            ),
           ),
         ),
       );

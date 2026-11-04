@@ -1,7 +1,7 @@
 name: Mobile delivery
 on:
   push:
-    branches: [feature/subsonic-navidrome-streaming]
+    branches: [feature/subsonic-navidrome-streaming, feature/navidrome-libraries-sync]
   workflow_dispatch:
 permissions:
   contents: read

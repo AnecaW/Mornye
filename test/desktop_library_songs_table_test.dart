@@ -227,7 +227,10 @@ void main() {
           supportedLocales: AppLocalizations.supportedLocales,
           // Mornye opens Songs as a section page from its Library root.
           home: Scaffold(
-            body: QueueTab(librarySection: mornye && !root ? filterMode : null),
+            body: QueueTab(
+              manageLibraries: false,
+              librarySection: mornye && !root ? filterMode : null,
+            ),
           ),
         ),
       ),

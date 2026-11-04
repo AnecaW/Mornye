@@ -159,6 +159,10 @@ class AudioplayersPlaybackDeck implements PlaybackDeck {
               _durations.add(event.duration!);
             case AudioEventType.complete:
               _completions.add(null);
+            case AudioEventType.log:
+              if (event.logMessage?.startsWith('mornye-buffering:') == true) {
+                _buffering.add(event.logMessage == 'mornye-buffering:true');
+              }
             default:
               break;
           }
@@ -241,6 +245,8 @@ class AudioplayersPlaybackDeck implements PlaybackDeck {
   }
 
   final bool _nativeAvailable;
+  final _buffering = StreamController<bool>.broadcast();
+  Stream<bool> get buffering => _buffering.stream;
   final _states = StreamController<PlaybackDeckState>.broadcast();
   final _durations = StreamController<Duration>.broadcast();
   final _positions = StreamController<Duration>.broadcast();
@@ -459,7 +465,21 @@ class AudioplayersPlaybackDeck implements PlaybackDeck {
     try {
       // A network source waits for its server, up to the plugin's prepare
       // timeout; a newer song abandons it instead of queueing behind it.
-      await Future.any([_ordinary.setSource(source), abandoned.future]);
+      // audioplayers waits for both the native method and onPrepared using
+      // Future.wait(eagerError:false). A timed-out onPrepared alone therefore
+      // cannot finish while AVPlayer's native preparation is still pending.
+      await Future.any([
+        _ordinary.setSource(source),
+        abandoned.future,
+      ]).timeout(AudioPlayer.preparationTimeout + const Duration(seconds: 5));
+    } on TimeoutException {
+      if (identical(_ordinaryPreparation, abandoned)) {
+        _ordinaryPreparation = null;
+        abandoned.complete();
+        // Reset the native item before a bounded recovery attempts a new one.
+        await _ordinary.release().timeout(const Duration(seconds: 5));
+      }
+      rethrow;
     } finally {
       if (identical(_ordinaryPreparation, abandoned)) {
         _ordinaryPreparation = null;
@@ -659,6 +679,7 @@ class AudioplayersPlaybackDeck implements PlaybackDeck {
       await subscription.cancel();
     }
     await _ordinary.dispose();
+    await _buffering.close();
     await _states.close();
     await _durations.close();
     await _positions.close();

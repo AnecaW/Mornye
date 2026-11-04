@@ -259,7 +259,8 @@ class LibraryQueueStore {
   Future<QueueLibraryCounts?> _getUnfilteredQueueCounts(
     QueueLibraryDbQuery request,
   ) async {
-    if (sqlite.normalizeLookupText(request.searchQuery).isNotEmpty ||
+    if (request.deviceOnly ||
+        sqlite.normalizeLookupText(request.searchQuery).isNotEmpty ||
         request.albumArtist != null ||
         request.quality != null ||
         request.format != null ||
@@ -894,6 +895,12 @@ class LibraryQueueStore {
     required String lyricsKnownExpr,
     required String hasReplayGainExpr,
   }) {
+    if (request.deviceOnly) {
+      for (final scheme in const ['network://%', 'http://%', 'https://%']) {
+        where.add('$filePathExpr NOT LIKE ?');
+        args.add(scheme);
+      }
+    }
     final quality = request.quality?.trim().toLowerCase();
     if (quality != null && quality.isNotEmpty) {
       final isHiRes =

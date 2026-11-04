@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:mornye/services/navidrome_library.dart';
 
 import 'package:audio_service/audio_service.dart' show MediaItem;
 import 'package:mornye/models/download_history.dart';
@@ -44,11 +45,27 @@ class BackgroundFavorites {
     covers: covers,
   );
 
-  Future<bool> isLoved(MediaItem item) async =>
-      collections.containsLovedTrack(trackCollectionKey(await _track(item)));
+  Future<bool> isLoved(MediaItem item) async {
+    final target = await NavidromeLibrary.forSource(
+      item.extras?['source']?.toString() ?? item.id,
+    );
+    if (target != null) {
+      return subsonicObject(
+            (await target.library.read('getSong', {'id': target.id}))['song'],
+          )['starred'] !=
+          null;
+    }
+    return collections.containsLovedTrack(
+      trackCollectionKey(await _track(item)),
+    );
+  }
 
   /// Loves [item], or stops loving it, and returns whether it is now loved.
   Future<bool> toggle(MediaItem item) async {
+    final target = await NavidromeLibrary.forSource(
+      item.extras?['source']?.toString() ?? item.id,
+    );
+    if (target != null) return target.library.toggleSong(target.id);
     final track = await _track(item);
     final key = trackCollectionKey(track);
     if (await collections.containsLovedTrack(key)) {

@@ -184,7 +184,12 @@ void main() {
             child: child!,
           ),
           // Mornye opens Songs as a section page from its Library root.
-          home: Scaffold(body: QueueTab(librarySection: mornye ? 'all' : null)),
+          home: Scaffold(
+            body: QueueTab(
+              manageLibraries: false,
+              librarySection: mornye ? 'all' : null,
+            ),
+          ),
         ),
       ),
     );

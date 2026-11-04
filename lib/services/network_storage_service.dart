@@ -908,6 +908,7 @@ class NetworkStorageService {
     int redirects = 0,
     Map<String, String> headers = const {},
     File? upload,
+    String? formBody,
     void Function()? checkpoint,
     void Function(int)? progress,
   }) async {
@@ -957,6 +958,16 @@ class NetworkStorageService {
     }
     if (range != null) request.headers.set(HttpHeaders.rangeHeader, range);
     headers.forEach(request.headers.set);
+    if (formBody != null) {
+      request.headers.contentType = ContentType(
+        'application',
+        'x-www-form-urlencoded',
+        charset: 'utf-8',
+      );
+      final bytes = utf8.encode(formBody);
+      request.contentLength = bytes.length;
+      request.add(bytes);
+    }
     if (upload != null) {
       request.contentLength = await upload.length();
       var sent = 0;

@@ -48,7 +48,7 @@ String? subsonicSongIdFromPath(String path) {
 Uri _subsonicTarget(
   NetworkConnection connection,
   String method,
-  Map<String, String> arguments,
+  Map<String, dynamic> arguments,
 ) {
   final root = connection.root;
   final path = root.pathSegments
@@ -56,7 +56,7 @@ Uri _subsonicTarget(
       .toList();
   if (path.lastOrNull != 'rest') path.add('rest');
   path.add('$method.view');
-  final parameters = <String, String>{
+  final parameters = <String, dynamic>{
     'v': '1.16.1',
     'c': 'Mornye',
     'f': 'json',
@@ -253,6 +253,31 @@ class SubsonicClient {
     _http.close(force: true);
   }
 
+  /// Live reads and mutations support repeated Subsonic form parameters.
+  /// Never retry writes automatically: a lost response may follow a committed
+  /// server operation. Callers reconcile against fresh server state instead.
+  Future<Map<String, dynamic>> live(
+    String method, [
+    Map<String, dynamic> arguments = const {},
+  ]) => _protectTransport(() async {
+    final result = await _requestJson(method, arguments, true);
+    if (const {
+      'createPlaylist',
+      'updatePlaylist',
+      'deletePlaylist',
+      'star',
+      'unstar',
+      'setRating',
+      'scrobble',
+      'createInternetRadioStation',
+      'updateInternetRadioStation',
+      'deleteInternetRadioStation',
+    }.contains(method)) {
+      await _storage.metadataCache?.invalidate(jsonEncode(connection.toJson()));
+    }
+    return result;
+  });
+
   Future<Map<String, dynamic>> request(
     String method, [
     Map<String, String> arguments = const {},
@@ -294,14 +319,17 @@ class SubsonicClient {
 
   Future<Map<String, dynamic>> _requestJson(
     String method, [
-    Map<String, String> arguments = const {},
+    Map<String, dynamic> arguments = const {},
+    bool post = false,
   ]) async {
     if (_closed) throw StateError('Subsonic request cancelled');
+    final target = _subsonicTarget(connection, method, arguments);
     final response = await _storage._request(
       _http,
       connection,
-      'GET',
-      _subsonicTarget(connection, method, arguments),
+      post ? 'POST' : 'GET',
+      post ? target.replace(query: '') : target,
+      formBody: post ? target.query : null,
     );
     if (response.statusCode != 200) {
       await _storage._discardResponse(response);

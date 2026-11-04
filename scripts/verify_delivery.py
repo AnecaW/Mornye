@@ -50,7 +50,7 @@ def verify(package, commit, aapt=None):
         for name in required:
             if not archive.read(name):
                 raise ValueError(f"Required native component is empty: {name}")
-        markers = [b"Automatic music cache", b"Music transfers", b"Upload and keep originals", commit[:8].encode()]
+        markers = [b"Automatic music cache", b"Music transfers", b"Upload and keep originals", b"New music library", b"Favourite songs", b"Recovering playback...", commit[:8].encode()]
         for marker in markers:
             if marker not in binary:
                 raise ValueError(f"Compiled implementation/provenance marker missing: {marker!r}")

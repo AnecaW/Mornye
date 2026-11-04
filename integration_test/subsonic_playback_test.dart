@@ -7,6 +7,7 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:mornye/services/network_audio_cache.dart';
+import 'package:mornye/services/music_playback_deck.dart';
 import 'package:mornye/services/network_storage_service.dart';
 
 import '../test/support/subsonic_fixture.dart';
@@ -111,6 +112,57 @@ void main() {
             ),
         isTrue,
       );
+
+      // Exercise the app's actual deck with a delayed server response, then
+      // supersede its preparation before another track becomes audible.
+      final slow = await SubsonicFixture.start();
+      addTearDown(slow.close);
+      slow.audio = bytes;
+      slow.audioContentType = 'audio/$format';
+      slow.blockMethod = 'stream';
+      final slowStorage = NetworkStorageService(
+        read: () async => null,
+        write: (_) async {},
+        ensureAccess: (_) async {},
+      );
+      addTearDown(slowStorage.dispose);
+      await slowStorage.save(slow.connection());
+      final slowSource = NetworkStorageService.source(
+        'fixture',
+        subsonicSongPath('slow-$format', format),
+      );
+      final slowUrl = await slowStorage.resolve(slowSource);
+      final deck = AudioplayersPlaybackDeck(
+        playerId: 'native-recovery-$format',
+      );
+      addTearDown(deck.dispose);
+      await deck.configureOutput();
+      await deck.setVolume(0);
+      var prepared = false;
+      final pending = deck
+          .setNetworkSource(slowUrl)
+          .then((_) => prepared = true);
+      await slow.held.future.timeout(const Duration(seconds: 10));
+      await Future<void>.delayed(const Duration(milliseconds: 350));
+      expect(
+        prepared,
+        isFalse,
+        reason: 'Delayed preparation must await native readiness',
+      );
+      await deck.cancelPreparation();
+      await pending;
+      slow.blockMethod = null;
+      if (!slow.release.isCompleted) slow.release.complete();
+      await deck.setNetworkSource(url).timeout(const Duration(seconds: 20));
+      await deck.resume();
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      expect((await deck.getCurrentPosition())!.inMilliseconds, greaterThan(0));
+      await deck.pause();
+      for (var cycle = 0; cycle < 3; cycle++) {
+        await deck.setNetworkSource(url).timeout(const Duration(seconds: 20));
+        await deck.resume();
+        await deck.pause();
+      }
 
       final cache = NetworkAudioCache(directory: () async => directory);
       await cache.initialize();

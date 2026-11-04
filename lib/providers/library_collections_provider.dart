@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:mornye/services/navidrome_library.dart';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
@@ -211,6 +212,10 @@ class LibraryCollectionsNotifier extends Notifier<LibraryCollectionsState> {
   );
 
   Future<bool> toggleLoved(Track track) async {
+    final server = await NavidromeLibrary.forSource(
+      track.id.startsWith('network://') ? track.id : track.source,
+    );
+    if (server != null) return server.library.toggleSong(server.id);
     final loved = await _toggleTrackEntry(
       track,
       contains: (key) => state.containsLovedKey(key),
@@ -248,6 +253,42 @@ class LibraryCollectionsNotifier extends Notifier<LibraryCollectionsState> {
   /// One selection is one mutation: mixed selections add only missing tracks,
   /// fully loved selections remove them, and observers see one committed state.
   Future<({bool removed, int count})> toggleLovedTracks(
+    Iterable<Track> tracks,
+  ) async {
+    final selected = tracks.toList();
+    final local = <Track>[];
+    final servers = <({NavidromeLibrary library, String id})>[];
+    for (final track in selected) {
+      final server = await NavidromeLibrary.forSource(
+        track.id.startsWith('network://') ? track.id : track.source,
+      );
+      if (server == null) {
+        local.add(track);
+      } else {
+        servers.add(server);
+      }
+    }
+    if (servers.isEmpty) return _toggleLovedTracksLocal(local);
+    final states = await Future.wait(
+      servers.map(
+        (s) async =>
+            subsonicObject(
+              (await s.library.read('getSong', {'id': s.id}, true))['song'],
+            )['starred'] !=
+            null,
+      ),
+    );
+    final remove = states.every((s) => s);
+    for (final server in servers) {
+      await server.library.star(server.id, 'song', !remove);
+    }
+    final localResult = local.isEmpty
+        ? (removed: remove, count: 0)
+        : await _toggleLovedTracksLocal(local);
+    return (removed: remove, count: servers.length + localResult.count);
+  }
+
+  Future<({bool removed, int count})> _toggleLovedTracksLocal(
     Iterable<Track> tracks,
   ) => _mutate(() async {
     final selected = tracks.toList(growable: false);

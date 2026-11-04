@@ -325,7 +325,10 @@ void main() {
                     builder: (_, active, _) => Scaffold(
                       body: TickerMode(
                         enabled: active,
-                        child: QueueTab(isTabActive: active),
+                        child: QueueTab(
+                          manageLibraries: false,
+                          isTabActive: active,
+                        ),
                       ),
                     ),
                   ),

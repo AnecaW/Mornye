@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:mornye/services/navidrome_library.dart';
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -35,7 +36,47 @@ Future<void> showAddTracksToPlaylistSheet(
   bool preserveOccurrences = false,
 }) async {
   if (tracks.isEmpty) return;
-
+  final targets = <({NavidromeLibrary library, String id})>[];
+  for (final track in tracks) {
+    final target = await NavidromeLibrary.forSource(
+      track.id.startsWith('network://') ? track.id : track.source,
+    );
+    if (target != null) targets.add(target);
+  }
+  if (!context.mounted) return;
+  if (targets.isNotEmpty) {
+    if (targets.length != tracks.length ||
+        targets.any(
+          (t) => t.library.connection.id != targets.first.library.connection.id,
+        )) {
+      throw StateError(
+        'A server playlist can only contain tracks from the same server.',
+      );
+    }
+    final library = targets.first.library;
+    final lists = await library.playlists(fresh: true);
+    if (!context.mounted) return;
+    final id = await showDialog<String>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('Add to server playlist'),
+        children: [
+          for (final list in lists)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, list['id'].toString()),
+              child: Text(list['name']?.toString() ?? ''),
+            ),
+        ],
+      ),
+    );
+    if (id == null) return;
+    final base = await library.playlist(id, fresh: true);
+    await library.editPlaylist(
+      base,
+      songs: [...base.songIds, ...targets.map((t) => t.id)],
+    );
+    return;
+  }
   if (!context.mounted) return;
 
   await showAppModalBottomSheet<void>(
