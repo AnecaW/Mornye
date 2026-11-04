@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
+import 'package:path/path.dart' as p;
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
@@ -94,10 +95,11 @@ void main() {
       );
       final network = source != 'local backdrop';
       final backdrop = source != 'network cover';
+      final localPath = p.join(Directory.current.path, 'metadata-prewarm.png');
       const url = 'https://example.invalid/metadata-prewarm.png';
       final ImageProvider provider = network
           ? cachedCoverImageProvider(url)
-          : FileImage(File('/metadata-prewarm.png'));
+          : FileImage(File(localPath));
       final width = backdrop
           ? metadataBackdropCacheExtent(context)
           : coverCacheWidthForViewport(context);
@@ -125,10 +127,7 @@ void main() {
       try {
         await tester.runAsync(() async {
           if (backdrop) {
-            await precacheMetadataBackdrop(
-              context,
-              network ? url : '/metadata-prewarm.png',
-            );
+            await precacheMetadataBackdrop(context, network ? url : localPath);
           } else {
             precacheCoverImage(context, url);
             await Future<void>.delayed(Duration.zero);
@@ -146,7 +145,7 @@ void main() {
                     memCacheHeight: backdrop ? width : null,
                   )
                 : Image.file(
-                    File('/metadata-prewarm.png'),
+                    File(localPath),
                     cacheWidth: width,
                     cacheHeight: width,
                   ),
@@ -542,7 +541,7 @@ void main() {
         await _writeCover(directory, const Size(128, 128));
         return directory;
       });
-      final path = '${directory!.path}/cover.png';
+      final path = p.join(directory!.path, 'cover.png');
       try {
         await tester.runAsync(() async {
           await tester.pumpWidget(
@@ -597,7 +596,7 @@ void main() {
         await _writeCover(directory, const Size(64, 64));
         return directory;
       });
-      final path = '${directory!.path}/cover.png';
+      final path = p.join(directory!.path, 'cover.png');
       // The Track Metadata hero decodes a local cover with this key.
       final key = await ResizeImage(
         FileImage(File(path)),

@@ -16,6 +16,7 @@ import 'package:mornye/providers/settings_provider.dart';
 import 'package:mornye/screens/queue_tab.dart';
 import 'package:mornye/services/history_database.dart';
 import 'package:mornye/services/library_database.dart';
+import 'package:mornye/services/sqlite_helpers.dart' as sqlite_helpers;
 import 'package:mornye/theme/app_theme.dart';
 import 'package:mornye/utils/desktop_platform.dart';
 import 'package:mornye/widgets/desktop/track_table.dart';
@@ -130,6 +131,10 @@ void main() {
   setUp(() {
     _renamed.clear();
     SharedPreferences.setMockInitialValues({});
+    // Let desktop bootstrap finish before installing the channel test double;
+    // otherwise the first database open replaces it with the real FFI factory.
+    debugDesktopPlatformOverride = true;
+    sqlite_helpers.ensureAppDatabaseFactory();
     final previousFactory = databaseFactoryOrNull;
     databaseFactory = databaseFactorySqflitePlugin;
     addTearDown(() => databaseFactory = previousFactory);
@@ -203,7 +208,7 @@ void main() {
       addTearDown(tester.view.reset);
       themeMode = ValueNotifier(ThemeMode.light);
       addTearDown(themeMode.dispose);
-      nowPlaying = StreamController<MediaItem?>();
+      nowPlaying = StreamController<MediaItem?>.broadcast();
       addTearDown(nowPlaying.close);
       await tester.pumpWidget(
         ProviderScope(

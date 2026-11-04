@@ -26,8 +26,12 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libclang-dev ffmpeg
       - run: flutter pub get && dart scripts/prepare_flutter_sdk.dart
       - run: flutter analyze --no-fatal-infos
-      - run: flutter test --concurrency 4
+      - run: mkdir -p build/test-results && flutter test --concurrency 4 --file-reporter json:build/test-results/flutter.jsonl
+      - name: Delivery verifier tests
+        if: always()
+        run: python3 -m unittest discover -s scripts -p test_verify_delivery.py
       - name: Rust formatting, Clippy and tests
+        if: always()
         run: bash scripts/check_rust_backend.sh
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
@@ -73,8 +77,22 @@ jobs:
           printf 'storeFile=%s\nstorePassword=%s\nkeyPassword=%s\nkeyAlias=mornye-delivery\n' "$RUNNER_TEMP/mornye-delivery.jks" "$password" "$password" > android/key.properties
           chmod 600 android/key.properties "$RUNNER_TEMP/mornye-delivery.jks"
       - run: flutter pub get && dart scripts/prepare_flutter_sdk.dart
+      - name: Restore Android native build cache
+        continue-on-error: true
+        id: android-rust-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: rust_backend/target
+          key: mobile-lite-ndk30-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust_backend/Cargo.lock', 'rust_backend/Cargo.toml', 'rust_backend/rust-toolchain.toml', 'rust_backend/crates/**/Cargo.toml', 'rust_backend/crates/**/*.rs', 'scripts/build_rust_backend.sh') }}
       - name: Build actual release APKs
         run: bash scripts/build_android.sh --lite --target lib/main.dart
+      - name: Save Android native build cache
+        continue-on-error: true
+        if: steps.android-rust-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: rust_backend/target
+          key: ${{ steps.android-rust-cache.outputs.cache-primary-key }}
       - name: Verify and collect APKs
         run: |
           set -euo pipefail
@@ -104,8 +122,22 @@ jobs:
           channel: stable
           flutter-version-file: .fvmrc
           cache: true
+      - name: Restore iOS native build cache
+        continue-on-error: true
+        id: ios-rust-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: rust_backend/target
+          key: mobile-lite-xcode27-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust_backend/Cargo.lock', 'rust_backend/Cargo.toml', 'rust_backend/rust-toolchain.toml', 'rust_backend/crates/**/Cargo.toml', 'rust_backend/crates/**/*.rs', 'scripts/build_rust_backend.sh') }}
       - name: Build Rust iOS framework
         run: bash scripts/build_ios.sh
+      - name: Save iOS native build cache
+        continue-on-error: true
+        if: steps.ios-rust-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: rust_backend/target
+          key: ${{ steps.ios-rust-cache.outputs.cache-primary-key }}
       - run: flutter pub get && dart scripts/prepare_flutter_sdk.dart
       - name: Configure native pods
         run: |

@@ -193,7 +193,9 @@ void main() {
       CREATE TABLE library(
         id TEXT PRIMARY KEY, file_path TEXT,
         source_id TEXT NOT NULL DEFAULT 'legacy', isrc TEXT,
-        match_key TEXT DEFAULT 'song|artist'
+        match_key TEXT DEFAULT 'song|artist',
+        audio_metadata_scan_version INTEGER NOT NULL DEFAULT 0,
+        format TEXT DEFAULT 'flac'
       )
     ''');
     await createPathKeyTable(db, 'library_path_keys');

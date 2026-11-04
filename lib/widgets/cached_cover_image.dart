@@ -339,7 +339,7 @@ String? coverFilePath(String? source) {
   if (source == null || source.isEmpty) return null;
   if (source.startsWith('file://')) {
     try {
-      return Uri.parse(source).toFilePath();
+      return p.normalize(Uri.parse(source).toFilePath());
     } on FormatException {
       return null;
     } on UnsupportedError {
@@ -351,7 +351,7 @@ String? coverFilePath(String? source) {
   if (CoverStore.fetches(source)) {
     return CoverStore.instance.indexedFile(source);
   }
-  return p.isAbsolute(source) ? source : null;
+  return p.isAbsolute(source) ? p.normalize(source) : null;
 }
 
 /// [placeholder] for a cover string without an image, and for a `network://`

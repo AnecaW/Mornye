@@ -28,7 +28,8 @@ void main() {
   late LibraryQueueStore store;
   setUp(() async {
     db = await SqliteProcessDatabase.open();
-    store = await createLibraryPagingFixture(db);
+    store = await createLibraryPagingFixture(db, useShadowSnapshot: true);
+    expect(store.shadowSnapshot, isTrue);
   });
   tearDown(() => db.close());
 

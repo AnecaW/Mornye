@@ -115,3 +115,6 @@ flutter_*.log
 
 # Verified delivery artifacts are distributed through Actions.
 /dist/
+
+# Python verification caches
+__pycache__/

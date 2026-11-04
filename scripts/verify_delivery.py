@@ -10,6 +10,13 @@ import zipfile
 from pathlib import Path
 
 
+def android_version_code(build_number, abis):
+    # Flutter 3.47 split APKs reserve a 1000-code range for each ABI.
+    # See FlutterPluginConstants.ABI_VERSION in the pinned Flutter SDK.
+    offsets = {"armeabi-v7a": 1000, "arm64-v8a": 2000, "x86_64": 4000}
+    return str(int(build_number) + (offsets[next(iter(abis))] if len(abis) == 1 else 0))
+
+
 def verify(package, commit, aapt=None):
     with zipfile.ZipFile(package) as archive:
         names = archive.namelist()
@@ -49,11 +56,15 @@ def verify(package, commit, aapt=None):
                 raise ValueError(f"Compiled implementation/provenance marker missing: {marker!r}")
     pubspec = Path("pubspec.yaml").read_text()
     expected_version, expected_number = re.search(r"^version:\s*([^+\s]+)\+(\d+)", pubspec, re.M).groups()
-    if (version, number) != (expected_version, expected_number):
+    expected_package_number = expected_number
+    if package.suffix == ".apk":
+        abis = {name.split("/")[1] for name in names if re.fullmatch(r"lib/[^/]+/libapp\.so", name)}
+        expected_package_number = android_version_code(expected_number, abis)
+    if (version, number) != (expected_version, expected_package_number):
         raise ValueError(f"Package version {version}+{number} differs from source")
     return {"file": package.name, "bytes": package.stat().st_size,
             "sha256": hashlib.file_digest(package.open("rb"), "sha256").hexdigest(),
-            "version": version, "build_number": number, "application_id": identifier,
+            "version": version, "build_number": expected_number, "package_version_code": number, "application_id": identifier,
             "commit": commit, "release_aot_verified": True,
             "compiled_feature_markers_verified": True, "discord_sdk": False}
 

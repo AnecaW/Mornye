@@ -184,7 +184,22 @@ for line in sys.stdin:
 class _Batch implements Batch {
   _Batch(this.database);
   final SqliteProcessDatabase database;
-  final _operations = <Future<int> Function()>[];
+  final _operations = <Future<Object?> Function()>[];
+
+  @override
+  void rawQuery(String sql, [List<Object?>? arguments]) =>
+      _operations.add(() => database.rawQuery(sql, arguments));
+
+  @override
+  void execute(String sql, [List<Object?>? arguments]) =>
+      _operations.add(() async {
+        await database.execute(sql, arguments);
+        return null;
+      });
+
+  @override
+  Future<List<Object?>> apply({bool? noResult, bool? continueOnError}) =>
+      commit(noResult: noResult, continueOnError: continueOnError);
 
   @override
   void insert(

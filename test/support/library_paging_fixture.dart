@@ -2,14 +2,16 @@ import 'package:sqflite/sqflite.dart';
 import 'package:mornye/providers/library_browse_provider.dart';
 import 'package:mornye/services/library_queue_store.dart';
 import 'package:mornye/services/library_schema.dart';
+import 'package:mornye/services/sqlite_helpers.dart' as sqlite_helpers;
 
-/// Real schema17 local rows, two-source album ties, mirrored paths and an
+/// Current Library-schema local rows, two-source album ties, mirrored paths and an
 /// unavailable source. The history read fixture uses the same named columns
 /// and covering album index as the app; no network or production DB is touched.
 Future<LibraryQueueStore> createLibraryPagingFixture(
   Database db, {
   int albumsPerSource = 500,
   String cover = '',
+  bool useShadowSnapshot = false,
 }) async {
   await LibrarySchema.create(db, LibrarySchema.version);
   await db.execute("ATTACH DATABASE ':memory:' AS history_db");
@@ -20,6 +22,11 @@ Future<LibraryQueueStore> createLibraryPagingFixture(
       NULL AS cover_url, NULL AS downloaded_at, NULL AS service
     FROM library WHERE 0
   ''');
+  // CREATE TABLE AS drops the real History table's primary-key index. The
+  // fixture must retain indexed id lookups just as the app does.
+  await db.execute(
+    'CREATE UNIQUE INDEX history_db.idx_history_id ON history(id)',
+  );
   await db.execute(
     'CREATE INDEX history_db.idx_history_album_key ON history(album_key)',
   );
@@ -116,7 +123,15 @@ Future<LibraryQueueStore> createLibraryPagingFixture(
     'scanned_at': '2026-10-07T00:00:00Z',
   });
   await batch.commit(noResult: true);
-  return LibraryQueueStore(db, historyFts: false, localFts: false);
+  final snapshot = useShadowSnapshot
+      ? await sqlite_helpers.LibraryShadowSnapshot().refresh(db)
+      : null;
+  return LibraryQueueStore(
+    db,
+    historyFts: false,
+    localFts: false,
+    shadowSnapshot: snapshot != null,
+  );
 }
 
 Future<LibraryBrowsePage> readLibraryPagingFixture(
