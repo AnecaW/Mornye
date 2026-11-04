@@ -353,6 +353,7 @@ class SubsonicClient {
       return const [
         NetworkEntry('subsonic/artists/', 'Artists', directory: true),
         NetworkEntry('subsonic/albums/', 'Albums', directory: true),
+        NetworkEntry('subsonic/playlists/', 'Playlists', directory: true),
       ];
     }
     if (path == 'subsonic/artists/') {
@@ -360,6 +361,19 @@ class SubsonicClient {
       return NetworkStorageService._sorted([
         for (final index in _subsonicList(artists['index']))
           for (final artist in _subsonicList(index['artist'])) _artist(artist),
+      ]);
+    }
+    if (path == 'subsonic/playlists/') {
+      final playlists = _subsonicMap(
+        (await request('getPlaylists'))['playlists'],
+      );
+      return NetworkStorageService._sorted([
+        for (final playlist in _subsonicList(playlists['playlist']))
+          NetworkEntry(
+            'subsonic/playlist/${_subsonicId(_subsonicText(playlist, 'id'))}/',
+            _subsonicText(playlist, 'name'),
+            directory: true,
+          ),
       ]);
     }
     final segments = path.split('/');
@@ -397,6 +411,15 @@ class SubsonicClient {
     }
     if (segments[1] == 'album') {
       return (await _songs(id)).map((song) => song.entry).toList();
+    }
+    if (segments[1] == 'playlist') {
+      final playlist = _subsonicMap(
+        (await request('getPlaylist', {'id': id}))['playlist'],
+      );
+      return _subsonicList(playlist['entry'])
+          .where((song) => song['isVideo'] != true)
+          .map((song) => SubsonicSong(song).entry)
+          .toList();
     }
     throw const FormatException('Invalid Subsonic folder');
   }

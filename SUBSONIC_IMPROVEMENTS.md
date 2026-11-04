@@ -31,7 +31,7 @@ Cache contents are expendable. Operating-system removal of application data is n
 1. Add the Subsonic/Navidrome connection using existing Network storage settings.
 2. Add an SMB connection to the server's music share, for example `smb://host/Music/`. Use the existing username, password, domain, and address fields. Credentials stay in Mornye's secure connection store.
 3. Open the Navidrome connection and choose Music transfers in the header.
-4. Select the saved SMB connection and optional music subdirectory. Select tracks, a folder/album, or a local M3U/M3U8 playlist.
+4. Select the saved SMB connection and optional music subdirectory. Select tracks, a folder/album, or a local M3U/M3U8 playlist. A folder containing playlists offers a playlist chooser; iPhone users retain the granted original-folder access for those tracks. Subsonic server playlists are also browsable and use the same persistent metadata and offline-cache actions.
 5. Upload unchanged files. Folder selections preserve their relative structure; individual-file selections preserve filenames. Existing identical destination contents are adopted. Different contents are never overwritten.
 
 SMB should be reachable on a private network or through a VPN. Do not expose TCP 445 directly to the public internet.

@@ -198,6 +198,21 @@ class SubsonicFixture {
             },
           },
           'ping' => <String, dynamic>{},
+          'getPlaylists' => {
+            'playlists': {
+              'playlist': [
+                {'id': 'playlist /?&', 'name': 'My playlist'},
+              ],
+            },
+          },
+          'getPlaylist' => {
+            'playlist': {
+              'entry': [
+                song,
+                {...song, 'id': 'video', 'isVideo': true},
+              ],
+            },
+          },
           'startScan' || 'getScanStatus' => {
             'scanStatus': {'scanning': false},
           },

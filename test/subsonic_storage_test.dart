@@ -321,6 +321,22 @@ void main() {
     );
   }
 
+  test('playlist browsing preserves entries and encodes special IDs', () async {
+    final root = await storage.list(server.connection());
+    expect(root.any((e) => e.path == 'subsonic/playlists/'), isTrue);
+    final playlists = await storage.list(
+      server.connection(),
+      'subsonic/playlists/',
+    );
+    expect(playlists.single.name, 'My playlist');
+    final songs = await storage.list(
+      server.connection(),
+      playlists.single.path,
+    );
+    expect(songs.single.song!.id, server.song['id']);
+    expect(server.requests.last.queryParameters['id'], 'playlist /?&');
+  });
+
   test(
     'browse, paging, Unicode identifiers, search and extended metadata',
     () async {

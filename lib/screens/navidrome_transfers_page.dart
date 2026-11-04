@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:mornye/services/navidrome_transfers.dart';
 import 'package:mornye/services/network_storage_service.dart';
 import 'package:mornye/services/platform_bridge.dart';
+import 'package:mornye/services/local_upload_playlist.dart';
 import 'package:mornye/widgets/app_sliver_header.dart';
 import 'package:mornye/widgets/settings_group.dart';
 import 'package:mornye/utils/nav_bar_inset.dart';
@@ -160,6 +161,7 @@ class _NavidromeTransfersPageState
           root = await FilePicker.getDirectoryPath();
         }
         if (root == null) return;
+        final playlists = <String>[];
         await for (final entry in Directory(
           root,
         ).list(recursive: true, followLinks: false)) {
@@ -170,6 +172,41 @@ class _NavidromeTransfersPageState
                   .relative(p.dirname(entry.path), from: p.dirname(root))
                   .replaceAll(p.separator, '/'),
             ));
+          } else if (entry is File &&
+              [
+                '.m3u',
+                '.m3u8',
+              ].contains(p.extension(entry.path).toLowerCase())) {
+            playlists.add(entry.path);
+          }
+        }
+        if (playlists.isNotEmpty && mounted) {
+          final choice = await showDialog<int>(
+            context: context,
+            builder: (context) => SimpleDialog(
+              title: const Text('Choose music to upload'),
+              children: [
+                SimpleDialogOption(
+                  onPressed: () => Navigator.pop(context, -1),
+                  child: const Text('All audio in this folder'),
+                ),
+                for (var i = 0; i < playlists.length; i++)
+                  SimpleDialogOption(
+                    onPressed: () => Navigator.pop(context, i),
+                    child: Text(
+                      'Playlist: ${p.relative(playlists[i], from: root)}',
+                    ),
+                  ),
+              ],
+            ),
+          );
+          if (choice == null) return;
+          if (choice >= 0) {
+            final paths = (await readLocalUploadPlaylist(
+              playlists[choice],
+              root: root,
+            )).toSet();
+            files.retainWhere((file) => paths.contains(p.normalize(file.path)));
           }
         }
       } else {
@@ -184,21 +221,15 @@ class _NavidromeTransfersPageState
             '.m3u',
             '.m3u8',
           ].contains(p.extension(path).toLowerCase())) {
-            for (final line in await File(path).readAsLines()) {
-              if (line.trim().isEmpty || line.trimLeft().startsWith('#')) {
-                continue;
-              }
-              final song = p.normalize(p.join(p.dirname(path), line.trim()));
-              if (_audio(song) && await File(song).exists()) {
-                files.add((
-                  path: song,
-                  relativeDir: p.isWithin(p.dirname(path), song)
-                      ? p
-                            .relative(p.dirname(song), from: p.dirname(path))
-                            .replaceAll(p.separator, '/')
-                      : '',
-                ));
-              }
+            for (final song in await readLocalUploadPlaylist(path)) {
+              files.add((
+                path: song,
+                relativeDir: p.isWithin(p.dirname(path), song)
+                    ? p
+                          .relative(p.dirname(song), from: p.dirname(path))
+                          .replaceAll(p.separator, '/')
+                    : '',
+              ));
             }
           }
         }
