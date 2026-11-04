@@ -1610,11 +1610,16 @@ class NetworkStorageService {
   ) async* {
     var offset = start;
     try {
-      await for (final chunk in fill.read(start, end)) {
-        offset += chunk.length;
-        yield chunk;
+      // Tail-index probes and distant seeks must not wait for a sequential
+      // cache fill to download all intervening audio (notably M4A metadata).
+      final written = await fill.file.length();
+      if (start <= written + 256 * 1024) {
+        await for (final chunk in fill.read(start, end)) {
+          offset += chunk.length;
+          yield chunk;
+        }
+        return;
       }
-      return;
     } catch (_) {
       // A disk-full/cache failure must not interrupt otherwise playable audio.
       // Continue at the exact byte offset through the authenticated range path.

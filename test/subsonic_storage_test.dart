@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -481,6 +482,53 @@ void main() {
       expect(await File(local).readAsBytes(), [0, 1, 2, 3]);
     },
   );
+
+  test('distant seeks bypass an unfinished sequential cache fill', () async {
+    SharedPreferences.setMockInitialValues({'audio_cache_wifi': false});
+    await storage.dispose();
+    final cache = NetworkAudioCache(directory: () async => directory);
+    storage = NetworkStorageService(
+      audioCache: cache,
+      read: () async => null,
+      write: (_) async {},
+      ensureAccess: (_) async {},
+    );
+    final connection = server.connection();
+    await storage.save(connection);
+    final path = SubsonicSong(server.song).path;
+    final key = '${jsonEncode(connection.toJson())}/$path';
+    final held = Completer<void>(), release = Completer<void>();
+    server.audio = List.generate(1024 * 1024, (i) => i % 256);
+    final filling = cache.fetch(key, 'flac', (file, _) async {
+      await file.writeAsBytes([0, 1]);
+      cache.reportLength(key, server.audio!.length);
+      held.complete();
+      await release.future;
+      await file.writeAsBytes(server.audio!);
+    });
+    addTearDown(() async {
+      if (!release.isCompleted) release.complete();
+      await filling;
+    });
+    await held.future;
+    final url = await storage.resolve(
+      NetworkStorageService.source('fixture', path),
+    );
+    final http = HttpClient();
+    addTearDown(() => http.close(force: true));
+    final request = await http.getUrl(Uri.parse(url));
+    request.headers.set('range', 'bytes=1048574-');
+    final response = await request.close().timeout(const Duration(seconds: 3));
+    expect(response.statusCode, 206);
+    expect(
+      await response
+          .expand((c) => c)
+          .toList()
+          .timeout(const Duration(seconds: 3)),
+      [254, 255],
+    );
+    expect(release.isCompleted, isFalse);
+  });
 
   test('AVPlayer probes work when the server ignores Range', () async {
     server.ignoreRanges = true;

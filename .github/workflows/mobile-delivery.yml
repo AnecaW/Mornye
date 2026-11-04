@@ -23,7 +23,7 @@ jobs:
           channel: stable
           flutter-version-file: .fvmrc
           cache: true
-      - run: sudo apt-get update && sudo apt-get install -y libclang-dev
+      - run: sudo apt-get update && sudo apt-get install -y libclang-dev ffmpeg
       - run: flutter pub get && dart scripts/prepare_flutter_sdk.dart
       - run: flutter analyze --no-fatal-infos
       - run: flutter test --concurrency 4

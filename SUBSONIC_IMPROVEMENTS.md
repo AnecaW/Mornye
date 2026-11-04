@@ -56,7 +56,7 @@ Navidrome/Subsonic does not provide a standard upload or arbitrary server-to-ser
 
 Automated tests cover authentication, proxy ranges, caching/offline resolution, metadata reuse, bounded album concurrency, publication/retry, deletion guards, and existing playback behavior. Live iPhone AVPlayer playback, actual user-server SMB uploads, and platform background behavior require device/server acceptance tests. A macOS host is required to build and test iOS/macOS native code.
 
-Not included in this increment: a complete local-library bulk-action integration for all track/album/artist/playlist selections; album/artist-wide cache removal; an OS-native mobile background uploader; deletion of originals when only an imported picker copy is available; and a server-side transfer agent. These limits are explicit rather than represented by placeholder controls.
+Album and artist folders expose cache and cache-removal actions with bounded traversal and cancellation between tracks. Explicit downloads are not affected. Not included in this increment: a complete local-library bulk-action integration for every track/album/artist/playlist selection; an OS-native mobile background uploader; deletion of originals when only an imported picker copy is available; and a server-side transfer agent. These limits are explicit rather than represented by placeholder controls.
 
 ## Primary references
 
@@ -74,4 +74,4 @@ The clean-fork build uses the supported Lite configuration, omitting the proprie
 
 Persistent Subsonic REST metadata is account-scoped and bounded to 64 MB / 256 entries, with a five-minute freshness window, forced scan refresh and stale fallback for connection failures. Authentication errors do not silently reuse stale metadata. In-flight invalidation prevents old responses repopulating a refreshed library.
 
-Local focused validation: 50 passing transfer, REST-cache, audio-cache and Subsonic tests. Complete-project checks and release build results are recorded in the delivery workflow; live testing against the user's SMB server and physical iPhone remains a separate acceptance check.
+Local affected-feature validation: 227 passing tests with two existing skips, plus a new distant-seek regression. Full-project Dart analysis passes. Rust workspace Clippy passes with warnings denied. The Windows whole-project Flutter test attempt encountered pre-existing path-fixture, platform-plugin and timing failures; it was stopped after 652 successes and 23 failures rather than represented as a passing suite. Linux whole-project verification is included in the delivery workflow. Complete-project checks and release build results are recorded in the delivery workflow; live testing against the user's SMB server and physical iPhone remains a separate acceptance check.
