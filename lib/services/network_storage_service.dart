@@ -763,7 +763,8 @@ class NetworkStorageService {
           } else {
             await cacheAudio(track, background: true, manual: true);
           }
-          onProgress?.call(++count);
+          count++;
+          onProgress?.call(count);
         }
       }
     }

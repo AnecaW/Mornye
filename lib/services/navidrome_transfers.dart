@@ -286,19 +286,23 @@ class NavidromeTransfers extends ChangeNotifier {
           releaseWork = await _beginWork(job.id, p.basename(job.local));
           var file = File(job.local);
           if (job.scopeId case final id?) {
-            if (!RegExp(r'^[a-f0-9]{48}$').hasMatch(id))
+            if (!RegExp(r'^[a-f0-9]{48}$').hasMatch(id)) {
               throw StateError('Invalid folder access identifier');
+            }
             final bookmark = await _readScope(id);
-            if (bookmark == null)
+            if (bookmark == null) {
               throw StateError('Original folder access is unavailable');
+            }
             scope = await _openScope(bookmark);
-            if (scope == null || job.scopedRelativePath == null)
+            if (scope == null || job.scopedRelativePath == null) {
               throw StateError('Original folder access expired');
+            }
             final resolved = p.normalize(
               p.join(scope.path, job.scopedRelativePath!),
             );
-            if (!p.isWithin(scope.path, resolved))
+            if (!p.isWithin(scope.path, resolved)) {
               throw StateError('Original file is outside its selected folder');
+            }
             file = File(resolved);
           }
           // Do not remove through symbolic links, or delete an iOS picker
