@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:path/path.dart' as p;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mornye/services/link/desktop/link_arriving_files.dart';
@@ -29,6 +30,16 @@ void main() {
   late List<String> registered;
   final sourceId = linkPhoneSourceId(_phone);
   final coverId = _fileId(0xc0);
+
+  Future<void> waitForRequests(int count) async {
+    final deadline = DateTime.now().add(const Duration(seconds: 5));
+    while (sent.length < count) {
+      if (DateTime.now().isAfter(deadline)) {
+        fail('Expected $count phone requests, received ${sent.length}');
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+  }
 
   setUp(() async {
     root = await Directory.systemTemp.createTemp('link-phones-');
@@ -207,7 +218,7 @@ void main() {
   group('resolve', () {
     test('plays a whole received file without asking the phone', () async {
       final name = '${_fileId(1)}.flac';
-      final file = File('${received.path}/${_fileId(1)}.m4a')
+      final file = File(p.join(received.path, '${_fileId(1)}.m4a'))
         ..writeAsBytesSync([1, 2, 3]);
       // A part file of the same song is not whole.
       File('${received.path}/.$name.123.part').writeAsBytesSync([1]);
@@ -220,7 +231,7 @@ void main() {
       final name = '${_fileId(1)}.flac';
       final first = phone.resolve(sourceId, name);
       final second = phone.resolve(sourceId, name);
-      await pumpEventQueue();
+      await waitForRequests(1);
       expect(sent, hasLength(1));
       expect(sent.single.deviceId, _phone);
       expect(sent.single.message, {
@@ -246,7 +257,7 @@ void main() {
       final phone = sources();
       final name = '${_fileId(1)}.m4a';
       final resolved = phone.resolve(sourceId, name);
-      await pumpEventQueue();
+      await waitForRequests(1);
       phone.onMessage(_phone, {...sendingMessage(name), 'streamable': false});
       var done = false;
       unawaited(resolved.then((_) => done = true));
@@ -260,7 +271,7 @@ void main() {
       final phone = sources();
       final name = '${_fileId(1)}.flac';
       final resolved = phone.resolve(sourceId, name);
-      await pumpEventQueue();
+      await waitForRequests(1);
       phone.onMessage(_phone, {
         'type': LinkMessageTypes.filesFailed,
         'name': name,
@@ -278,7 +289,7 @@ void main() {
       );
       // A later play asks again.
       unawaited(phone.resolve(sourceId, name).catchError((Object _) => ''));
-      await pumpEventQueue();
+      await waitForRequests(2);
       expect(sent, hasLength(2));
       phone.close();
     });
@@ -310,7 +321,7 @@ void main() {
     test('fails a request when its phone disconnects', () async {
       final phone = sources();
       final resolved = phone.resolve(sourceId, '${_fileId(1)}.flac');
-      await pumpEventQueue();
+      await waitForRequests(1);
       phone.keepConnected({'phone-2'});
       await expectLater(resolved, throwsA(linkError('unavailable')));
     });
@@ -335,7 +346,7 @@ void main() {
       final phone = sources();
       final name = '${_fileId(1)}.flac';
       final recovered = phone.recover(receivedPath(name));
-      await pumpEventQueue();
+      await waitForRequests(1);
       expect(sent.single.deviceId, _phone);
       expect(sent.single.message, {
         'type': LinkMessageTypes.filesRequest,
@@ -355,13 +366,13 @@ void main() {
       final phone = sources();
       final name = '${_fileId(1)}.flac';
       final recovered = phone.recover(receivedPath(name));
-      await pumpEventQueue();
+      await waitForRequests(1);
       phone.onMessage(_phone, {
         'type': LinkMessageTypes.filesFailed,
         'name': name,
         'reason': 'not_found',
       });
-      await pumpEventQueue();
+      await waitForRequests(2);
       expect([for (final entry in sent) entry.deviceId], [_phone, 'phone-2']);
 
       phone.onMessage('phone-2', sendingMessage(name));
@@ -398,7 +409,7 @@ void main() {
         name,
         onProgress: (received, size) => progress.add((received, size)),
       );
-      await pumpEventQueue();
+      await waitForRequests(1);
       expect(sent.single.message, {
         'type': LinkMessageTypes.filesRequest,
         'name': name,
@@ -418,7 +429,7 @@ void main() {
     });
 
     test('takes a received file without asking the phone', () async {
-      final file = File('${received.path}/${_fileId(1)}.flac')
+      final file = File(p.join(received.path, '${_fileId(1)}.flac'))
         ..writeAsBytesSync([1]);
       expect(await sources().receive(_phone, '${_fileId(1)}.flac'), file.path);
       expect(sent, isEmpty);
@@ -429,7 +440,7 @@ void main() {
       final name = '${_fileId(1)}.flac';
       final playing = phone.resolve(sourceId, name);
       final whole = phone.receive(_phone, name);
-      await pumpEventQueue();
+      await waitForRequests(1);
       expect(sent, hasLength(1));
       phone.onMessage(_phone, sendingMessage(name));
       expect(await playing, startsWith('http://127.0.0.1:'));
@@ -442,7 +453,7 @@ void main() {
       final phone = sources();
       final name = '${_fileId(1)}.flac';
       final whole = phone.receive(_phone, name);
-      await pumpEventQueue();
+      await waitForRequests(1);
       phone.onMessage(_phone, {
         'type': LinkMessageTypes.filesFailed,
         'name': name,
@@ -472,7 +483,7 @@ void main() {
 
     test('reads the received file, else falls back', () async {
       await commit([song(1, cover: coverId)]);
-      final path = '${received.path}/${_fileId(1)}.flac';
+      final path = p.join(received.path, '${_fileId(1)}.flac');
       File(path).writeAsBytesSync([1]);
       tags[path] = {
         'title': 'From the file',
@@ -504,7 +515,7 @@ void main() {
       final path = '${received.path}${Platform.pathSeparator}$name';
       tags[path] = {'title': 'Arrived'};
       unawaited(phone.resolve(sourceId, name));
-      await pumpEventQueue();
+      await waitForRequests(1);
       final metadata = phone.metadata(sourceId, name);
       phone.onMessage(_phone, sendingMessage(name));
       var done = false;

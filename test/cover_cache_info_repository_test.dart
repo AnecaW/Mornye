@@ -167,6 +167,8 @@ void main() {
       }
       expect(writes.count, 0);
       await _until(() => writes.count == 1, 'the insert save');
+      await repository
+          .flush(); // The write counter observes creation, not rename completion.
       await Future<void>.delayed(const Duration(milliseconds: 300));
       expect(writes.count, 1);
       expect(encoded, 20);
@@ -182,6 +184,7 @@ void main() {
 
       await repository.update(objects[12].copyWith(eTag: '"new"'));
       await _until(() => writes.count == 2, 'the update save');
+      await repository.flush();
       expect(encoded, 31);
       final touchedRows = {
         for (final row in _rows(file)) row['_id'] as int: row['touched'],
