@@ -26,7 +26,7 @@ import 'package:mornye/services/cover_store.dart';
 import 'package:mornye/services/music_player_runtime.dart';
 import 'package:mornye/services/music_playback_deck.dart';
 import 'package:mornye/services/network_storage_service.dart'
-    show subsonicSongIdFromPath;
+    show subsonicSongIdFromPath, NetworkStorageService;
 import 'package:mornye/services/playback_deck.dart';
 import 'package:mornye/services/automix_analysis.dart';
 import 'package:mornye/services/automix_phase_lock.dart';
@@ -1613,6 +1613,27 @@ class MusicPlayerHandler extends BaseAudioHandler
     }
     await _player.resume();
     if (!_isCurrentPlayRequest(generation, media)) await _player.pause();
+    if (_isCurrentPlayRequest(generation, media)) {
+      final storage = NetworkStorageService.instance;
+      final cache = storage.audioCache;
+      if (cache != null) {
+        unawaited(
+          () async {
+            await cache.initialize();
+            for (final next in _media.skip(_index + 1).take(cache.upcoming)) {
+              if (!_isCurrentPlayRequest(generation, media)) return;
+              if (next.source.startsWith('network://')) {
+                try {
+                  await storage.cacheAudio(next.source, background: true);
+                } catch (_) {
+                  /* Playback continues when prefetch is unavailable. */
+                }
+              }
+            }
+          }().catchError((Object _) {}),
+        );
+      }
+    }
   }
 
   Future<void> _loadIndex(

@@ -37,6 +37,8 @@ class SubsonicFixture {
   String? failMethod;
   String? failAlbum;
   bool mediaError = false;
+  bool ignoreRanges = false;
+  String? audioContentType;
   bool disconnect = false;
   int albumCount = 1;
   bool repeatPage = false;
@@ -144,12 +146,14 @@ class SubsonicFixture {
           !mediaError) {
         final isAudio = method != 'getCoverArt';
         response.headers.contentType = ContentType.parse(
-          isAudio ? song['contentType'] as String : 'image/png',
+          isAudio
+              ? audioContentType ?? song['contentType'] as String
+              : 'image/png',
         );
         if (!isAudio && coverEtag != null) {
           response.headers.set('etag', coverEtag!);
         }
-        final range = request.headers.value('range');
+        final range = ignoreRanges ? null : request.headers.value('range');
         response.statusCode = range == null ? 200 : 206;
         final media = (isAudio ? audio : cover) ?? [0, 1, 2, 3];
         final part = networkByteRange(range, media.length);
@@ -194,6 +198,9 @@ class SubsonicFixture {
             },
           },
           'ping' => <String, dynamic>{},
+          'startScan' || 'getScanStatus' => {
+            'scanStatus': {'scanning': false},
+          },
           'getArtists' => {
             'artists': {
               'index': [

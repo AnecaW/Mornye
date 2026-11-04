@@ -8,7 +8,7 @@ extension on NetworkLibraryScanner {
     required void Function(int, int, String) onProgress,
   }) async {
     await checkpoint();
-    final client = _storage.openSubsonic(connection);
+    final client = _storage.openSubsonic(connection, fresh: true);
     _activeSubsonic = client;
     File? file;
     RandomAccessFile? output;

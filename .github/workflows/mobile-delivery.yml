@@ -1,0 +1,142 @@
+name: Mobile delivery
+on:
+  push:
+    branches: [feature/subsonic-navidrome-streaming]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: mobile-delivery-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  # The proprietary Discord SDK is not available in a clean fork. The existing
+  # supported Lite configuration preserves all music/playback/transfer features.
+  MORNYE_DISCORD_SDK: "0"
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          channel: stable
+          flutter-version-file: .fvmrc
+          cache: true
+      - run: sudo apt-get update && sudo apt-get install -y libclang-dev
+      - run: flutter pub get && dart scripts/prepare_flutter_sdk.dart
+      - run: flutter analyze --no-fatal-infos
+      - run: flutter test --concurrency 4
+      - name: Rust formatting, Clippy and tests
+        run: bash scripts/check_rust_backend.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: verification-${{ github.sha }}
+          path: build/test-results/
+          if-no-files-found: ignore
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      MORNYE_RUST_ANDROID_ABIS: arm64-v8a,armeabi-v7a
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6
+        with:
+          distribution: temurin
+          java-version: "25"
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          channel: stable
+          flutter-version-file: .fvmrc
+          cache: true
+      - name: Install pinned Android components
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libclang-dev
+          curl --fail --location https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip -o "$RUNNER_TEMP/android-cli.zip"
+          echo "5fdcc763663eefb86a5b8879697aa6088b041e70  $RUNNER_TEMP/android-cli.zip" | sha1sum --check
+          unzip -q "$RUNNER_TEMP/android-cli.zip" -d "$RUNNER_TEMP/android-cli"
+          manager="$RUNNER_TEMP/android-cli/cmdline-tools/bin/sdkmanager"
+          yes | "$manager" --sdk_root="$ANDROID_HOME" --licenses >/dev/null || true
+          "$manager" --sdk_root="$ANDROID_HOME" "ndk;30.0.16248370" "platforms;android-37.0" "build-tools;37.0.0" "cmake;4.1.2"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/30.0.16248370" >> "$GITHUB_ENV"
+      - name: Configure fork release signing
+        run: |
+          set -euo pipefail
+          password=$(openssl rand -hex 32)
+          echo "::add-mask::$password"
+          keytool -genkeypair -keystore "$RUNNER_TEMP/mornye-delivery.jks" -storetype JKS -alias mornye-delivery -keyalg RSA -keysize 3072 -validity 10000 -dname "CN=Mornye Fork Delivery" -storepass "$password" -keypass "$password"
+          printf 'storeFile=%s\nstorePassword=%s\nkeyPassword=%s\nkeyAlias=mornye-delivery\n' "$RUNNER_TEMP/mornye-delivery.jks" "$password" "$password" > android/key.properties
+          chmod 600 android/key.properties "$RUNNER_TEMP/mornye-delivery.jks"
+      - run: flutter pub get && dart scripts/prepare_flutter_sdk.dart
+      - name: Build actual release APKs
+        run: bash scripts/build_android.sh --lite --target lib/main.dart
+      - name: Verify and collect APKs
+        run: |
+          set -euo pipefail
+          mkdir -p dist/android
+          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk dist/android/Mornye.apk
+          cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk dist/android/Mornye-armeabi-v7a.apk
+          "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --verbose --print-certs dist/android/Mornye.apk
+          python3 scripts/verify_delivery.py dist/android/Mornye.apk --commit "$GITHUB_SHA" --aapt "$ANDROID_HOME/build-tools/37.0.0/aapt2"
+          sha256sum dist/android/*.apk > dist/android/SHA256SUMS.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: Mornye-Android-${{ github.sha }}
+          path: dist/android/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Remove temporary signing material
+        if: always()
+        run: rm -f android/key.properties "$RUNNER_TEMP/mornye-delivery.jks"
+  ios:
+    runs-on: xcode-27
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - run: sudo xcode-select -s /Applications/Xcode_27.1.app && xcodebuild -version
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          channel: stable
+          flutter-version-file: .fvmrc
+          cache: true
+      - name: Build Rust iOS framework
+        run: bash scripts/build_ios.sh
+      - run: flutter pub get && dart scripts/prepare_flutter_sdk.dart
+      - name: Configure native pods
+        run: |
+          find "$HOME/.pub-cache/hosted" -path '*ffmpeg_kit_flutter_new_audio*/scripts/*.sh' -type f -exec perl -pi -e 's/\r$//' {} +
+          cd ios && pod install
+      - name: Test AVPlayer with authenticated Subsonic streams
+        run: |
+          set -euo pipefail
+          command -v ffmpeg >/dev/null || brew install ffmpeg
+          mkdir -p .tmp/audio
+          ffmpeg -v error -f lavfi -i sine=frequency=440:duration=2 -ar 44100 -ac 1 .tmp/audio/tone.flac
+          ffmpeg -v error -f lavfi -i sine=frequency=440:duration=2 -ar 44100 -ac 1 .tmp/audio/tone.mp3
+          device=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; print(next(d["udid"] for group in json.load(sys.stdin)["devices"].values() for d in group if "iPhone" in d["name"]))')
+          xcrun simctl boot "$device" || true
+          xcrun simctl bootstatus "$device" -b
+          flutter test integration_test/subsonic_playback_test.dart -d "$device" --dart-define="TEST_FLAC=$(base64 < .tmp/audio/tone.flac | tr -d '\n')" --dart-define="TEST_MP3=$(base64 < .tmp/audio/tone.mp3 | tr -d '\n')"
+      - name: Build actual unsigned iOS release
+        run: flutter build ios --release --no-codesign --target lib/main.dart --dart-define="GIT_COMMIT=$(git rev-parse --short=8 HEAD)"
+      - name: Audit and package IPA
+        run: |
+          set -euo pipefail
+          app=build/ios/iphoneos/Runner.app
+          python3 scripts/check_backend_ios.py "$app" --backend rust --archs arm64 --platform ios --release
+          mkdir -p dist/ios .tmp/ipa/Payload
+          cp -R "$app" .tmp/ipa/Payload/
+          (cd .tmp/ipa && zip -qr "$GITHUB_WORKSPACE/dist/ios/Mornye.ipa" Payload)
+          python3 scripts/verify_delivery.py dist/ios/Mornye.ipa --commit "$GITHUB_SHA"
+          shasum -a 256 dist/ios/Mornye.ipa > dist/ios/SHA256SUMS.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: Mornye-iOS-${{ github.sha }}
+          path: dist/ios/
+          if-no-files-found: error
+          retention-days: 30

@@ -471,7 +471,7 @@ void main() {
     final covers = store(
       fetch: (_, _) async => fail('File references are never fetched'),
     );
-    final file = File('${directory.path}/cover.jpg')
+    final file = File(p.join(directory.path, 'cover.jpg'))
       ..writeAsBytesSync(_jpeg(1));
     for (final ref in [file.path, file.uri.toString()]) {
       expect(covers.cachedFile(ref), file.path, reason: ref);

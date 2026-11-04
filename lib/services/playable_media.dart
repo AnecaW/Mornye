@@ -152,7 +152,7 @@ class PlayableMedia {
       artUri: stored != null
           ? Uri.file(stored.path)
           : (artwork != null && artwork.isNotEmpty)
-          ? Uri.tryParse(artwork)
+          ? Uri.tryParse(normalizeArtUri(artwork) ?? '')
           : null,
       extras: {
         'source': source,

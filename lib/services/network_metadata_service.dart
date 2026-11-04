@@ -26,7 +26,7 @@ class NetworkMetadataService {
            reader ??
            ((url, name) =>
                PlatformBridge.readFileMetadata(url, displayName: name)),
-       _directory = cacheDirectory ?? getTemporaryDirectory,
+       _directory = cacheDirectory ?? getApplicationSupportDirectory,
        _lanes = List.generate(
          RangeError.checkValueInInterval(maxConcurrentReads, 1, 4),
          (_) => (tail: Future<void>.value(), pending: 0),
@@ -77,7 +77,9 @@ class NetworkMetadataService {
     }
     final requestId = 'network_metadata_${NetworkStorageService.newId()}';
     _requestIds.add(requestId);
-    final operation = _lanes[lane].tail.then((_) => _load(source, requestId));
+    final operation = _lanes[lane].tail.then(
+      (_) => _load(source, requestId, forceRefresh: forceRefresh),
+    );
     _lanes[lane] = (
       tail: operation.then<void>((_) {}, onError: (Object _, StackTrace _) {}),
       pending: _lanes[lane].pending + 1,
@@ -127,7 +129,11 @@ class NetworkMetadataService {
     if (_stopped) throw StateError('Network metadata reader stopped');
   }
 
-  Future<Map<String, dynamic>> _load(String source, String requestId) async {
+  Future<Map<String, dynamic>> _load(
+    String source,
+    String requestId, {
+    bool forceRefresh = false,
+  }) async {
     _checkStopped();
     final refreshArtwork = _refreshArtwork.remove(source);
     final uri = Uri.parse(source);
@@ -137,7 +143,33 @@ class NetworkMetadataService {
     final connection = await _storage.connection(uri.host);
     final path = uri.pathSegments.join('/');
     if (connection.protocol == NetworkProtocol.subsonic) {
-      final client = _storage.openSubsonic(connection);
+      final fingerprint = sha256.convert(
+        utf8.encode('${jsonEncode(connection.toJson())}/$path'),
+      );
+      final disk = File(
+        '${(await _directory()).path}/network_metadata/$fingerprint.json',
+      );
+      Map<String, dynamic>? stale;
+      if (!forceRefresh && !refreshArtwork) {
+        try {
+          final stat = await disk.stat();
+          if (stat.size <= 128 * 1024) {
+            stale = Map<String, dynamic>.from(
+              jsonDecode(await disk.readAsString()) as Map,
+            );
+            if (DateTime.now().difference(stat.modified) <
+                const Duration(minutes: 5)) {
+              return _remember(source, stale);
+            }
+          }
+        } catch (_) {
+          /* Missing or corrupt cache: read from the server. */
+        }
+      }
+      final client = _storage.openSubsonic(
+        connection,
+        fresh: forceRefresh || refreshArtwork,
+      );
       _subsonicClients.add(client);
       try {
         _checkStopped();
@@ -162,7 +194,24 @@ class NetworkMetadataService {
         final text = await lyrics;
         if (text.trim().isNotEmpty) metadata['lyrics'] = text;
         _checkStopped();
+        try {
+          final encoded = jsonEncode(metadata);
+          if (utf8.encode(encoded).length <= 128 * 1024) {
+            await disk.parent.create(recursive: true);
+            final temporary = File('${disk.path}.$requestId.tmp');
+            await temporary.writeAsString(encoded, flush: true);
+            await temporary.rename(disk.path);
+          }
+        } catch (_) {
+          /* Disk cache failure does not prevent playback. */
+        }
         return _remember(source, metadata);
+      } on SocketException {
+        if (stale != null) return _remember(source, stale);
+        rethrow;
+      } on TimeoutException {
+        if (stale != null) return _remember(source, stale);
+        rethrow;
       } finally {
         client.close();
         _subsonicClients.remove(client);
@@ -269,9 +318,17 @@ Future<void> _trimNetworkMetadataCovers(Directory directory) async {
       .cast<File>()
       .toList();
   final dated = <({File file, DateTime time})>[];
+  final documents = <({File file, DateTime time})>[];
   for (final entry in files) {
-    if (entry.path.endsWith('.etag')) continue;
-    dated.add((file: entry, time: (await entry.stat()).modified));
+    if (entry.path.endsWith('.json')) {
+      documents.add((file: entry, time: (await entry.stat()).modified));
+    } else if (entry.path.endsWith('.image')) {
+      dated.add((file: entry, time: (await entry.stat()).modified));
+    }
+  }
+  documents.sort((a, b) => b.time.compareTo(a.time));
+  for (final old in documents.skip(512)) {
+    await old.file.delete();
   }
   dated.sort((a, b) => b.time.compareTo(a.time));
   for (final old in dated.skip(32)) {

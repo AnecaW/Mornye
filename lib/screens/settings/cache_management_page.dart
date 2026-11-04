@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:mornye/widgets/network_audio_cache_settings.dart';
 
 import 'package:flutter/material.dart';
 import 'package:mornye/widgets/app_alert_dialog.dart';
@@ -450,6 +451,12 @@ class _CacheManagementPageState extends ConsumerState<CacheManagementPage> {
               ),
             ),
 
+            const SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.all(16),
+                child: NetworkAudioCacheSettings(),
+              ),
+            ),
             ...settingsSectionSlivers(
               title: context.l10n.cacheSectionStorage,
               children: [

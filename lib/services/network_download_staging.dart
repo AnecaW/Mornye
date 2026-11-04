@@ -1,10 +1,12 @@
 import 'dart:convert';
+import 'dart:async';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:mornye/services/network_storage_service.dart';
+import 'package:mornye/services/navidrome_transfers.dart';
 
 /// Durable, per-queue-item handoff. A failed upload retains the finalized audio
 /// and its original destination even if settings change before Retry.
@@ -12,11 +14,15 @@ class NetworkDownloadStaging {
   NetworkDownloadStaging({
     NetworkStorageService? storage,
     Future<Directory> Function()? directory,
+    Future<Directory> Function()? documentsDirectory,
   }) : _storage = storage ?? NetworkStorageService.instance,
-       _directory = directory ?? getApplicationSupportDirectory;
+       _directory = directory ?? getApplicationSupportDirectory,
+       _documentsDirectory =
+           documentsDirectory ?? getApplicationDocumentsDirectory;
   static final instance = NetworkDownloadStaging();
   final NetworkStorageService _storage;
   final Future<Directory> Function() _directory;
+  final Future<Directory> Function() _documentsDirectory;
 
   Future<Directory> workDirectory(String id) async => Directory(
     '${(await _directory()).path}/network_downloads/${sha256.convert(utf8.encode(id))}',
@@ -150,11 +156,50 @@ class NetworkDownloadStaging {
         progress: (_, _) {},
       );
     }
+    unawaited(NavidromeTransfers.instance.synchronizeDestination(target));
     return target;
   }
 
   Future<void> discard(String id) async {
     final dir = await workDirectory(id);
     if (await dir.exists()) await dir.delete(recursive: true);
+  }
+
+  /// A durable local copy for the explicit "both" destination. A per-transfer
+  /// root avoids overwriting an unrelated download and makes retries idempotent.
+  Future<String> retainLocal(String id) async {
+    final data = await read(id);
+    if (data == null) throw StateError('Prepared download is missing');
+    final original = File(data['localPath'] as String);
+    final root = Directory(
+      p.join(
+        (await _documentsDirectory()).path,
+        'Mornye Downloads',
+        sha256.convert(utf8.encode(id)).toString().substring(0, 16),
+      ),
+    );
+    final relative = networkPath(data['relativeDir'] as String);
+    final destination = File(
+      p.joinAll([
+        root.path,
+        ...relative.split('/').where((s) => s.isNotEmpty),
+        p.basename(original.path),
+      ]),
+    );
+    await destination.parent.create(recursive: true);
+    final temporary = File('${destination.path}.part');
+    await original.copy(temporary.path);
+    final expected = await sha256.bind(original.openRead()).first;
+    final actual = await sha256.bind(temporary.openRead()).first;
+    if (expected != actual) {
+      await temporary.delete();
+      throw StateError('Local download copy failed verification');
+    }
+    await temporary.rename(destination.path);
+    final lyrics = File(p.setExtension(original.path, '.lrc'));
+    if (await lyrics.exists()) {
+      await lyrics.copy(p.setExtension(destination.path, '.lrc'));
+    }
+    return destination.path;
   }
 }

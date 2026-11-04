@@ -57,6 +57,7 @@ class DownloadItem {
   final bool fromBatch;
   final bool preserveQualityVariant;
   final String networkDownloadFolder;
+  final bool networkDownloadKeepLocal;
 
   const DownloadItem({
     required this.id,
@@ -78,6 +79,7 @@ class DownloadItem {
     this.fromBatch = false,
     this.preserveQualityVariant = false,
     this.networkDownloadFolder = '',
+    this.networkDownloadKeepLocal = false,
   });
 
   DownloadItem copyWith({
@@ -100,6 +102,7 @@ class DownloadItem {
     bool? fromBatch,
     bool? preserveQualityVariant,
     String? networkDownloadFolder,
+    bool? networkDownloadKeepLocal,
   }) {
     return DownloadItem(
       id: id ?? this.id,
@@ -129,6 +132,8 @@ class DownloadItem {
           preserveQualityVariant ?? this.preserveQualityVariant,
       networkDownloadFolder:
           networkDownloadFolder ?? this.networkDownloadFolder,
+      networkDownloadKeepLocal:
+          networkDownloadKeepLocal ?? this.networkDownloadKeepLocal,
     );
   }
 

@@ -13,6 +13,7 @@ use serde_json::{Map, Value, json};
 use std::io::{self, Read, Write};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
+#[cfg(any(unix, test))]
 use std::time::Duration;
 
 /// The Mornye application registered with Discord (same as mobile).

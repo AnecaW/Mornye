@@ -79,8 +79,10 @@ extension NetworkStorageUpload on NetworkStorageService {
   Future<String> prepareUpload(
     String folder,
     String relativeDir,
-    String filename,
-  ) async {
+    String filename, {
+    File? matchingFile,
+    void Function()? checkpoint,
+  }) async {
     final location = await _uploadLocation(folder);
     final c = location.connection;
     var parent = location.path;
@@ -100,6 +102,23 @@ extension NetworkStorageUpload on NetworkStorageService {
     }
     final entries = await list(c, parent);
     final names = entries.map((e) => e.name.toLowerCase()).toSet();
+    if (matchingFile != null && names.contains(name.toLowerCase())) {
+      final existing = entries.firstWhere(
+        (e) => e.name.toLowerCase() == name.toLowerCase(),
+      );
+      final source = NetworkStorageService.source(
+        c.id,
+        '$parent${existing.name}',
+      );
+      if (await _matchesUpload(
+        source,
+        matchingFile,
+        await matchingFile.length(),
+        checkpoint ?? () {},
+      )) {
+        return source;
+      }
+    }
     final dot = name.lastIndexOf('.');
     final stem = dot > 0 ? name.substring(0, dot) : name;
     final suffix = dot > 0 ? name.substring(dot) : '';
@@ -290,8 +309,7 @@ extension NetworkStorageUpload on NetworkStorageService {
         );
         checkpoint();
         final reportedLength = (await smb.stat()).size;
-        if (reportedLength != length &&
-            !await smb.matchesFile(file, length, checkpoint: checkpoint)) {
+        if (!await smb.matchesFile(file, length, checkpoint: checkpoint)) {
           throw StateError(
             'Network upload size mismatch '
             '(SMB: expected $length bytes, reported $reportedLength bytes)',
@@ -311,6 +329,12 @@ extension NetworkStorageUpload on NetworkStorageService {
       } finally {
         await smb.close();
       }
+    }
+    checkpoint();
+    // Read the published path too: a successful rename/size response alone
+    // cannot authorize deleting an original or marking a transfer complete.
+    if (!await _matchesUpload(source, file, length, checkpoint)) {
+      throw StateError('Published network file failed content verification');
     }
     progress(length, length);
   }

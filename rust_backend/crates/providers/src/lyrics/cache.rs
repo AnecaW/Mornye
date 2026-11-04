@@ -322,7 +322,8 @@ mod tests {
 
     #[test]
     fn legacy_snapshot_refetches_apple_but_preserves_other_providers() {
-        let file = tempfile::NamedTempFile::new().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("lyrics.json");
         let now = UNIX_EPOCH + Duration::from_secs(100);
         let apple = LyricsResponse::from_text("[00:01.00]Original", "Apple Music", "Apple Music");
         let other = LyricsResponse::from_text("[00:01.00]Original", "LRCLIB", "LRCLIB");
@@ -333,7 +334,7 @@ mod tests {
             }});
             fs::write(file.path(), serde_json::to_vec(&snapshot).unwrap()).unwrap();
             let cache = LyricsCache::default();
-            cache.set_persistence_path(file.path(), now);
+            cache.set_persistence_path(&file, now);
             assert!(cache.get("apple", now).is_none());
             assert_eq!(cache.get("other", now).unwrap().provider, "LRCLIB");
         }
@@ -341,7 +342,8 @@ mod tests {
 
     #[test]
     fn legacy_recording_cache_refetches_lrc_red_without_discarding_current_apple() {
-        let file = tempfile::NamedTempFile::new().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("lyrics.json");
         let now = UNIX_EPOCH + Duration::from_secs(100);
         let red = LyricsResponse::from_text("[00:01.00]Solo", "lrc.red", "lrc.red");
         let apple = LyricsResponse::from_text("[00:01.00]Original", "Apple Music", "Apple Music");
@@ -352,7 +354,7 @@ mod tests {
             }});
             fs::write(file.path(), serde_json::to_vec(&snapshot).unwrap()).unwrap();
             let cache = LyricsCache::default();
-            cache.set_persistence_path(file.path(), now);
+            cache.set_persistence_path(&file, now);
             assert_eq!(
                 cache.get("red", now).is_some(),
                 version >= LRC_RED_RECORDING_VERSION,
@@ -368,7 +370,8 @@ mod tests {
 
     #[test]
     fn current_snapshot_restores_supplementary_text() {
-        let file = tempfile::NamedTempFile::new().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("lyrics.json");
         let now = UNIX_EPOCH + Duration::from_secs(100);
         let mut lyrics =
             LyricsResponse::from_text("[00:01.009]Original", "Apple Music", "Zarz-LRC");
@@ -387,9 +390,9 @@ mod tests {
                 expires_at: now + Duration::from_secs(100),
             },
         )]);
-        write_snapshot(file.path(), &entries).unwrap();
+        write_snapshot(&file, &entries).unwrap();
         let cache = LyricsCache::default();
-        cache.set_persistence_path(file.path(), now);
+        cache.set_persistence_path(&file, now);
         assert_eq!(cache.get("apple", now), Some(lyrics));
     }
 }

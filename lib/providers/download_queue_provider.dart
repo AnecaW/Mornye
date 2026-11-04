@@ -751,6 +751,7 @@ class DownloadQueueNotifier extends Notifier<DownloadQueueState> {
       playlistPosition: playlistPosition,
       preserveQualityVariant: settings.allowQualityVariants,
       networkDownloadFolder: settings.networkDownloadFolder,
+      networkDownloadKeepLocal: settings.networkDownloadKeepLocal,
     );
 
     state = state.copyWith(items: [...state.items, item]);
@@ -782,6 +783,7 @@ class DownloadQueueNotifier extends Notifier<DownloadQueueState> {
           createdAt: DateTime.now(),
           preserveQualityVariant: settings.allowQualityVariants,
           networkDownloadFolder: settings.networkDownloadFolder,
+          networkDownloadKeepLocal: settings.networkDownloadKeepLocal,
         ),
       );
     }
@@ -855,6 +857,7 @@ class DownloadQueueNotifier extends Notifier<DownloadQueueState> {
             fromBatch: fromBatch,
             preserveQualityVariant: settings.allowQualityVariants,
             networkDownloadFolder: settings.networkDownloadFolder,
+            networkDownloadKeepLocal: settings.networkDownloadKeepLocal,
           ),
         );
       }

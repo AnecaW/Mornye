@@ -1,112 +1,143 @@
+import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
-import 'package:mornye/services/music_player_runtime.dart';
-import 'package:mornye/services/network_library_scanner.dart';
-import 'package:mornye/services/network_metadata_service.dart';
+import 'package:mornye/services/network_audio_cache.dart';
 import 'package:mornye/services/network_storage_service.dart';
 
 import '../test/support/subsonic_fixture.dart';
 
+Uint8List _wave() {
+  const rate = 44100, frames = rate * 2;
+  final data = ByteData(44 + frames * 2);
+  void text(int offset, String value) {
+    for (var i = 0; i < value.length; i++) {
+      data.setUint8(offset + i, value.codeUnitAt(i));
+    }
+  }
+
+  text(0, 'RIFF');
+  data.setUint32(4, data.lengthInBytes - 8, Endian.little);
+  text(8, 'WAVEfmt ');
+  data.setUint32(16, 16, Endian.little);
+  data.setUint16(20, 1, Endian.little);
+  data.setUint16(22, 1, Endian.little);
+  data.setUint32(24, rate, Endian.little);
+  data.setUint32(28, rate * 2, Endian.little);
+  data.setUint16(32, 2, Endian.little);
+  data.setUint16(34, 16, Endian.little);
+  text(36, 'data');
+  data.setUint32(40, frames * 2, Endian.little);
+  for (var i = 0; i < frames; i++) {
+    data.setInt16(
+      44 + i * 2,
+      (2000 * sin(i * 2 * pi * 440 / rate)).round(),
+      Endian.little,
+    );
+  }
+  return data.buffer.asUint8List();
+}
+
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-
-  testWidgets('Subsonic catalogue, metadata and native playback with seek', (
-    tester,
-  ) async {
-    final wav = Uint8List(44 + 8000 * 2 * 5);
-    final data = ByteData.sublistView(wav);
-    wav.setRange(0, 4, 'RIFF'.codeUnits);
-    data.setUint32(4, wav.length - 8, Endian.little);
-    wav.setRange(8, 16, 'WAVEfmt '.codeUnits);
-    data.setUint32(16, 16, Endian.little);
-    data.setUint16(20, 1, Endian.little);
-    data.setUint16(22, 1, Endian.little);
-    data.setUint32(24, 8000, Endian.little);
-    data.setUint32(28, 16000, Endian.little);
-    data.setUint16(32, 2, Endian.little);
-    data.setUint16(34, 16, Endian.little);
-    wav.setRange(36, 40, 'data'.codeUnits);
-    data.setUint32(40, wav.length - 44, Endian.little);
-    final server = await SubsonicFixture.start();
-    server.audio = wav;
-    server.song.addAll({
-      'suffix': 'wav',
-      'contentType': 'audio/wav',
-      'duration': 5,
-      'size': wav.length,
-    });
-    final directory = await Directory.systemTemp.createTemp(
-      'subsonic-playback-',
-    );
-    final storage = NetworkStorageService(
-      read: () async => null,
-      write: (_) async {},
-      ensureAccess: (_) async {},
-    );
-    final deck = const PlaybackDependencies().createDeck(
-      'subsonic-integration',
-    );
-    try {
-      await storage.save(server.connection());
-      final scanner = NetworkLibraryScanner(
-        storage: storage,
-        supportDirectory: () async => directory,
-        temporaryDirectory: () async => directory,
-      );
-      final scan = await scanner.scan(
-        'network://fixture/',
-        checkpoint: () async {},
-        onProgress: (_, _, _) {},
-      );
-      expect(scan.expectedCount, 1);
-      final row = (await scan.rows().toList()).single;
-      final metadata = await NetworkMetadataService(
-        storage: storage,
-        cacheDirectory: () async => directory,
-      ).read(row['filePath'] as String);
-      expect(metadata['title'], 'A song');
-      expect(metadata['cover_path'], isNotNull);
+  HttpOverrides.global = null;
+  const fixtures = {
+    'mp3': String.fromEnvironment('TEST_MP3'),
+    'flac': String.fromEnvironment('TEST_FLAC'),
+  };
+  for (final format in ['wav', 'mp3', 'flac']) {
+    testWidgets('native Subsonic $format streaming, seeking and offline cache', (
+      tester,
+    ) async {
+      final bytes = format == 'wav' ? _wave() : base64Decode(fixtures[format]!);
       expect(
-        server.requests.where((uri) => uri.path.contains('/stream.')),
-        isEmpty,
-      );
-      await deck.configureOutput();
-      await deck.setVolume(0);
-      await deck.setNetworkSource(
-        await storage.resolve(row['filePath'] as String),
-      );
-      expect(await deck.getDuration(), const Duration(seconds: 5));
-      await deck.resume();
-      await Future<void>.delayed(const Duration(milliseconds: 350));
-      expect(
-        (await deck.getCurrentPosition())!.inMilliseconds,
-        greaterThan(100),
-      );
-      await deck.seek(const Duration(seconds: 2));
-      await Future<void>.delayed(const Duration(milliseconds: 350));
-      expect(
-        (await deck.getCurrentPosition())!.inMilliseconds,
-        greaterThanOrEqualTo(1900),
-      );
-      expect(
-        server.requests.where((uri) => uri.path.contains('/stream.')),
+        bytes,
         isNotEmpty,
+        reason:
+            'Provide the generated $format fixture through TEST_${format.toUpperCase()}',
       );
+      final directory = await Directory.systemTemp.createTemp(
+        'subsonic-native-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final server = await SubsonicFixture.start();
+      addTearDown(server.close);
+      server.audio = bytes;
+      server.ignoreRanges = true;
+      server.audioContentType = 'application/octet-stream';
+      server.song['id'] = 'native-$format /?&';
+      server.song['suffix'] = format;
+      final storage = NetworkStorageService(
+        read: () async => null,
+        write: (_) async {},
+        ensureAccess: (_) async {},
+      );
+      addTearDown(storage.dispose);
+      await storage.save(server.connection());
+      final source = NetworkStorageService.source(
+        'fixture',
+        SubsonicSong(server.song).path,
+      );
+      final player = AudioPlayer();
+      addTearDown(player.dispose);
+      await player.setVolume(0);
+      final url = await storage.resolve(source);
+      expect(Uri.parse(url).query, isEmpty);
+      await player
+          .setSource(UrlSource(url))
+          .timeout(const Duration(seconds: 20));
+      expect((await player.getDuration())!.inMilliseconds, greaterThan(1500));
+      await player.resume();
+      await player.seek(const Duration(milliseconds: 700));
+      await player.pause();
+      expect(
+        (await player.getCurrentPosition())!.inMilliseconds,
+        closeTo(700, 250),
+      );
+      await player.release();
+      expect(server.ranges.whereType<String>(), isNotEmpty);
       expect(
         server.requests
-            .where((uri) => uri.path.contains('/stream.'))
-            .every((uri) => uri.queryParameters['format'] == 'raw'),
+            .where((r) => r.path.endsWith('/stream.view'))
+            .every(
+              (r) =>
+                  r.queryParameters['u'] == 'listener' &&
+                  r.queryParameters['s']!.isNotEmpty &&
+                  r.queryParameters['t']!.isNotEmpty,
+            ),
         isTrue,
       );
-      expect(server.authorizations, everyElement(isNull));
-    } finally {
-      await deck.dispose();
-      await storage.dispose();
-      await server.close();
-      await directory.delete(recursive: true);
-    }
-  });
+
+      final cache = NetworkAudioCache(directory: () async => directory);
+      await cache.initialize();
+      cache.wifiOnly = false;
+      final cachedStorage = NetworkStorageService(
+        audioCache: cache,
+        read: () async => null,
+        write: (_) async {},
+        ensureAccess: (_) async {},
+      );
+      addTearDown(cachedStorage.dispose);
+      await cachedStorage.save(server.connection());
+      await cachedStorage.cacheAudio(source, manual: true);
+      server.disconnect = true;
+      cachedStorage.setReachable('fixture', reachable: false);
+      final local = await cachedStorage.resolve(source);
+      expect(File(local).isAbsolute, isTrue);
+      await player
+          .setSource(DeviceFileSource(local))
+          .timeout(const Duration(seconds: 20));
+      await player.resume();
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      expect(
+        (await player.getCurrentPosition())!.inMilliseconds,
+        greaterThan(0),
+      );
+      await player.pause();
+    });
+  }
 }

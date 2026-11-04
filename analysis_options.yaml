@@ -5,6 +5,8 @@ plugins:
 
 analyzer:
   exclude:
+    - .tmp/**
+    - dist/**
     - build/**
     - .dart_tool/**
     - docs/internal/**

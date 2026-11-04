@@ -37,6 +37,7 @@ class AppSettings {
   final String filenameFormat;
   final String downloadDirectory;
   final String networkDownloadFolder;
+  final bool networkDownloadKeepLocal;
   final String networkDownloadLabel;
   final String downloadDirectoryBookmark;
   final String storageMode; // 'app' or 'saf'
@@ -259,6 +260,7 @@ class AppSettings {
     this.filenameFormat = '{title} - {artist}',
     this.downloadDirectory = '',
     this.networkDownloadFolder = '',
+    this.networkDownloadKeepLocal = false,
     this.networkDownloadLabel = '',
     this.downloadDirectoryBookmark = '',
     this.storageMode = 'app',
@@ -409,6 +411,7 @@ class AppSettings {
     String? filenameFormat,
     String? downloadDirectory,
     String? networkDownloadFolder,
+    bool? networkDownloadKeepLocal,
     String? networkDownloadLabel,
     String? downloadDirectoryBookmark,
     String? storageMode,
@@ -538,6 +541,8 @@ class AppSettings {
       downloadDirectory: downloadDirectory ?? this.downloadDirectory,
       networkDownloadFolder:
           networkDownloadFolder ?? this.networkDownloadFolder,
+      networkDownloadKeepLocal:
+          networkDownloadKeepLocal ?? this.networkDownloadKeepLocal,
       networkDownloadLabel: networkDownloadLabel ?? this.networkDownloadLabel,
       downloadDirectoryBookmark:
           downloadDirectoryBookmark ?? this.downloadDirectoryBookmark,

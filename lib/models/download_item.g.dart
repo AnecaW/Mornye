@@ -28,6 +28,7 @@ DownloadItem _$DownloadItemFromJson(Map<String, dynamic> json) => DownloadItem(
   fromBatch: json['fromBatch'] as bool? ?? false,
   preserveQualityVariant: json['preserveQualityVariant'] as bool? ?? false,
   networkDownloadFolder: json['networkDownloadFolder'] as String? ?? '',
+  networkDownloadKeepLocal: json['networkDownloadKeepLocal'] as bool? ?? false,
 );
 
 Map<String, dynamic> _$DownloadItemToJson(DownloadItem instance) =>
@@ -51,6 +52,7 @@ Map<String, dynamic> _$DownloadItemToJson(DownloadItem instance) =>
       'fromBatch': instance.fromBatch,
       'preserveQualityVariant': instance.preserveQualityVariant,
       'networkDownloadFolder': instance.networkDownloadFolder,
+      'networkDownloadKeepLocal': instance.networkDownloadKeepLocal,
     };
 
 const _$DownloadStatusEnumMap = {

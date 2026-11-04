@@ -12,6 +12,8 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:html/parser.dart' as html;
 import 'package:mornye/services/local_network_access.dart';
 import 'package:mornye/services/network_certificate.dart';
+import 'package:mornye/services/network_audio_cache.dart';
+import 'package:mornye/services/subsonic_response_cache.dart';
 import 'package:mornye/services/network_smb_client.dart';
 import 'package:mornye/services/platform_bridge.dart';
 import 'package:mornye/services/secure_storage_options.dart';
@@ -292,11 +294,18 @@ class NetworkStorageService {
     Future<void> Function(String)? write,
     Future<void> Function(Uri)? ensureAccess,
     NetworkSmbSessions? smbSessions,
+    this.audioCache,
+    this.metadataCache,
   }) : _read = read ?? (() => _storage.read(key: _key)),
        _write = write ?? ((value) => _storage.write(key: _key, value: value)),
        _ensureAccess = ensureAccess ?? LocalNetworkAccess.instance.ensureAccess,
        _smbSessions = smbSessions ?? NetworkSmbSessions(idle: timeout);
-  static final instance = NetworkStorageService();
+  static final instance = NetworkStorageService(
+    audioCache: NetworkAudioCache(),
+    metadataCache: SubsonicResponseCache(),
+  );
+  final SubsonicResponseCache? metadataCache;
+  final NetworkAudioCache? audioCache;
   static const _storage = FlutterSecureStorage(
     aOptions: secureStorageAndroidOptions,
     mOptions: secureStorageMacOsOptions,
@@ -407,7 +416,22 @@ class NetworkStorageService {
   Future<bool> reachable(String source) async {
     final host = Uri.tryParse(source)?.host ?? '';
     if (virtualFor(host) case final virtual?) return virtual.reachable(host);
-    if (_unreachable.containsKey(host)) return false;
+    if (_unreachable.containsKey(host)) {
+      final cache = audioCache;
+      if (cache != null) {
+        try {
+          final (:path, :host) = _sourceParts(source);
+          if (await cache.lookup(
+                _audioCacheKey(await connection(host), path),
+                path.split('.').last,
+              ) !=
+              null) {
+            return true;
+          }
+        } catch (_) {}
+      }
+      return false;
+    }
     return (await connections()).any((c) => c.id == host);
   }
 
@@ -609,6 +633,21 @@ class NetworkStorageService {
     if (virtualFor(host) case final virtual?) {
       return virtual.resolve(host, path);
     }
+    final cache = audioCache;
+    if (cache != null && path.startsWith('subsonic/song/')) {
+      await cache.initialize();
+      final c = await connection(host);
+      final local = await cache.lookup(
+        _audioCacheKey(c, path),
+        path.split('.').last,
+      );
+      if (local != null && cache.preferOffline) {
+        cache.pinPlayback(local.path);
+        return local.path;
+      }
+      // Caching is best effort and must never prevent ordinary streaming.
+      unawaited(cacheAudio(source).catchError((Object _) {}));
+    }
     await _readyConnection(host, path);
     _server ??= HttpServer.bind(InternetAddress.loopbackIPv4, 0).then((server) {
       server.listen((request) => unawaited(_serve(request)));
@@ -627,6 +666,81 @@ class NetworkStorageService {
     }
     _routes[token] = (id: host, path: path);
     return 'http://127.0.0.1:${server.port}/$token';
+  }
+
+  String _audioCacheKey(NetworkConnection c, String path) =>
+      '${jsonEncode(c.toJson())}/$path';
+
+  Future<void> cacheAudio(
+    String source, {
+    bool background = false,
+    bool manual = false,
+  }) async {
+    final cache = audioCache;
+    if (cache == null) return;
+    final (:host, :path) = _sourceParts(source);
+    if (!path.startsWith('subsonic/song/')) return;
+    final c = await connection(host);
+    await cache.fetch(
+      _audioCacheKey(c, path),
+      path.split('.').last,
+      (file, limit) async {
+        final read = await _openRead(c, path);
+        if (read.status != HttpStatus.ok) {
+          await read.discard();
+          await read.close();
+          throw const HttpException('Audio cache download failed');
+        }
+        final expected = int.tryParse(
+          read.headers[HttpHeaders.contentLengthHeader] ?? '',
+        );
+        if (expected != null && expected > limit) {
+          cache.reportLength(_audioCacheKey(c, path), null);
+          await read.discard();
+          await read.close();
+          throw const FileSystemException('Audio exceeds cache limit');
+        }
+        cache.reportLength(_audioCacheKey(c, path), expected);
+        final writer = file.openWrite();
+        var received = 0;
+        try {
+          await for (final chunk in read.bytes) {
+            received += chunk.length;
+            if (received > limit) {
+              throw const FileSystemException('Audio exceeds cache limit');
+            }
+            writer.add(chunk);
+            await writer.flush();
+          }
+          if (expected != null && received != expected) {
+            throw const HttpException('Audio cache download ended early');
+          }
+        } finally {
+          await writer.close();
+          await read.close();
+        }
+      },
+      background: background,
+      manual: manual,
+    );
+  }
+
+  Future<void> removeCachedAudio(String source) async {
+    final (:host, :path) = _sourceParts(source);
+    await audioCache?.remove(
+      _audioCacheKey(await connection(host), path),
+      path.split('.').last,
+    );
+  }
+
+  Future<bool> isAudioCached(String source) async {
+    final (:host, :path) = _sourceParts(source);
+    return await audioCache?.lookup(
+          _audioCacheKey(await connection(host), path),
+          path.split('.').last,
+          touch: false,
+        ) !=
+        null;
   }
 
   /// Marks connection [id] out of reach, as a paired Mornye Link desktop
@@ -1287,11 +1401,58 @@ class NetworkStorageService {
             'application/json',
             'application/xml',
             'text/xml',
+            'text/html',
           }.contains(response.headers.contentType?.mimeType)) {
         throw response.statusCode == HttpStatus.notFound ||
                 response.statusCode == HttpStatus.gone
             ? const NetworkMediaUnavailable('Subsonic media unavailable')
             : const HttpException('Subsonic media unavailable');
+      }
+      // Some Subsonic servers ignore Range even for format=raw. AVPlayer
+      // probes bytes=0-1 and expects an actual partial representation. Slice
+      // only a known-length, uncompressed original; never invent offsets for
+      // a transcoded/chunked response.
+      if (subsonic &&
+          range != null &&
+          response.statusCode == HttpStatus.ok &&
+          response.contentLength >= 0 &&
+          const [null, 'identity'].contains(
+            response.headers.value(HttpHeaders.contentEncodingHeader),
+          )) {
+        final size = response.contentLength;
+        final ({int start, int end}) part;
+        try {
+          part = networkByteRange(range, size);
+        } on FormatException {
+          await _discardResponse(response);
+          return (
+            status: HttpStatus.requestedRangeNotSatisfiable,
+            headers: {
+              HttpHeaders.contentRangeHeader: 'bytes */$size',
+              HttpHeaders.contentLengthHeader: '0',
+            },
+            bytes: const Stream<List<int>>.empty(),
+            discard: () async {},
+            close: () async {},
+          );
+        }
+        return (
+          status: HttpStatus.partialContent,
+          headers: {
+            HttpHeaders.contentTypeHeader: _mediaContentType(response, path),
+            HttpHeaders.contentRangeHeader:
+                'bytes ${part.start}-${part.end}/$size',
+            HttpHeaders.contentLengthHeader: '${part.end - part.start + 1}',
+            HttpHeaders.acceptRangesHeader: 'bytes',
+          },
+          bytes: _sliceMedia(
+            response.timeout(timeout),
+            part.start,
+            part.end + 1,
+          ),
+          discard: () => _discardResponse(response),
+          close: () async {},
+        );
       }
       return (
         status: response.statusCode,
@@ -1303,6 +1464,8 @@ class NetworkStorageService {
             HttpHeaders.acceptRangesHeader,
           ])
             header: ?response.headers.value(header),
+          if (subsonic && path.startsWith('subsonic/song/'))
+            HttpHeaders.contentTypeHeader: _mediaContentType(response, path),
         },
         bytes: response.timeout(timeout),
         discard: subsonic || method == 'GET'
@@ -1319,6 +1482,119 @@ class NetworkStorageService {
     }
   }
 
+  static String _mediaContentType(HttpClientResponse response, String path) {
+    final mime = response.headers.contentType?.mimeType;
+    // Preserve real server types, including transcodes. Generic binary types
+    // provide no decoder hint, while the library path retains the suffix.
+    return mime == null || mime == 'application/octet-stream'
+        ? networkContentType(path)
+        : response.headers.value(HttpHeaders.contentTypeHeader)!;
+  }
+
+  static Stream<List<int>> _sliceMedia(
+    Stream<List<int>> input,
+    int start,
+    int end,
+  ) async* {
+    var offset = 0;
+    await for (final chunk in input) {
+      final next = offset + chunk.length;
+      if (next > start) {
+        yield chunk.sublist(
+          max(0, start - offset),
+          min(chunk.length, end - offset),
+        );
+      }
+      offset = next;
+      if (offset >= end) return;
+    }
+    throw const HttpException('Subsonic media ended early');
+  }
+
+  Future<_NetworkRead?> _cachedRead(
+    NetworkConnection c,
+    String path,
+    String? range, {
+    bool force = false,
+  }) async {
+    final cache = audioCache;
+    if (cache == null || !path.startsWith('subsonic/song/')) return null;
+    final key = _audioCacheKey(c, path);
+    final local = await cache.lookup(key, path.split('.').last);
+    final fill = cache.filling(key);
+    if (!force && !cache.preferOffline && local != null && fill == null) {
+      return null;
+    }
+    final size = local != null
+        ? await local.length()
+        : await fill?.ready.future;
+    if (size == null || size <= 0) return null;
+    cache.pinPlayback(local?.path ?? fill!.target.path);
+    final ({int start, int end}) part;
+    try {
+      part = networkByteRange(range, size);
+    } on FormatException {
+      return (
+        status: HttpStatus.requestedRangeNotSatisfiable,
+        headers: {
+          HttpHeaders.contentRangeHeader: 'bytes */$size',
+          HttpHeaders.contentLengthHeader: '0',
+        },
+        bytes: const Stream<List<int>>.empty(),
+        discard: () async {},
+        close: () async {},
+      );
+    }
+    return (
+      status: range == null ? HttpStatus.ok : HttpStatus.partialContent,
+      headers: {
+        HttpHeaders.contentTypeHeader: networkContentType(path),
+        HttpHeaders.contentLengthHeader: '${part.end - part.start + 1}',
+        HttpHeaders.acceptRangesHeader: 'bytes',
+        if (range != null)
+          HttpHeaders.contentRangeHeader:
+              'bytes ${part.start}-${part.end}/$size',
+      },
+      bytes: local != null
+          ? local.openRead(part.start, part.end + 1)
+          : _readSpoolOrRemote(fill!, c, path, part.start, part.end + 1),
+      discard: () async {},
+      close: () async {},
+    );
+  }
+
+  Stream<List<int>> _readSpoolOrRemote(
+    NetworkCacheFill fill,
+    NetworkConnection c,
+    String path,
+    int start,
+    int end,
+  ) async* {
+    var offset = start;
+    try {
+      await for (final chunk in fill.read(start, end)) {
+        offset += chunk.length;
+        yield chunk;
+      }
+      return;
+    } catch (_) {
+      // A disk-full/cache failure must not interrupt otherwise playable audio.
+      // Continue at the exact byte offset through the authenticated range path.
+    }
+    if (offset >= end) return;
+    final remote = await _openRead(c, path, range: 'bytes=$offset-${end - 1}');
+    if (remote.status != HttpStatus.partialContent) {
+      await remote.discard();
+      await remote.close();
+      throw const HttpException('Unable to continue audio stream');
+    }
+    try {
+      yield* remote.bytes;
+    } finally {
+      await remote.close();
+    }
+  }
+
   Future<void> _serve(HttpRequest request) async {
     _NetworkRead? read;
     var consumed = false;
@@ -1328,12 +1604,35 @@ class NetworkStorageService {
         request.response.statusCode = HttpStatus.notFound;
         return;
       }
-      read = await _openRead(
-        await connection(route.id),
-        route.path,
-        method: request.method,
-        range: request.headers.value(HttpHeaders.rangeHeader),
-      );
+      final c = await connection(route.id);
+      final range = request.headers.value(HttpHeaders.rangeHeader);
+      read = await _cachedRead(c, route.path, range);
+      if (read == null) {
+        try {
+          read = await _openRead(
+            c,
+            route.path,
+            method: request.method,
+            range: range,
+          );
+          if (read.status >= 400) {
+            final fallback = await _cachedRead(
+              c,
+              route.path,
+              range,
+              force: true,
+            );
+            if (fallback != null) {
+              await read.discard();
+              await read.close();
+              read = fallback;
+            }
+          }
+        } catch (_) {
+          read = await _cachedRead(c, route.path, range, force: true);
+          if (read == null) rethrow;
+        }
+      }
       request.response.statusCode = read.status >= 300 && read.status < 400
           ? HttpStatus.badGateway
           : read.status;

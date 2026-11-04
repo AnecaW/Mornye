@@ -154,6 +154,19 @@ class _FilesSettingsPageState extends ConsumerState<FilesSettingsPage> {
                   showDivider: settings.networkDownloadFolder.isNotEmpty,
                 ),
                 if (settings.networkDownloadFolder.isNotEmpty)
+                  SwitchListTile(
+                    title: const Text(
+                      'Download to both server and this device',
+                    ),
+                    subtitle: const Text(
+                      'Keep a permanent copy in the app’s Documents folder after server verification.',
+                    ),
+                    value: settings.networkDownloadKeepLocal,
+                    onChanged: (value) => ref
+                        .read(settingsProvider.notifier)
+                        .setNetworkDownloadKeepLocal(value),
+                  ),
+                if (settings.networkDownloadFolder.isNotEmpty)
                   SettingsItem(
                     icon: Icons.phone_android_outlined,
                     title: context.l10n.networkUseLocalDownloads,

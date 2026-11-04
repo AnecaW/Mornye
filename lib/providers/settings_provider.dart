@@ -590,6 +590,9 @@ class SettingsNotifier extends Notifier<AppSettings> {
     );
   }
 
+  Future<void> setNetworkDownloadKeepLocal(bool value) =>
+      _commit(state.copyWith(networkDownloadKeepLocal: value));
+
   /// Atomically leaves SAF and persists a writable app-managed destination.
   ///
   /// Keeping these fields in one update avoids an intermediate saved state

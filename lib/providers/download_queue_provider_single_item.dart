@@ -1662,6 +1662,9 @@ class _DownloadRun {
             );
           },
         );
+        if (item.networkDownloadKeepLocal) {
+          historyFilePath = await staging.retainLocal(item.id);
+        }
       }
 
       await n._saveDownloadedMotionArtwork(

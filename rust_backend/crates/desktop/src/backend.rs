@@ -719,6 +719,14 @@ mod tests {
         let output = root.path().join("scan.ndjson");
         for clear_cache in [false, true] {
             if clear_cache {
+                // Windows cannot unlink an open directory capability. Retire
+                // the handle first; the next operation must recreate/regrant it.
+                backend
+                    .owner()
+                    .unwrap()
+                    .environment()
+                    .set_allowed_download_directories(Vec::new())
+                    .unwrap();
                 fs::remove_dir_all(backend.files()).unwrap();
             }
             assert_eq!(
@@ -739,6 +747,12 @@ mod tests {
     fn cover_output_recovers_after_private_cache_removal() {
         let root = tempfile::tempdir().unwrap();
         let backend = initialized_backend(root.path());
+        backend
+            .owner()
+            .unwrap()
+            .environment()
+            .set_allowed_download_directories(Vec::new())
+            .unwrap();
         fs::remove_dir_all(backend.files()).unwrap();
         let output = backend
             .create_temporary_media_file("cover_", ".jpg")

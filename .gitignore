@@ -112,3 +112,6 @@ NUL
 *.log
 hs_err_*.log
 flutter_*.log
+
+# Verified delivery artifacts are distributed through Actions.
+/dist/

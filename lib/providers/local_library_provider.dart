@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:path/path.dart' as p;
 import 'package:flutter/painting.dart' show PaintingBinding;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
@@ -10,6 +11,7 @@ import 'package:mornye/services/library_cleanup.dart';
 import 'package:mornye/services/library_database.dart';
 import 'package:mornye/services/network_library_scanner.dart';
 import 'package:mornye/services/network_storage_service.dart';
+import 'package:mornye/services/navidrome_transfers.dart';
 import 'package:mornye/services/notification_service.dart';
 import 'package:mornye/services/platform_bridge.dart';
 import 'package:mornye/utils/logger.dart';
@@ -196,6 +198,8 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
   final Set<String> _pendingReconnectScans = {};
   bool _drainingReconnectScans = false;
   StreamSubscription<void>? _storageEventsSubscription;
+  StreamSubscription<String>? _navidromeChanges;
+  StreamSubscription<String>? _uploadedLocalChanges;
   Timer? _storageEventDebounce;
   Timer? _availabilityRetry;
   int _availabilityRetryCount = 0;
@@ -212,6 +216,29 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
 
   @override
   LocalLibraryState build() {
+    _uploadedLocalChanges = NavidromeTransfers.instance.localChanges.listen((
+      file,
+    ) {
+      if (!ref.mounted) return;
+      for (final source in state.sources) {
+        if (!source.path.startsWith('network://') &&
+            p.isWithin(source.path, file)) {
+          _pendingReconnectScans.add(source.id);
+        }
+      }
+      unawaited(_drainReconnectScans());
+    });
+    _navidromeChanges = NavidromeTransfers.instance.libraryChanges.listen((
+      server,
+    ) {
+      if (!ref.mounted) return;
+      for (final source in state.sources) {
+        if (Uri.tryParse(source.path)?.host == server) {
+          _pendingReconnectScans.add(source.id);
+        }
+      }
+      unawaited(_drainReconnectScans());
+    });
     _unsubscribeNetworkRemoval = _networkStorage.connectionRemovals.subscribe(
       _onNetworkConnectionRemoved,
     );
@@ -244,6 +271,8 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
       }
       _progressPoller.stop();
       _storageEventsSubscription?.cancel();
+      _navidromeChanges?.cancel();
+      _uploadedLocalChanges?.cancel();
       _storageEventDebounce?.cancel();
       _availabilityRetry?.cancel();
     });

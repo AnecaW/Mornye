@@ -211,12 +211,15 @@ class SubsonicSong {
 }
 
 extension SubsonicStorage on NetworkStorageService {
-  SubsonicClient openSubsonic(NetworkConnection connection) {
+  SubsonicClient openSubsonic(
+    NetworkConnection connection, {
+    bool fresh = false,
+  }) {
     connection.validate();
     if (connection.protocol != NetworkProtocol.subsonic) {
       throw const FormatException('Expected a Subsonic connection');
     }
-    return SubsonicClient._(this, connection, _client());
+    return SubsonicClient._(this, connection, _client(), fresh: fresh);
   }
 
   Future<List<NetworkEntry>> searchSubsonic(
@@ -233,7 +236,13 @@ extension SubsonicStorage on NetworkStorageService {
 }
 
 class SubsonicClient {
-  SubsonicClient._(this._storage, this.connection, this._http);
+  SubsonicClient._(
+    this._storage,
+    this.connection,
+    this._http, {
+    this.fresh = false,
+  });
+  final bool fresh;
   final NetworkStorageService _storage;
   final NetworkConnection connection;
   final HttpClient _http;
@@ -247,7 +256,28 @@ class SubsonicClient {
   Future<Map<String, dynamic>> request(
     String method, [
     Map<String, String> arguments = const {},
-  ]) => _protectTransport(() => _requestJson(method, arguments));
+  ]) => _protectTransport(() async {
+    if (_closed) throw StateError('Subsonic request cancelled');
+    final cache = _storage.metadataCache;
+    final account = jsonEncode(connection.toJson());
+    final result = cache == null
+        ? await _requestJson(method, arguments)
+        : await cache.request(
+            account,
+            method,
+            arguments,
+            () => _requestJson(method, arguments),
+            fresh: fresh,
+          );
+    if (method == 'startScan' ||
+        (method == 'getScanStatus' &&
+            result['scanStatus'] is Map &&
+            (result['scanStatus'] as Map)['scanning'] == false)) {
+      await cache?.invalidate(account);
+    }
+    if (_closed) throw StateError('Subsonic request cancelled');
+    return result;
+  });
 
   Future<T> _protectTransport<T>(Future<T> Function() operation) async {
     try {
@@ -483,17 +513,39 @@ class SubsonicClient {
       final page = offset == 0 ? _albumPage(first) : await _albums(offset);
       await checkpoint();
       var newAlbums = 0;
+      final ids = <String>[];
       for (final album in page) {
-        await checkpoint();
         final id = _subsonicText(album, 'id');
         if (id.isEmpty) throw const HttpException('Invalid Subsonic album');
-        if (!albums.add(id)) continue;
-        newAlbums++;
-        for (final song in await _songs(id)) {
-          await checkpoint();
-          if (songs.add(song.id)) yield song;
-          if (songs.length > 500000) {
-            throw const HttpException('Subsonic library is too large');
+        if (albums.add(id)) ids.add(id);
+      }
+      newAlbums = ids.length;
+      // Limit requests and buffered metadata, preserve server ordering, and
+      // publish each batch without waiting for the entire library.
+      for (var start = 0; start < ids.length; start += 4) {
+        await checkpoint();
+        Future<({List<SubsonicSong>? songs, AsyncError? error})> load(
+          String id,
+        ) async {
+          try {
+            return (songs: await _songs(id), error: null);
+          } catch (error, stack) {
+            return (songs: null, error: AsyncError(error, stack));
+          }
+        }
+
+        final batch = ids.skip(start).take(4).map(load).toList();
+        for (final pending in batch) {
+          final result = await pending;
+          if (result.error case final error?) {
+            Error.throwWithStackTrace(error.error, error.stackTrace);
+          }
+          for (final song in result.songs!) {
+            await checkpoint();
+            if (songs.add(song.id)) yield song;
+            if (songs.length > 500000) {
+              throw const HttpException('Subsonic library is too large');
+            }
           }
         }
       }
@@ -560,7 +612,7 @@ class SubsonicClient {
     final hash = sha256.convert(
       utf8.encode('${connection.id}/${song.coverId}'),
     );
-    final base = File('${directory.path}/subsonic_$hash.image');
+    final base = File.fromUri(directory.uri.resolve('subsonic_$hash.image'));
     final current = File('${base.path}.current');
     var target = base;
     try {
@@ -571,7 +623,7 @@ class SubsonicClient {
           RegExp(
             r'^[a-f0-9]{48}$',
           ).hasMatch(name.substring(prefix.length, name.length - 6))) {
-        target = File('${directory.path}/$name');
+        target = File.fromUri(directory.uri.resolve(name));
       }
     } on FileSystemException {
       // Older caches have only the original image path.
@@ -612,7 +664,7 @@ class SubsonicClient {
         // A new path invalidates every decoded size of the old artwork.
         // Existing Library rows keep their old image until the scan commits.
         final name = 'subsonic_${hash}_${NetworkStorageService.newId()}.image';
-        target = File('${directory.path}/$name');
+        target = File.fromUri(directory.uri.resolve(name));
         await staged.rename(target.path);
         await _storeEtag(target, fetched.etag, fetched.size);
         pointer = File('${current.path}.${NetworkStorageService.newId()}.tmp');

@@ -267,14 +267,22 @@ pub(crate) fn build(path: &str, android: bool) -> Result<BTreeSet<String>, Strin
                 && !localhost
                 && uri.query().is_none()
                 && uri.fragment().is_none()
-                && let Ok(file) = uri.to_file_path()
             {
-                pending.push_back(file.to_string_lossy().into_owned());
+                if let Ok(file) = uri.to_file_path() {
+                    pending.push_back(file.to_string_lossy().into_owned());
+                } else if uri.host_str().is_none()
+                    && let Some(path) = decode(uri.path())
+                {
+                    // A mobile/Unix library can be restored on Windows.
+                    pending.push_back(path);
+                }
             }
             pending.extend(storage_documents(&uri));
-        } else if trimmed.starts_with('/')
-            && let Ok(uri) = Url::from_file_path(trimmed)
-        {
+        } else if trimmed.starts_with('/') {
+            // from_file_path is host-dependent and rejects POSIX paths on
+            // Windows. File identity must survive cross-device synchronization.
+            let mut uri = Url::parse("file:///").map_err(|e| e.to_string())?;
+            uri.set_path(&trimmed.replace('%', "%25").replace('\\', "%5C"));
             let text = uri_text(&uri);
             keys.insert(text.clone());
             keys.insert(dart_lower(&text));

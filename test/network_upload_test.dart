@@ -129,6 +129,7 @@ void main() {
     staging = NetworkDownloadStaging(
       storage: storage,
       directory: () async => temp,
+      documentsDirectory: () async => Directory('${temp.path}/documents'),
     );
   });
   tearDown(() async {
@@ -156,6 +157,19 @@ void main() {
     });
     return audio;
   }
+
+  test('both destination retains audio and lyrics outside staging', () async {
+    final audio = await prepare(lyrics: true);
+    final bytes = await audio.readAsBytes();
+    final retained = await staging.retainLocal('item');
+    expect(await File(retained).readAsBytes(), bytes);
+    expect(
+      await File(retained.replaceFirst('.flac', '.lrc')).readAsString(),
+      '[00:01.00]Lyrics',
+    );
+    await staging.discard('item');
+    expect(await File(retained).readAsBytes(), bytes);
+  });
 
   Future<String> publish({void Function()? checkpoint}) => staging.publish(
     'item',

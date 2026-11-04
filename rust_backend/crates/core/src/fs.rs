@@ -8,6 +8,30 @@ use std::path::{Component, Path, PathBuf};
 /// The prefix `tempfile::NamedTempFile::new_in` uses, for writers that kept it.
 pub const DEFAULT_TEMP_PREFIX: &str = ".tmp";
 
+#[cfg(windows)]
+fn atomic_target_lock(path: &Path) -> std::sync::Arc<std::sync::Mutex<()>> {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, OnceLock, Weak};
+    type TargetLocks = Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>;
+    static LOCKS: OnceLock<TargetLocks> = OnceLock::new();
+    let mut locks = LOCKS
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    locks.retain(|_, value| value.strong_count() > 0);
+    let key = path
+        .parent()
+        .and_then(|p| p.canonicalize().ok())
+        .and_then(|parent| path.file_name().map(|name| parent.join(name)))
+        .unwrap_or_else(|| path.to_path_buf());
+    if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
+        return lock;
+    }
+    let lock = Arc::new(Mutex::new(()));
+    locks.insert(key, Arc::downgrade(&lock));
+    lock
+}
+
 /// A [`write_atomic`] failure. `Persist` keeps tempfile's own message
 /// (`failed to persist temporary file: ...`); converting to [`io::Error`]
 /// yields the underlying rename error instead, like `PersistError::error`.
@@ -63,6 +87,13 @@ pub fn write_atomic(
     check: impl FnOnce() -> io::Result<()>,
     sync_directory: bool,
 ) -> Result<(), WriteAtomicError> {
+    // Windows replacement can fail while another writer still owns the target
+    // handle. Serialize only writers for the same path, retaining parallel I/O
+    // for unrelated files and the existing atomic/cancellation semantics.
+    #[cfg(windows)]
+    let target_lock = atomic_target_lock(path);
+    #[cfg(windows)]
+    let _target_guard = target_lock.lock().unwrap_or_else(|e| e.into_inner());
     let mut file = tempfile::Builder::new()
         .prefix(prefix)
         .tempfile_in(directory)?;

@@ -79,6 +79,8 @@ class CoverStore {
 
   /// Fetches under way and when fetches last failed, by reference key.
   final _fetches = <String, Future<String?>>{};
+  final _adoptions = <Future<String?>>{};
+  bool _disposed = false;
   final _failures = <String, ({DateTime at, Duration wait})>{};
 
   /// Reference keys [invalidate]d since their cover was last checked.
@@ -156,6 +158,7 @@ class CoverStore {
   /// the background, after the fetches callers await: [changes] reports
   /// when its bytes changed.
   Future<String?> file(String? ref) async {
+    if (_disposed) return null;
     if (ref == null || ref.isEmpty) return null;
     if (!fetches(ref)) {
       final path = _localPath(ref);
@@ -219,9 +222,25 @@ class CoverStore {
   /// for a cover that reached the device another way (see
   /// [songCoverReference]). Null when [path] is not a cover image or could
   /// not be copied.
-  Future<String?> adopt(String ref, String path) async {
+  Future<String?> adopt(String ref, String path) {
+    if (_disposed) return Future.value(null);
+    final operation = _adopt(ref, path);
+    _adoptions.add(operation);
+    operation.then<void>(
+      (_) {
+        _adoptions.remove(operation);
+      },
+      onError: (Object _, StackTrace _) {
+        _adoptions.remove(operation);
+      },
+    );
+    return operation;
+  }
+
+  Future<String?> _adopt(String ref, String path) async {
     if (!fetches(ref)) return null;
     await warmUp();
+    if (_disposed) return null;
     final root = _root;
     if (root == null) return null;
     try {
@@ -289,7 +308,8 @@ class CoverStore {
 
   /// Waits for fetches under way, then closes [changes].
   Future<void> dispose() async {
-    await Future.wait(_fetches.values.toList());
+    _disposed = true;
+    await Future.wait([..._fetches.values, ..._adoptions]);
     await _changes.close();
   }
 
@@ -327,22 +347,24 @@ class CoverStore {
     String root,
     String key, {
     bool recheck = false,
-  }) => _fetches.putIfAbsent(key, () async {
-    try {
-      return await _save(ref, root, key, recheck: recheck);
-    } catch (error) {
-      _failures[key] = (
-        at: DateTime.now(),
-        wait: error is NetworkMediaUnavailable || error is FormatException
-            ? _missingRetryDelay
-            : retryDelay,
-      );
-      _log.d('Could not fetch a network cover: ${error.runtimeType}');
-      return null;
-    } finally {
-      _fetches.remove(key);
-    }
-  });
+  }) => _disposed
+      ? Future<String?>.value(null)
+      : _fetches.putIfAbsent(key, () async {
+          try {
+            return await _save(ref, root, key, recheck: recheck);
+          } catch (error) {
+            _failures[key] = (
+              at: DateTime.now(),
+              wait: error is NetworkMediaUnavailable || error is FormatException
+                  ? _missingRetryDelay
+                  : retryDelay,
+            );
+            _log.d('Could not fetch a network cover: ${error.runtimeType}');
+            return null;
+          } finally {
+            _fetches.remove(key);
+          }
+        });
 
   Future<String> _save(
     String ref,
@@ -487,7 +509,10 @@ String? durableCoverReference(String? reference) {
   if (uri != null && (uri.isScheme('http') || uri.isScheme('https'))) {
     return isLoopbackHost(uri.host) ? null : value;
   }
-  final path = CoverStore._localPath(value);
+  // Saved mobile sessions can be restored on Windows. Classify POSIX paths
+  // by their components even when they are not absolute on the current OS.
+  final path =
+      CoverStore._localPath(value) ?? (value.startsWith('/') ? value : null);
   if (path == null) return value;
   final normalized = p.normalize(path);
   // Network tags and download previews are read to these temporary folders.

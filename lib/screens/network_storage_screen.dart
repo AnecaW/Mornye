@@ -1,4 +1,5 @@
 import 'package:flutter/cupertino.dart';
+import 'package:mornye/screens/navidrome_transfers_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mornye/l10n/l10n.dart';
@@ -303,6 +304,18 @@ class _NetworkStorageScreenState extends ConsumerState<NetworkStorageScreen> {
           AppSliverHeader.page(
             title: title,
             actions: [
+              if (_subsonic && connection != null && widget.path.isEmpty)
+                _NetworkIconAction(
+                  tooltip: 'Music transfers',
+                  icon: Icons.sync_alt,
+                  cupertinoIcon: CupertinoIcons.arrow_up_arrow_down,
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) =>
+                          NavidromeTransfersPage(server: connection),
+                    ),
+                  ),
+                ),
               if (connection == null)
                 _NetworkIconAction(
                   tooltip: context.l10n.networkAddConnection,
@@ -540,13 +553,26 @@ class _NetworkStorageScreenState extends ConsumerState<NetworkStorageScreen> {
                             showDivider: index != visible.length - 1,
                             trailing: entry.directory
                                 ? null
-                                : _NetworkIconAction(
-                                    tooltip: context.l10n.tooltipPlay,
-                                    icon: Icons.play_arrow_rounded,
-                                    cupertinoIcon: CupertinoIcons.play_fill,
-                                    onPressed: _starting
-                                        ? null
-                                        : () => _play(entry),
+                                : Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      if (_subsonic)
+                                        _SubsonicCacheMenu(
+                                          service: service,
+                                          source: NetworkStorageService.source(
+                                            connection.id,
+                                            entry.path,
+                                          ),
+                                        ),
+                                      _NetworkIconAction(
+                                        tooltip: context.l10n.tooltipPlay,
+                                        icon: Icons.play_arrow_rounded,
+                                        cupertinoIcon: CupertinoIcons.play_fill,
+                                        onPressed: _starting
+                                            ? null
+                                            : () => _play(entry),
+                                      ),
+                                    ],
                                   ),
                             onTap: _starting
                                 ? null
@@ -571,6 +597,91 @@ class _NetworkStorageScreenState extends ConsumerState<NetworkStorageScreen> {
       ),
     );
   }
+}
+
+class _SubsonicCacheMenu extends StatefulWidget {
+  const _SubsonicCacheMenu({required this.service, required this.source});
+  final NetworkStorageService service;
+  final String source;
+  @override
+  State<_SubsonicCacheMenu> createState() => _SubsonicCacheMenuState();
+}
+
+class _SubsonicCacheMenuState extends State<_SubsonicCacheMenu> {
+  bool cached = false, busy = false;
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+  }
+
+  @override
+  void didUpdateWidget(covariant _SubsonicCacheMenu oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.source != widget.source) _refresh();
+  }
+
+  Future<void> _refresh() async {
+    try {
+      final value = await widget.service.isAudioCached(widget.source);
+      if (mounted) setState(() => cached = value);
+    } catch (_) {}
+  }
+
+  Future<void> _act(String action) async {
+    setState(() => busy = true);
+    try {
+      if (action == 'remove') {
+        await widget.service.removeCachedAudio(widget.source);
+      } else {
+        await widget.service.cacheAudio(
+          widget.source,
+          background: true,
+          manual: true,
+        );
+      }
+      await _refresh();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Could not update the cached track. Check the connection and cache settings.',
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => busy
+      ? const SizedBox(
+          width: 24,
+          height: 24,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        )
+      : PopupMenuButton<String>(
+          tooltip: cached ? 'Cached on this device' : 'Server track',
+          icon: Icon(
+            cached ? Icons.offline_pin_outlined : Icons.cloud_outlined,
+          ),
+          onSelected: _act,
+          itemBuilder: (_) => [
+            if (cached)
+              const PopupMenuItem(
+                value: 'remove',
+                child: Text('Remove from cache'),
+              )
+            else
+              const PopupMenuItem(
+                value: 'cache',
+                child: Text('Cache for offline playback'),
+              ),
+          ],
+        );
 }
 
 class _NetworkConnectionForm extends StatefulWidget {

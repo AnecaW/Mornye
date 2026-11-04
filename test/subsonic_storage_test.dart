@@ -1,8 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'package:path/path.dart' as p;
 
 import 'package:crypto/crypto.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:mornye/services/network_audio_cache.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mornye/services/network_certificate.dart';
 import 'package:mornye/services/network_library_scanner.dart';
@@ -233,12 +236,15 @@ void main() {
     );
     final cover = tags['cover_path'] as String;
     expect(await File('$cover.etag').readAsString(), '"v1"\n4');
-    final names = await cache.list().map((file) => file.path).toSet();
+    final names = await cache
+        .list()
+        .map((file) => p.normalize(file.path))
+        .toSet();
     expect(names.where((name) => name.endsWith('.image')), hasLength(32));
     expect(names.where((name) => name.endsWith('.etag')), hasLength(32));
-    expect(names, contains(cover));
+    expect(names, contains(p.normalize(cover)));
     for (var i = 9; i < 40; i++) {
-      final kept = '${cache.path}/cover_$i.image';
+      final kept = p.normalize(p.join(cache.path, 'cover_$i.image'));
       expect(names, containsAll([kept, '$kept.etag']));
     }
   });
@@ -392,6 +398,121 @@ void main() {
       );
     },
   );
+
+  test('metadata is reused by a new reader after restart', () async {
+    final source = NetworkStorageService.source(
+      'fixture',
+      SubsonicSong(server.song).path,
+    );
+    final first = NetworkMetadataService(
+      storage: storage,
+      cacheDirectory: () async => directory,
+    );
+    final tags = await first.read(source);
+    final count = server.requests.length;
+    final restarted = NetworkMetadataService(
+      storage: storage,
+      cacheDirectory: () async => directory,
+    );
+    expect(await restarted.read(source), tags);
+    expect(server.requests.length, count);
+    await restarted.read(source, forceRefresh: true);
+    expect(server.requests.length, greaterThan(count));
+  });
+
+  test('album scan limits concurrency to four and preserves order', () async {
+    server.library = List.generate(
+      8,
+      (i) => {...server.song, 'id': 'song-$i', 'albumId': 'album-$i'},
+    );
+    server.blockMethod = 'getAlbum';
+    final client = storage.openSubsonic(server.connection());
+    addTearDown(client.close);
+    final scan = client.catalog(checkpoint: () async {}).toList();
+    await server.held.future;
+    final deadline = DateTime.now().add(const Duration(seconds: 3));
+    int requested() =>
+        server.requests.where((r) => r.path.endsWith('/getAlbum.view')).length;
+    while (requested() < 4 && DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(requested(), 4);
+    server.release.complete();
+    expect((await scan).map((s) => s.id), List.generate(8, (i) => 'song-$i'));
+  });
+
+  test(
+    'stream caching reuses one fill and plays a completed file offline',
+    () async {
+      SharedPreferences.setMockInitialValues({'audio_cache_wifi': false});
+      await storage.dispose();
+      final cache = NetworkAudioCache(directory: () async => directory);
+      storage = NetworkStorageService(
+        audioCache: cache,
+        read: () async => null,
+        write: (_) async {},
+        ensureAccess: (_) async {},
+      );
+      await storage.save(server.connection());
+      final source = NetworkStorageService.source(
+        'fixture',
+        SubsonicSong(server.song).path,
+      );
+      final url = await storage.resolve(source);
+      final http = HttpClient();
+      addTearDown(() => http.close(force: true));
+      final response = await (await http.getUrl(Uri.parse(url))).close();
+      expect(await response.expand((c) => c).toList(), [0, 1, 2, 3]);
+      String local = url;
+      final deadline = DateTime.now().add(const Duration(seconds: 5));
+      while (local.startsWith('http') && DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        local = await storage.resolve(source);
+      }
+      expect(File(local).isAbsolute, isTrue);
+      expect(
+        server.requests.where((r) => r.path.endsWith('/stream.view')),
+        hasLength(1),
+      );
+      storage.setReachable('fixture', reachable: false);
+      server.disconnect = true;
+      expect(await storage.reachable(source), isTrue);
+      expect(await storage.resolve(source), local);
+      expect(await File(local).readAsBytes(), [0, 1, 2, 3]);
+    },
+  );
+
+  test('AVPlayer probes work when the server ignores Range', () async {
+    server.ignoreRanges = true;
+    server.audioContentType = 'application/octet-stream';
+    server.audio = List.generate(1024, (i) => i % 256);
+    final url = Uri.parse(
+      await storage.resolve(
+        NetworkStorageService.source('fixture', SubsonicSong(server.song).path),
+      ),
+    );
+    final http = HttpClient();
+    addTearDown(() => http.close(force: true));
+    for (final entry in <String, List<int>>{
+      'bytes=0-1': [0, 1],
+      'bytes=1022-': [254, 255],
+      'bytes=-2': [254, 255],
+    }.entries) {
+      final request = await http.getUrl(url);
+      request.headers.set('range', entry.key);
+      final response = await request.close();
+      expect(response.statusCode, 206);
+      expect(response.headers.contentType!.mimeType, 'audio/flac');
+      expect(response.contentLength, 2);
+      expect(await response.expand((chunk) => chunk).toList(), entry.value);
+    }
+    final request = await http.getUrl(url);
+    request.headers.set('range', 'bytes=2048-');
+    final response = await request.close();
+    expect(response.statusCode, 416);
+    expect(response.headers.value('content-range'), 'bytes */1024');
+    await response.drain<void>();
+  });
 
   test(
     'API errors and media error documents do not leak server messages',
@@ -779,7 +900,7 @@ void main() {
         storage: storage,
         cacheDirectory: () async => directory,
       );
-      final tags = await metadata.read(source);
+      final tags = await metadata.read(source, forceRefresh: true);
       expect(tags['title'], 'A song');
       return tags['lyrics'];
     }

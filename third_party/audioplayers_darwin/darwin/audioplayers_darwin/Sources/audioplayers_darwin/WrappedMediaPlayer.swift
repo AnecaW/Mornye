@@ -231,10 +231,12 @@ enum ReleaseMode: String {
       }
     }
 
+    // Index completed local files only. HTTP indexing can require downloading
+    // the whole song before preparation and fails without random access.
     // FLAC can otherwise seek to different audio while reporting the requested
     // time. Exact seek tolerances alone do not fix an approximate asset index.
     var options: [String: Any] =
-      arriving ? [:] : [AVURLAssetPreferPreciseDurationAndTimingKey: true]
+      (isLocal && !arriving) ? [AVURLAssetPreferPreciseDurationAndTimingKey: true] : [:]
     if let unwrappedMimeType = mimeType {
       if #available(iOS 17, macOS 14.0, *) {
         options[AVURLAssetOverrideMIMETypeKey] = unwrappedMimeType
