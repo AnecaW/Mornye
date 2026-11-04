@@ -477,6 +477,7 @@ void main() {
       );
       storage.setReachable('fixture', reachable: false);
       server.disconnect = true;
+      cache.preferOffline = false; // Prefer remote online, still work offline.
       expect(await storage.reachable(source), isTrue);
       expect(await storage.resolve(source), local);
       expect(await File(local).readAsBytes(), [0, 1, 2, 3]);

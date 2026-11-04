@@ -641,7 +641,8 @@ class NetworkStorageService {
         _audioCacheKey(c, path),
         path.split('.').last,
       );
-      if (local != null && cache.preferOffline) {
+      if (local != null &&
+          (cache.preferOffline || _unreachable.containsKey(host))) {
         cache.pinPlayback(local.path);
         return local.path;
       }
