@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -18,7 +19,7 @@ import 'package:mornye/widgets/player_queue_sheet.dart';
 import 'support/fixed_settings.dart';
 
 void main() {
-  TestWidgetsFlutterBinding.ensureInitialized();
+  final binding = TestWidgetsFlutterBinding.ensureInitialized();
   const channel = MethodChannel('com.zarz.mornye/backend');
   final messenger =
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
@@ -32,7 +33,7 @@ void main() {
     directory = await Directory.systemTemp.createTemp('queue_artwork_');
     extracted = [];
     DownloadedEmbeddedCoverResolver.setPersistentCacheDirectoryForTesting(
-      Directory('${directory.path}/previews'),
+      Directory(p.join(directory.path, 'previews')),
     );
     messenger.setMockMethodCallHandler(channel, (call) async {
       expect(call.method, 'extractCoverToFile');
@@ -44,23 +45,33 @@ void main() {
   });
 
   tearDown(() async {
-    await DownloadedEmbeddedCoverResolver.resetMemoryStateForTesting(
-      preservePersistentFiles: false,
-    );
-    DownloadedEmbeddedCoverResolver.setPersistentCacheDirectoryForTesting(null);
-    messenger.setMockMethodCallHandler(channel, null);
-    await directory.delete(recursive: true);
+    await binding.runAsync(() async {
+      await DownloadedEmbeddedCoverResolver.resetMemoryStateForTesting(
+        preservePersistentFiles: false,
+      );
+      DownloadedEmbeddedCoverResolver.setPersistentCacheDirectoryForTesting(
+        null,
+      );
+      messenger.setMockMethodCallHandler(channel, null);
+      await directory.delete(recursive: true);
+    });
   });
 
   Future<void> waitForCovers(WidgetTester tester, int count) async {
     bool ready() =>
         tester
             .widgetList<PlayerArtwork>(find.byType(PlayerArtwork))
-            .where((widget) => widget.artUri?.contains('/previews/') == true)
+            .where(
+              (widget) =>
+                  widget.artUri?.replaceAll(r'\', '/').contains('/previews/') ==
+                  true,
+            )
             .length ==
         count;
     for (var turn = 0; turn < 200 && !ready(); turn++) {
-      await tester.runAsync(() => directory.stat());
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 10)),
+      );
       await tester.pump();
     }
     expect(ready(), isTrue);
@@ -74,10 +85,10 @@ void main() {
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.reset);
       final first = await tester.runAsync(
-        () => File('${directory.path}/first.flac').writeAsBytes([1]),
+        () => File(p.join(directory.path, 'first.flac')).writeAsBytes([1]),
       );
       final second = await tester.runAsync(
-        () => File('${directory.path}/second.flac').writeAsBytes([2]),
+        () => File(p.join(directory.path, 'second.flac')).writeAsBytes([2]),
       );
       final queue = [
         const MediaItem(id: 'current', title: 'Current'),
@@ -85,7 +96,7 @@ void main() {
         MediaItem(
           id: 'second',
           title: 'Second',
-          artUri: Uri.file('${directory.path}/expired.jpg'),
+          artUri: Uri.file(p.join(directory.path, 'expired.jpg')),
           extras: {'source': second!.uri.toString()},
         ),
         MediaItem(
@@ -135,7 +146,9 @@ void main() {
             (_) => reset = true,
           );
       for (var turn = 0; turn < 200 && !reset; turn++) {
-        await tester.runAsync(() => directory.stat());
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)),
+        );
         await tester.pump(const Duration(milliseconds: 1));
       }
       expect(reset, isTrue);
