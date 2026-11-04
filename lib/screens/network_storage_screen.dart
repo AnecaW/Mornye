@@ -552,7 +552,13 @@ class _NetworkStorageScreenState extends ConsumerState<NetworkStorageScreen> {
                                   ].join(' · '),
                             showDivider: index != visible.length - 1,
                             trailing: entry.directory
-                                ? null
+                                ? (_subsonic
+                                      ? _SubsonicCacheMenu(
+                                          service: service,
+                                          source: entry.path,
+                                          collection: connection,
+                                        )
+                                      : null)
                                 : Row(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
@@ -600,15 +606,29 @@ class _NetworkStorageScreenState extends ConsumerState<NetworkStorageScreen> {
 }
 
 class _SubsonicCacheMenu extends StatefulWidget {
-  const _SubsonicCacheMenu({required this.service, required this.source});
+  const _SubsonicCacheMenu({
+    required this.service,
+    required this.source,
+    this.collection,
+  });
   final NetworkStorageService service;
   final String source;
+  final NetworkConnection? collection;
   @override
   State<_SubsonicCacheMenu> createState() => _SubsonicCacheMenuState();
 }
 
 class _SubsonicCacheMenuState extends State<_SubsonicCacheMenu> {
   bool cached = false, busy = false;
+  bool cancelled = false;
+  int completed = 0;
+
+  @override
+  void dispose() {
+    cancelled = true;
+    super.dispose();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -622,6 +642,7 @@ class _SubsonicCacheMenuState extends State<_SubsonicCacheMenu> {
   }
 
   Future<void> _refresh() async {
+    if (widget.collection != null) return;
     try {
       final value = await widget.service.isAudioCached(widget.source);
       if (mounted) setState(() => cached = value);
@@ -629,9 +650,23 @@ class _SubsonicCacheMenuState extends State<_SubsonicCacheMenu> {
   }
 
   Future<void> _act(String action) async {
-    setState(() => busy = true);
+    setState(() {
+      busy = true;
+      cancelled = false;
+      completed = 0;
+    });
     try {
-      if (action == 'remove') {
+      if (widget.collection != null) {
+        await widget.service.updateCollectionCache(
+          widget.collection!,
+          widget.source,
+          remove: action == 'remove',
+          cancelled: () => cancelled,
+          onProgress: (count) {
+            if (mounted) setState(() => completed = count);
+          },
+        );
+      } else if (action == 'remove') {
         await widget.service.removeCachedAudio(widget.source);
       } else {
         await widget.service.cacheAudio(
@@ -658,24 +693,28 @@ class _SubsonicCacheMenuState extends State<_SubsonicCacheMenu> {
 
   @override
   Widget build(BuildContext context) => busy
-      ? const SizedBox(
-          width: 24,
-          height: 24,
-          child: CircularProgressIndicator(strokeWidth: 2),
+      ? IconButton(
+          tooltip: 'Cancel caching after this track ($completed complete)',
+          onPressed: () => setState(() => cancelled = true),
+          icon: const Icon(Icons.cancel_outlined),
         )
       : PopupMenuButton<String>(
-          tooltip: cached ? 'Cached on this device' : 'Server track',
+          tooltip: widget.collection != null
+              ? 'Album or artist cache'
+              : cached
+              ? 'Cached on this device'
+              : 'Server track',
           icon: Icon(
             cached ? Icons.offline_pin_outlined : Icons.cloud_outlined,
           ),
           onSelected: _act,
           itemBuilder: (_) => [
-            if (cached)
+            if (cached || widget.collection != null)
               const PopupMenuItem(
                 value: 'remove',
                 child: Text('Remove from cache'),
-              )
-            else
+              ),
+            if (!cached || widget.collection != null)
               const PopupMenuItem(
                 value: 'cache',
                 child: Text('Cache for offline playback'),

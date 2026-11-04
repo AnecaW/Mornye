@@ -332,7 +332,7 @@ mod tests {
                 "apple": {"response": apple, "expires_at": 200},
                 "other": {"response": other, "expires_at": 200}
             }});
-            fs::write(file.path(), serde_json::to_vec(&snapshot).unwrap()).unwrap();
+            fs::write(&file, serde_json::to_vec(&snapshot).unwrap()).unwrap();
             let cache = LyricsCache::default();
             cache.set_persistence_path(&file, now);
             assert!(cache.get("apple", now).is_none());
@@ -352,7 +352,7 @@ mod tests {
                 "red": {"response": red, "expires_at": 200},
                 "apple": {"response": apple, "expires_at": 200}
             }});
-            fs::write(file.path(), serde_json::to_vec(&snapshot).unwrap()).unwrap();
+            fs::write(&file, serde_json::to_vec(&snapshot).unwrap()).unwrap();
             let cache = LyricsCache::default();
             cache.set_persistence_path(&file, now);
             assert_eq!(

@@ -733,6 +733,43 @@ class NetworkStorageService {
     );
   }
 
+  /// Walk one album/artist a page at a time, keeping audio downloads bounded.
+  /// Explicit downloads live outside this cache and are never removed here.
+  Future<int> updateCollectionCache(
+    NetworkConnection connection,
+    String path, {
+    required bool remove,
+    bool Function()? cancelled,
+    void Function(int)? onProgress,
+  }) async {
+    if (connection.protocol != NetworkProtocol.subsonic) {
+      throw const FormatException('Collection caching requires Subsonic');
+    }
+    final pending = <String>[path];
+    final visited = <String>{};
+    var count = 0;
+    while (pending.isNotEmpty && !(cancelled?.call() ?? false)) {
+      final current = pending.removeLast();
+      if (!visited.add(current)) continue;
+      for (final entry in await list(connection, current)) {
+        if (cancelled?.call() ?? false) return count;
+        if (entry.directory) {
+          if (!visited.contains(entry.path)) pending.add(entry.path);
+        } else if (entry.path.startsWith('subsonic/song/') &&
+            visited.add(entry.path)) {
+          final track = source(connection.id, entry.path);
+          if (remove) {
+            await removeCachedAudio(track);
+          } else {
+            await cacheAudio(track, background: true, manual: true);
+          }
+          onProgress?.call(++count);
+        }
+      }
+    }
+    return count;
+  }
+
   Future<bool> isAudioCached(String source) async {
     final (:host, :path) = _sourceParts(source);
     return await audioCache?.lookup(
