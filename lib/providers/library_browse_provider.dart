@@ -120,6 +120,7 @@ final libraryBrowsePageLoaderProvider =
         final query = queryForMusicSource(
           libraryBrowseQuery(request),
           ref.read(effectiveLibrarySourceProvider),
+          includeNetwork: ref.read(libraryIncludesNetworkSourcesProvider),
         );
         if (request.browse.artists) {
           return LibraryBrowsePage.fromRows(
@@ -172,8 +173,8 @@ class LibraryBrowseNotifier extends AsyncNotifier<LibraryBrowseState> {
       settingsProvider.select((s) => s.localLibraryEnabled),
     );
     ref.watch(downloadHistoryProvider.select((s) => s.loadedIndexVersion));
-    if (_includeLocal ||
-        ref.read(effectiveLibrarySourceProvider) != deviceMusicSource) {
+    final includeNetwork = ref.watch(libraryIncludesNetworkSourcesProvider);
+    if (_includeLocal || includeNetwork) {
       ref.watch(localLibraryProvider.select((s) => s.loadedIndexVersion));
     }
     final selected = ref.watch(effectiveLibrarySourceProvider);

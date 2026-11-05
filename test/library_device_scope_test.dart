@@ -139,6 +139,21 @@ void main() {
         expect(albums.rows, hasLength(1));
         expect(albums.rows.single['album_key'], startsWith('network://one/'));
         expect(albums.rows.single['track_count'], 1);
+        final incomplete = await store.albumPage(
+          queryForMusicSource(
+            const QueueLibraryDbQuery(
+              source: 'local',
+              includeSingleTrackAlbums: true,
+              metadata: 'incomplete-album',
+              limit: 100,
+            ),
+            serverMusicSource('one'),
+          ),
+        );
+        expect(incomplete.rows, hasLength(1));
+        expect(incomplete.rows.single['album_present_tracks'], 1);
+        expect(incomplete.rows.single['album_expected_tracks'], 2);
+
         final combined = await store.albumPage(base);
         expect(
           combined.rows.where(

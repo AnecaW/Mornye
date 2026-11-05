@@ -99,10 +99,21 @@ final effectiveLibrarySourceProvider = Provider<String>((ref) {
   return selected;
 });
 
+final libraryIncludesNetworkSourcesProvider = Provider<bool>((ref) {
+  final source = ref.watch(effectiveLibrarySourceProvider);
+  if (source == deviceMusicSource) return false;
+  final id = musicSourceConnectionId(source);
+  final connections =
+      ref.watch(librarySourceConnectionsProvider).value ??
+      const <NetworkConnection>[];
+  return connections.any((c) => id == null || c.id == id);
+});
+
 QueueLibraryDbQuery queryForMusicSource(
   QueueLibraryDbQuery query,
-  String source,
-) {
+  String source, {
+  bool includeNetwork = true,
+}) {
   final connection = musicSourceConnectionId(source);
   return QueueLibraryDbQuery(
     includeSingleTrackAlbums: query.includeSingleTrackAlbums,
@@ -117,7 +128,8 @@ QueueLibraryDbQuery queryForMusicSource(
     metadata: query.metadata,
     sortMode: query.sortMode,
     cursor: query.cursor,
-    includeLocal: source == deviceMusicSource ? query.includeLocal : true,
+    includeLocal:
+        query.includeLocal || (source != deviceMusicSource && includeNetwork),
     includeIndexedDevice: query.includeLocal,
     deviceOnly: source == deviceMusicSource,
     networkScope: connection == null ? null : {connection},

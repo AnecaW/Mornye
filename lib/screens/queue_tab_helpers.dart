@@ -114,22 +114,24 @@ class _QueueLibraryPageRequest
     this.cursor,
   });
 
-  QueueLibraryDbQuery toDbQuery() => queryForMusicSource(
-    QueueLibraryDbQuery(
-      limit: limit,
-      offset: offset,
-      filterMode: filterMode,
-      searchQuery: searchQuery,
-      source: filterSource,
-      quality: filterQuality,
-      format: filterFormat,
-      metadata: filterMetadata,
-      sortMode: sortMode,
-      includeLocal: localLibraryEnabled,
-      cursor: cursor,
-    ),
-    librarySource,
-  );
+  QueueLibraryDbQuery toDbQuery({bool includeNetwork = true}) =>
+      queryForMusicSource(
+        QueueLibraryDbQuery(
+          limit: limit,
+          offset: offset,
+          filterMode: filterMode,
+          searchQuery: searchQuery,
+          source: filterSource,
+          quality: filterQuality,
+          format: filterFormat,
+          metadata: filterMetadata,
+          sortMode: sortMode,
+          includeLocal: localLibraryEnabled,
+          cursor: cursor,
+        ),
+        librarySource,
+        includeNetwork: includeNetwork,
+      );
 
   bool get allowsInMemoryHistoryFallback =>
       librarySource == allMusicSources &&
@@ -210,17 +212,19 @@ class _QueueLibraryCountsRequest {
     this.librarySource = allMusicSources,
   });
 
-  QueueLibraryDbQuery toDbQuery() => queryForMusicSource(
-    QueueLibraryDbQuery(
-      searchQuery: searchQuery,
-      source: filterSource,
-      quality: filterQuality,
-      format: filterFormat,
-      metadata: filterMetadata,
-      includeLocal: localLibraryEnabled,
-    ),
-    librarySource,
-  );
+  QueueLibraryDbQuery toDbQuery({bool includeNetwork = true}) =>
+      queryForMusicSource(
+        QueueLibraryDbQuery(
+          searchQuery: searchQuery,
+          source: filterSource,
+          quality: filterQuality,
+          format: filterFormat,
+          metadata: filterMetadata,
+          includeLocal: localLibraryEnabled,
+        ),
+        librarySource,
+        includeNetwork: includeNetwork,
+      );
 
   bool get allowsInMemoryHistoryFallback =>
       librarySource == allMusicSources &&
@@ -429,8 +433,8 @@ final _queueLibraryPageProvider = FutureProvider.autoDispose
       ref.watch(
         downloadHistoryProvider.select((state) => state.loadedIndexVersion),
       );
-      if (request.localLibraryEnabled ||
-          request.librarySource != deviceMusicSource) {
+      final includeNetwork = ref.watch(libraryIncludesNetworkSourcesProvider);
+      if (request.localLibraryEnabled || includeNetwork) {
         ref.watch(
           localLibraryProvider.select((state) => state.loadedIndexVersion),
         );
@@ -439,7 +443,7 @@ final _queueLibraryPageProvider = FutureProvider.autoDispose
       if (request.filterMode == 'playlists') {
         return const _QueueLibraryPageData();
       }
-      final dbQuery = request.toDbQuery();
+      final dbQuery = request.toDbQuery(includeNetwork: includeNetwork);
       if (request.filterMode == 'albums') {
         final page = await LibraryDatabase.instance.getQueueAlbumPageResult(
           dbQuery,
@@ -523,11 +527,13 @@ final _queueLibraryCountsProvider = FutureProvider.autoDispose
       ref.watch(
         downloadHistoryProvider.select((state) => state.loadedIndexVersion),
       );
-      if (request.localLibraryEnabled ||
-          request.librarySource != deviceMusicSource) {
+      final includeNetwork = ref.watch(libraryIncludesNetworkSourcesProvider);
+      if (request.localLibraryEnabled || includeNetwork) {
         ref.watch(
           localLibraryProvider.select((state) => state.loadedIndexVersion),
         );
       }
-      return LibraryDatabase.instance.getQueueCounts(request.toDbQuery());
+      return LibraryDatabase.instance.getQueueCounts(
+        request.toDbQuery(includeNetwork: includeNetwork),
+      );
     });

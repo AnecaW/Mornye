@@ -28,6 +28,7 @@ final libraryDirectoryIndexProvider =
       final scope = queryForMusicSource(
         QueueLibraryDbQuery(includeLocal: includeLocal),
         ref.watch(effectiveLibrarySourceProvider),
+        includeNetwork: ref.watch(libraryIncludesNetworkSourcesProvider),
       );
       if (scope.includeLocal) {
         ref.watch(

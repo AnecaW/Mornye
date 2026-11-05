@@ -1,3 +1,4 @@
+import 'package:mornye/services/library_source_scope.dart';
 import 'package:mornye/services/library_shadow_sql.dart';
 
 const incompleteAlbumFilter = 'incomplete-album';
@@ -43,7 +44,7 @@ String albumInventorySql({
     FROM history_db.history h
     ${includeLocal ? '''
     UNION ALL
-    SELECT l.album_key, LOWER(TRIM(l.track_name)) AS title,
+    SELECT ${sourceAlbumKeySql('l')} AS album_key, LOWER(TRIM(l.track_name)) AS title,
       l.track_number, l.total_tracks, l.disc_number, l.total_discs,
       CASE WHEN source.available = 0 THEN 1 ELSE 0 END AS unavailable
     FROM library l LEFT JOIN library_sources source ON source.id = l.source_id

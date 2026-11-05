@@ -720,7 +720,7 @@ class LibraryQueueStore {
           GROUP BY ${sourceAlbumKeySql('candidate')}
           HAVING COUNT(*) > $minimumTracks
         ) c ON c.album_key = ${sourceAlbumKeySql('l')}'''}
-        ${assessesCompleteness ? 'JOIN ($completenessSql) ac ON ac.album_key = l.album_key' : ''}
+        ${assessesCompleteness ? 'JOIN ($completenessSql) ac ON ac.album_key = ${sourceAlbumKeySql('l')}' : ''}
         ${where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}'}
         GROUP BY $albumKey
         ${unfiltered ? 'HAVING $albumKey IS NOT NULL AND COUNT(*) > $minimumTracks' : ''}
@@ -830,7 +830,7 @@ class LibraryQueueStore {
     _appendAlbumCompletenessFilter(
       where,
       request,
-      albumKey: 'l.album_key',
+      albumKey: sourceAlbumKeySql('l'),
       hasJoin: hasCompletenessJoin,
     );
     if (request.albumArtist != null) {

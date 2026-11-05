@@ -528,10 +528,21 @@ class _QueueTabState extends ConsumerState<QueueTab> {
       );
     }
     final musicSource = ref.watch(effectiveLibrarySourceProvider);
+    final includeNetwork = ref.watch(libraryIncludesNetworkSourcesProvider);
+    ref.listen(librarySourceConnectionsProvider, (previous, next) {
+      if (next.hasValue && !identical(previous?.value, next.value)) {
+        _songTableByMode.clear();
+        if (mounted) setState(() {});
+      }
+    });
     ref.listen(effectiveLibrarySourceProvider, (previous, next) {
       if (previous != null && previous != next) {
         _pager.resetPaging();
         _selectedIds.clear();
+        _selectedPlaylistIds.clear();
+        _isSelectionMode = false;
+        _isPlaylistSelectionMode = false;
+        _songTableByMode.clear();
         if (mounted) setState(() {});
       }
     });
@@ -565,7 +576,7 @@ class _QueueTabState extends ConsumerState<QueueTab> {
         if (mounted) setState(() {});
       },
     );
-    if (localLibraryEnabled || musicSource != deviceMusicSource) {
+    if (localLibraryEnabled || includeNetwork) {
       ref.listen<int>(
         localLibraryProvider.select((state) => state.loadedIndexVersion),
         (previous, next) {

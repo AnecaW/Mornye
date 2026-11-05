@@ -265,19 +265,19 @@ const _expectedDigests = <String, String>{
   'filter:metadata-missing-replaygain':
       'ea302e8606d23e76752e39330bd055b9d50023109ff106420069d62e6f6defe1',
   'filter:metadata-incomplete-album':
-      'e3726096528a2a03634b4a6de7906bc437bb0226e1b1155464dcc82602a8b25b',
+      'd8e07caef7d4a1be4ecadd14293048cbbaf188e6653cf492b78fc8a8312f5763',
   'filter:metadata-unknown-album-completeness':
-      '120fdf8ec347eb7231a002bee596e38b9a8d57c8c4c9d8ccc5de69536be8f006',
+      '30cd64aeacab92ac61ba01bbadd21eebd57dda506a1983c5c8c51dc228b4af64',
   'filter:metadata-unknown-metadata':
       '7fa34f23b10abf1bc5c12b32ea45b635245c6905927d6e05c99956e8cc36a8d3',
   'filter:single-track-albums':
       '5dac4d1a1e9e9ceaaec00d150f9e74449c0164018f1559660fddbc525cbef98f',
   'filter:single-track-albums-incomplete':
-      'e3726096528a2a03634b4a6de7906bc437bb0226e1b1155464dcc82602a8b25b',
+      'd8e07caef7d4a1be4ecadd14293048cbbaf188e6653cf492b78fc8a8312f5763',
   'filter:combined':
       '63064c341847e9ff8f2c9647f7933bcae4a330cd45e70db0e5aa8db3afa565ac',
   'filter:combined-local':
-      '784671001bfc1ee8f1ddac971df01951a138a1bea82272dd398078d88d588840',
+      '6e082c1055d348e02a1e8965830414770d0812fb4461abd1f0cb1ecfadc2ae90',
 };
 
 /// Each shadow check of the snapshot SQL, with the row check it replaces.
