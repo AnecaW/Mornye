@@ -23,8 +23,12 @@ def verify(package, commit, aapt=None):
         if archive.testzip() is not None:
             raise ValueError("Corrupt package archive")
         if package.suffix == ".apk":
-            binary = archive.read("lib/arm64-v8a/libapp.so")
-            required = ["lib/arm64-v8a/libflutter.so", "lib/arm64-v8a/libmornye_mobile.so"]
+            abis = {name.split("/")[1] for name in names if re.fullmatch(r"lib/[^/]+/libapp\.so", name)}
+            if not abis:
+                raise ValueError("APK contains no release AOT snapshot")
+            binaries = [archive.read(f"lib/{abi}/libapp.so") for abi in sorted(abis)]
+            required = [f"lib/{abi}/{library}" for abi in sorted(abis)
+                        for library in ("libflutter.so", "libmornye_mobile.so")]
             if "assets/flutter_assets/kernel_blob.bin" in names:
                 raise ValueError("Debug Dart kernel found in release APK")
             if not aapt:
@@ -42,7 +46,7 @@ def verify(package, commit, aapt=None):
                 raise ValueError("IPA must contain exactly one application in Payload")
             info = plistlib.loads(archive.read(roots[0]))
             root = roots[0].removesuffix("Info.plist")
-            binary = archive.read(root + "Frameworks/App.framework/App")
+            binaries = [archive.read(root + "Frameworks/App.framework/App")]
             required = [root + info["CFBundleExecutable"], root + "Extensions/LinkNowPlaying.appex/LinkNowPlaying"]
             version, number, identifier = info["CFBundleShortVersionString"], info["CFBundleVersion"], info["CFBundleIdentifier"]
         else:
@@ -51,9 +55,10 @@ def verify(package, commit, aapt=None):
             if not archive.read(name):
                 raise ValueError(f"Required native component is empty: {name}")
         markers = [b"Automatic music cache", b"Music transfers", b"Upload and keep originals", b"All libraries", commit[:8].encode()]
-        for marker in markers:
-            if marker not in binary:
-                raise ValueError(f"Compiled implementation/provenance marker missing: {marker!r}")
+        for binary in binaries:
+            for marker in markers:
+                if marker not in binary:
+                    raise ValueError(f"Compiled implementation/provenance marker missing: {marker!r}")
     pubspec = Path("pubspec.yaml").read_text()
     expected_version, expected_number = re.search(r"^version:\s*([^+\s]+)\+(\d+)", pubspec, re.M).groups()
     expected_package_number = expected_number
