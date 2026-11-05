@@ -494,9 +494,15 @@ void main() {
   test('retries failed artwork after reconnecting without looping', () async {
     artworkUnavailable = true;
     client.push(_state());
+    // Wait for actual cover I/O, not a wall-clock guess on a busy CI worker.
+    await Future.wait([
+      covers.file(desktopCover('s0')),
+      covers.file(desktopCover('s1')),
+    ]);
     await settle();
     expect((await playback.mediaItems.first)!.artUri, isNull);
     final failed = artwork.length;
+    expect(failed, 2);
     client.push(_state());
     await settle();
     expect(artwork, hasLength(failed));

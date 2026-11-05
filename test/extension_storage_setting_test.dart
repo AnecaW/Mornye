@@ -101,7 +101,7 @@ void main() {
     ),
   );
 
-  Future<void> settleStorage(WidgetTester tester) async {
+  Future<void> settleStorage(WidgetTester tester, {bool? expected}) async {
     final row = find.descendant(
       of: find.byType(ExtensionStorageSetting),
       matching: find.byType(SettingsSwitchItem),
@@ -113,7 +113,9 @@ void main() {
       );
       await tester.pump();
       if (row.evaluate().isNotEmpty &&
-          tester.widget<SettingsSwitchItem>(row).enabled) {
+          tester.widget<SettingsSwitchItem>(row).enabled &&
+          (expected == null ||
+              tester.widget<SettingsSwitchItem>(row).value == expected)) {
         await tester.pumpAndSettle();
         return;
       }
@@ -153,7 +155,7 @@ void main() {
           find.descendant(of: setting, matching: find.byType(AppSwitch)),
         );
       });
-      await settleStorage(tester);
+      await settleStorage(tester, expected: true);
       expect(container.read(extensionProvider).isInitialized, isTrue);
       expect(
         tester
