@@ -3,6 +3,12 @@ on:
   push:
     branches: [feature/subsonic-navidrome-streaming, feature/navidrome-libraries-sync]
   workflow_dispatch:
+    inputs:
+      source_commit:
+        description: 'Optional immutable application revision for an iOS-only release build'
+        required: false
+        default: ''
+        type: string
 permissions:
   contents: read
 concurrency:
@@ -14,6 +20,7 @@ env:
   MORNYE_DISCORD_SDK: "0"
 jobs:
   verify:
+    if: ${{ inputs.source_commit == '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -40,6 +47,7 @@ jobs:
           path: build/test-results/
           if-no-files-found: ignore
   android:
+    if: ${{ inputs.source_commit == '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -116,6 +124,20 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.source_commit || github.sha }}
+      - name: Resolve application source revision
+        id: source
+        env:
+          REQUESTED_SOURCE: ${{ inputs.source_commit }}
+        run: |
+          set -euo pipefail
+          source=$(git rev-parse HEAD)
+          if [ -n "$REQUESTED_SOURCE" ]; then
+            [[ "$REQUESTED_SOURCE" =~ ^[0-9a-f]{40}$ ]] || { echo 'Expected a full commit SHA'; exit 1; }
+            test "$source" = "$REQUESTED_SOURCE"
+          fi
+          echo "sha=$source" >> "$GITHUB_OUTPUT"
       - run: sudo xcode-select -s /Applications/Xcode_27.1.app && xcodebuild -version
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
         with:
@@ -143,17 +165,6 @@ jobs:
         run: |
           find "$HOME/.pub-cache/hosted" -path '*ffmpeg_kit_flutter_new_audio*/scripts/*.sh' -type f -exec perl -pi -e 's/\r$//' {} +
           cd ios && pod install
-      - name: Test AVPlayer with authenticated Subsonic streams
-        run: |
-          set -euo pipefail
-          command -v ffmpeg >/dev/null || brew install ffmpeg
-          mkdir -p .tmp/audio
-          ffmpeg -v error -f lavfi -i sine=frequency=440:duration=2 -ar 44100 -ac 1 .tmp/audio/tone.flac
-          ffmpeg -v error -f lavfi -i sine=frequency=440:duration=2 -ar 44100 -ac 1 .tmp/audio/tone.mp3
-          device=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; print(next(d["udid"] for group in json.load(sys.stdin)["devices"].values() for d in group if "iPhone" in d["name"]))')
-          xcrun simctl boot "$device" || true
-          xcrun simctl bootstatus "$device" -b
-          flutter test integration_test/subsonic_playback_test.dart -d "$device" --dart-define="TEST_FLAC=$(base64 < .tmp/audio/tone.flac | tr -d '\n')" --dart-define="TEST_MP3=$(base64 < .tmp/audio/tone.mp3 | tr -d '\n')"
       - name: Build actual unsigned iOS release
         run: flutter build ios --release --no-codesign --target lib/main.dart --dart-define="GIT_COMMIT=$(git rev-parse --short=8 HEAD)"
       - name: Audit and package IPA
@@ -164,11 +175,40 @@ jobs:
           mkdir -p dist/ios .tmp/ipa/Payload
           cp -R "$app" .tmp/ipa/Payload/
           (cd .tmp/ipa && zip -qr "$GITHUB_WORKSPACE/dist/ios/Mornye.ipa" Payload)
-          python3 scripts/verify_delivery.py dist/ios/Mornye.ipa --commit "$GITHUB_SHA"
+          python3 scripts/verify_delivery.py dist/ios/Mornye.ipa --commit "$(git rev-parse HEAD)"
           shasum -a 256 dist/ios/Mornye.ipa > dist/ios/SHA256SUMS.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: Mornye-iOS-${{ github.sha }}
+          name: Mornye-iOS-${{ steps.source.outputs.sha }}
           path: dist/ios/
           if-no-files-found: error
           retention-days: 30
+      - name: Test AVPlayer with authenticated Subsonic streams
+        timeout-minutes: 20
+        run: |
+          set -euo pipefail
+          command -v ffmpeg >/dev/null || brew install ffmpeg
+          mkdir -p .tmp/audio
+          ffmpeg -v error -f lavfi -i sine=frequency=440:duration=2 -ar 44100 -ac 1 .tmp/audio/tone.flac
+          ffmpeg -v error -f lavfi -i sine=frequency=440:duration=2 -ar 44100 -ac 1 .tmp/audio/tone.mp3
+          device=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; print(next(d["udid"] for group in json.load(sys.stdin)["devices"].values() for d in group if "iPhone" in d["name"]))')
+          xcrun simctl boot "$device" || true
+          xcrun simctl bootstatus "$device" -b
+          flutter test integration_test/subsonic_playback_test.dart --no-pub --verbose --timeout=2m -d "$device" --dart-define="TEST_FLAC=$(base64 < .tmp/audio/tone.flac | tr -d '\n')" --dart-define="TEST_MP3=$(base64 < .tmp/audio/tone.mp3 | tr -d '\n')" 2>&1 | tee .tmp/ios-simulator.log
+      - name: Collect simulator diagnostics
+        if: always()
+        timeout-minutes: 3
+        run: |
+          mkdir -p .tmp/ios-diagnostics
+          cp .tmp/ios-simulator.log .tmp/ios-diagnostics/ 2>/dev/null || true
+          xcrun simctl list devices available > .tmp/ios-diagnostics/devices.txt || true
+          xcrun simctl spawn booted log show --last 10m --style compact --predicate 'process == "Runner"' > .tmp/ios-diagnostics/runner.log 2>&1 || true
+          xcrun simctl io booted screenshot .tmp/ios-diagnostics/simulator.png || true
+      - name: Preserve simulator diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: iOS-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .tmp/ios-diagnostics/
+          if-no-files-found: ignore
+          retention-days: 7
