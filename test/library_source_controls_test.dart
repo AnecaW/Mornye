@@ -35,6 +35,7 @@ class _Library extends LocalLibraryNotifier {
       ),
     ],
   );
+  void loading(bool value) => state = state.copyWith(isLoading: value);
   void disable(bool disabled) => state = state.copyWith(
     sources: [state.sources.single.copyWith(enabled: !disabled)],
   );
@@ -117,6 +118,14 @@ void main() {
         await c.read(librarySourceConnectionsProvider.future),
         hasLength(1),
       );
+      (c.read(localLibraryProvider.notifier) as _Library).loading(true);
+      expect(await c.read(librarySourceConnectionsProvider.future), isEmpty);
+      (c.read(localLibraryProvider.notifier) as _Library).loading(false);
+      expect(
+        await c.read(librarySourceConnectionsProvider.future),
+        hasLength(1),
+      );
+
       await c
           .read(selectedLibrarySourceProvider.notifier)
           .select(serverMusicSource('fixture'));

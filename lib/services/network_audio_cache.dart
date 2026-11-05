@@ -207,8 +207,9 @@ class NetworkAudioCache {
     if (!await dir.exists()) return 0;
     var bytes = 0;
     await for (final item in dir.list(followLinks: false)) {
-      if (item is File && !item.path.endsWith('.proof'))
+      if (item is File && !item.path.endsWith('.proof')) {
         bytes += await item.length();
+      }
     }
     return bytes;
   }
@@ -242,8 +243,9 @@ class NetworkAudioCache {
     await for (final item in dir.list(followLinks: false)) {
       if (item is! File ||
           item.path.endsWith('.part') ||
-          item.path.endsWith('.proof'))
+          item.path.endsWith('.proof')) {
         continue;
+      }
       final stat = await item.stat();
       files.add((file: item, stat: stat));
       bytes += stat.size;

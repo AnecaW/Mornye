@@ -58,21 +58,32 @@ final librarySourceConnectionsProvider =
         savedLibrarySourceConnectionsProvider.future,
       );
       if (saved.isEmpty || !ref.mounted) return saved;
-      final disabled = ref.watch(
+      final visibility = ref.watch(
         localLibraryProvider.select(
-          (state) =>
-              (state.sources
-                      .where(
-                        (s) => !s.enabled && s.path.startsWith('network://'),
-                      )
-                      .map((s) => Uri.parse(s.path).host)
-                      .toSet()
-                      .toList()
-                    ..sort())
-                  .join('|'),
+          (state) => (
+            ready: !state.isLoading && !state.loadFailed,
+            disabled:
+                (state.sources
+                        .where(
+                          (source) =>
+                              !source.enabled &&
+                              source.path.startsWith('network://') &&
+                              const [
+                                '',
+                                '/',
+                              ].contains(Uri.parse(source.path).path),
+                        )
+                        .map((source) => Uri.parse(source.path).host)
+                        .toSet()
+                        .toList()
+                      ..sort())
+                    .join('|'),
+          ),
         ),
       );
-      final ids = disabled.split('|').toSet();
+      // Stored disable flags must be loaded before any server sync starts.
+      if (!visibility.ready) return const [];
+      final ids = visibility.disabled.split('|').toSet();
       return saved.where((c) => !ids.contains(c.id)).toList(growable: false);
     });
 
@@ -130,6 +141,7 @@ final effectiveLibrarySourceProvider = Provider<String>((ref) {
   if (id != null) {
     final connections = ref.watch(librarySourceConnectionsProvider);
     if (connections.hasValue &&
+        !ref.watch(localLibraryProvider.select((state) => state.isLoading)) &&
         !connections.requireValue.any((c) => c.id == id) &&
         (ref
                 .watch(savedLibrarySourceConnectionsProvider)
@@ -323,8 +335,9 @@ Future<void> _synchronizeExistingMusicSource(Ref ref, String selected) async {
     if (ref
         .read(localLibraryProvider)
         .cancelledScanSources
-        .contains(indexed.id))
+        .contains(indexed.id)) {
       return;
+    }
     final beforeScan = indexed.lastScannedAt;
     await library.startSourceScan(indexed.id, waitForCurrentScan: true);
     if (!ref.mounted || ref.read(localLibraryProvider).scanWasCancelled) return;

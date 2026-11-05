@@ -620,8 +620,9 @@ class MusicPlayerHandler extends BaseAudioHandler
       unawaited(() async {
         try {
           if (load != null) await load.backoff(_networkRecoveries - 1);
-          if (_disposed || generation != _playRequestGeneration || _userPaused)
+          if (_disposed || generation != _playRequestGeneration || _userPaused) {
             return;
+          }
           _recoveringNetwork = true;
           await _playIndex(
             _index,
@@ -1959,8 +1960,9 @@ class MusicPlayerHandler extends BaseAudioHandler
       return;
     }
     if (resolved == null) {
-      if (media.isNetwork)
+      if (media.isNetwork) {
         throw const PlaybackFailure(PlaybackFailureKind.missing);
+      }
       _reportPlaybackError(
         _player,
         StateError('Audio file is unavailable'),
@@ -1984,10 +1986,12 @@ class MusicPlayerHandler extends BaseAudioHandler
       // Set before play() so the track never starts at the wrong loudness;
       // always set (1.0 when disabled/untagged) so a previous track's
       // attenuation can't leak into the next one.
-      var normalizationVolume = await _normalizationVolumeFor(
-        media.source.startsWith('network://') ? media.source : resolved,
-        cacheKey: media.isContentUri ? media.source : null,
-        displayName: playbackLease?.displayName,
+      var normalizationVolume = await load.wait(
+        _normalizationVolumeFor(
+          media.source.startsWith('network://') ? media.source : resolved,
+          cacheKey: media.isContentUri ? media.source : null,
+          displayName: playbackLease?.displayName,
+        ),
       );
       if (!_isCurrentPlayRequest(generation, media)) return;
       await _player.configureOutput();

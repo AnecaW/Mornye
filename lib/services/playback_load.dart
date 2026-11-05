@@ -59,14 +59,17 @@ class PlaybackFailure implements Exception {
   String toString() => 'playback_${kind.name}';
   static PlaybackFailure classify(Object error) {
     if (error is PlaybackFailure) return error;
-    if (error is StateError && error.message == 'Audio file is unavailable')
+    if (error is StateError && error.message == 'Audio file is unavailable') {
       return const PlaybackFailure(PlaybackFailureKind.missing);
+    }
     if (error is SocketException ||
         error is TimeoutException ||
-        error is HttpException)
+        error is HttpException) {
       return const PlaybackFailure(PlaybackFailureKind.network);
-    if (error is FileSystemException)
+    }
+    if (error is FileSystemException) {
       return const PlaybackFailure(PlaybackFailureKind.cache);
+    }
     return const PlaybackFailure(PlaybackFailureKind.player);
   }
 }

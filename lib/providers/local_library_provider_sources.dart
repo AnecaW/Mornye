@@ -235,8 +235,9 @@ extension _LocalLibrarySources on LocalLibraryNotifier {
       for (final source in sources) {
         if (!source.enabled ||
             (!source.path.startsWith('network://') &&
-                !ref.read(settingsProvider).localLibraryEnabled))
+                !ref.read(settingsProvider).localLibraryEnabled)) {
           continue;
+        }
         final available = await _probePathAvailability(
           source.path,
           bookmark: source.bookmark,

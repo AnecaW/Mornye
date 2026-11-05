@@ -99,18 +99,21 @@ extension NetworkPlaybackPreparation on NetworkStorageService {
           final code = _subsonicMap(
             _subsonicMap(document['subsonic-response'])['error'],
           )['code'];
-          if (code == 40 || code == 41 || code == 50)
+          if (code == 40 || code == 41 || code == 50) {
             throw const PlaybackFailure(PlaybackFailureKind.authentication);
-          if (code == 70)
+          }
+          if (code == 70) {
             throw const PlaybackFailure(PlaybackFailureKind.missing);
+          }
         } on FormatException {
           /* Invalid error document is never audio. */
         }
       }
       if (mime.startsWith('text/') ||
           mime.contains('json') ||
-          mime.contains('xml'))
+          mime.contains('xml')) {
         throw const PlaybackFailure(PlaybackFailureKind.invalidAudio);
+      }
       final text = utf8
           .decode(prefix.take(256).toList(), allowMalformed: true)
           .trimLeft()
@@ -163,8 +166,9 @@ extension NetworkPlaybackPreparation on NetworkStorageService {
     final prefix = _playbackPrefixes[_audioCacheKey(c, path)];
     if (prefix == null ||
         prefix.total == null ||
-        prefix.expires.isBefore(DateTime.now()))
+        prefix.expires.isBefore(DateTime.now())) {
       return null;
+    }
     try {
       final part = networkByteRange(range, prefix.total!);
       if (part.end >= prefix.bytes.length) return null;

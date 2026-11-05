@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mornye/providers/local_library_provider.dart';
 import 'package:mornye/providers/settings_provider.dart';
 import 'package:mornye/models/settings.dart';
 import 'package:mornye/providers/library_source_provider.dart';
@@ -12,6 +13,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:mornye/services/server_scrobbling.dart';
 import 'package:mornye/services/navidrome_library.dart';
 import 'package:mornye/services/network_storage_service.dart';
+
+class _SourceCache extends LocalLibraryNotifier {
+  @override
+  LocalLibraryState build() => LocalLibraryState();
+}
 
 class _EnabledDeviceSettings extends SettingsNotifier {
   @override
@@ -397,6 +403,7 @@ void main() {
         overrides: [
           librarySourceStorageProvider.overrideWithValue(storage),
           settingsProvider.overrideWith(_EnabledDeviceSettings.new),
+          localLibraryProvider.overrideWith(_SourceCache.new),
           libraryCollectionsProvider.overrideWith(
             () => LibraryCollectionsNotifier(database: db),
           ),
@@ -467,7 +474,11 @@ void main() {
     () async {
       SharedPreferences.setMockInitialValues({});
       final container = ProviderContainer(
-        overrides: [librarySourceStorageProvider.overrideWithValue(storage)],
+        overrides: [
+          librarySourceStorageProvider.overrideWithValue(storage),
+          localLibraryProvider.overrideWith(_SourceCache.new),
+          settingsProvider.overrideWith(_EnabledDeviceSettings.new),
+        ],
       );
       addTearDown(container.dispose);
       expect(

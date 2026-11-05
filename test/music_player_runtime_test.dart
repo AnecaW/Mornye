@@ -884,6 +884,45 @@ void main() {
   );
 
   test(
+    'a slow gain-metadata read cannot block a newer NAS selection',
+    () async {
+      final blocked = Completer<Map<String, dynamic>>(),
+          entered = Completer<void>();
+      final handler = await _runtime(
+        settings: const AppSettings(
+          playbackNormalization: true,
+          pauseOnMute: false,
+        ),
+        resolveNetworkSource: (s) async =>
+            'https://stream.test/${s.split('/').last}',
+        readNetworkMetadata: (s) async {
+          if (s.endsWith('/1.flac')) {
+            if (!entered.isCompleted) entered.complete();
+            return blocked.future;
+          }
+          return {};
+        },
+      ).initialize();
+      await handler.setQueueAndPlay([
+        for (var i = 0; i < 3; i++)
+          PlayableMedia(
+            id: 'gain$i',
+            source: 'network://nas/$i.flac',
+            title: 'Song $i',
+            artist: 'Artist',
+          ),
+      ]);
+      final first = handler.skipToNext();
+      await entered.future;
+      await handler.skipToNext().timeout(const Duration(seconds: 2));
+      await first;
+      expect(handler.mediaItem.value?.id, 'gain2');
+      expect(handler.playbackState.value.playing, isTrue);
+      blocked.complete({});
+    },
+  );
+
+  test(
     'Android updates every queued copy before playing a moved download',
     () async {
       final decks = <_Deck>[];
