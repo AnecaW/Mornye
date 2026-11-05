@@ -1804,6 +1804,13 @@ class MusicPlayerHandler extends BaseAudioHandler
         unawaited(
           () async {
             await cache.initialize();
+            if (!cache.enabled || cache.upcoming <= 0) return;
+            if (cache.wifiOnly) {
+              final networks = await Connectivity().checkConnectivity();
+              if (!networks.contains(ConnectivityResult.wifi) &&
+                  !networks.contains(ConnectivityResult.ethernet))
+                return;
+            }
             for (final next in _media.skip(_index + 1).take(cache.upcoming)) {
               if (!_isCurrentPlayRequest(generation, media)) return;
               if (next.source.startsWith('network://')) {
