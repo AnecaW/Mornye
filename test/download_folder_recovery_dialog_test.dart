@@ -120,12 +120,7 @@ void main() {
                   : AppTheme.dark(),
               localizationsDelegates: AppLocalizations.localizationsDelegates,
               supportedLocales: AppLocalizations.supportedLocales,
-              home: const Scaffold(
-                body: QueueTab(
-                  manageLibraries: false,
-                  librarySection: 'downloads',
-                ),
-              ),
+              home: const Scaffold(body: QueueTab(librarySection: 'downloads')),
             ),
           ),
         );

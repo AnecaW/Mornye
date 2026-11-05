@@ -1,6 +1,4 @@
 import 'dart:async';
-import 'package:mornye/services/playback_preparation.dart';
-import 'package:mornye/services/server_scrobbling.dart';
 import 'dart:io';
 import 'dart:math';
 
@@ -416,9 +414,6 @@ class MusicPlayerHandler extends BaseAudioHandler
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      unawaited(ServerScrobbleOutbox.instance.flush());
-    }
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused) {
       unawaited(_runtime.personalization.flush());
@@ -508,31 +503,6 @@ class MusicPlayerHandler extends BaseAudioHandler
       wanted: () => _wantsPosition(player),
     );
     _playerSubscriptions[player] = [
-      if (player is AudioplayersPlaybackDeck)
-        player.buffering.listen((waiting) {
-          if (!identical(player, _player) ||
-              !_sourceReady ||
-              _switchingGeneration != 0) {
-            return;
-          }
-          _engineBuffering = waiting;
-          _bufferingDeadline?.cancel();
-          if (waiting) {
-            final generation = _playRequestGeneration;
-            _bufferingDeadline = Timer(const Duration(seconds: 45), () {
-              if (generation == _playRequestGeneration &&
-                  _engineBuffering &&
-                  !_disposed) {
-                _reportPlaybackError(
-                  player,
-                  TimeoutException('Playback buffering timed out'),
-                  StackTrace.current,
-                );
-              }
-            });
-          }
-          _broadcastState();
-        }),
       player.onPlayerStateChanged.listen(
         (state) {
           if (!identical(player, _player)) return;
@@ -587,7 +557,7 @@ class MusicPlayerHandler extends BaseAudioHandler
     if (_disposed || !identical(player, _player) || _playbackError != null) {
       return;
     }
-    if (_reloadAfterServerDied(error) || _retryNetworkRuntime(error)) return;
+    if (_reloadAfterServerDied(error)) return;
     _sourceReady = false;
     _playbackError = error;
     _userPaused = true;
@@ -606,41 +576,6 @@ class MusicPlayerHandler extends BaseAudioHandler
         _log.w('Could not stop failed playback: $error');
       }),
     );
-  }
-
-  int _networkRuntimeRetries = 0;
-  bool _reloadingNetwork = false;
-  bool _retryNetworkRuntime(Object error) {
-    if (!_sourceReady ||
-        _networkRuntimeRetries >= 2 ||
-        _index < 0 ||
-        _index >= _media.length ||
-        !_media[_index].isNetwork ||
-        !recoverableNetworkPreparation(error)) {
-      return false;
-    }
-    _networkRuntimeRetries++;
-    final generation = _playRequestGeneration;
-    final index = _index;
-    final position = playbackState.value.position;
-    _sourceReady = false;
-    _recoveringNetwork = true;
-    _broadcastState(loading: true);
-    unawaited(
-      Future<void>.delayed(
-        Duration(milliseconds: 250 * _networkRuntimeRetries),
-        () async {
-          if (_disposed || generation != _playRequestGeneration) return;
-          _reloadingNetwork = true;
-          await _playIndex(
-            index,
-            recordHistory: false,
-            startPosition: position,
-          );
-        },
-      ),
-    );
-    return true;
   }
 
   static const _serverDiedReloadLimit = 2;
@@ -903,32 +838,10 @@ class MusicPlayerHandler extends BaseAudioHandler
     }
   }
 
-  bool _engineBuffering = false;
-  Timer? _bufferingDeadline;
-  bool _recoveringNetwork = false;
-  late final _serverListening = ServerListeningSession(
-    submit: ServerScrobbleOutbox.instance.enqueue,
-  );
-
   void _broadcastState({PlaybackDeckState? playerState, bool? loading}) {
     final state = playerState ?? _player.state;
     final failed = _playbackError != null;
-    final preparing =
-        loading == true || (_switchingGeneration != 0 && !_sourceReady);
     final playing = !failed && state == PlaybackDeckState.playing;
-    _runtime.phase.value = failed
-        ? PlaybackPhase.failed
-        : _recoveringNetwork && preparing
-        ? PlaybackPhase.recovering
-        : preparing
-        ? PlaybackPhase.loading
-        : _engineBuffering && playing
-        ? PlaybackPhase.buffering
-        : playing
-        ? PlaybackPhase.playing
-        : state == PlaybackDeckState.paused
-        ? PlaybackPhase.paused
-        : PlaybackPhase.idle;
 
     playbackState.add(
       playbackState.value.copyWith(
@@ -947,12 +860,8 @@ class MusicPlayerHandler extends BaseAudioHandler
         androidCompactActionIndices: const [1, 2, 3],
         processingState: failed
             ? AudioProcessingState.error
-            : (loading == true || (_switchingGeneration != 0 && !_sourceReady))
-            ? (_recoveringNetwork
-                  ? AudioProcessingState.buffering
-                  : AudioProcessingState.loading)
-            : _engineBuffering && playing
-            ? AudioProcessingState.buffering
+            : (loading == true)
+            ? AudioProcessingState.loading
             : _mapProcessingState(state),
         errorCode: failed ? 1 : null,
         errorMessage: _playbackError?.toString(),
@@ -1096,17 +1005,6 @@ class MusicPlayerHandler extends BaseAudioHandler
     _positionQueriedAt = null;
     _positionCheckDue = false;
     _broadcastPosition(position, readAt: readAt);
-    unawaited(
-      _serverListening
-          .tick(
-            position,
-            playing: _player.state == PlaybackDeckState.playing,
-            duration: mediaItem.value?.duration,
-          )
-          .catchError((Object error) {
-            _log.w('Playback reporting remains pending');
-          }),
-    );
     _autoMix.onPosition(position);
     _gapless.onPosition(position);
     unawaited(_autoplay.fill());
@@ -1230,9 +1128,9 @@ class MusicPlayerHandler extends BaseAudioHandler
     if (media.source.startsWith('network://')) {
       try {
         return await _dependencies.resolveNetworkSource(media.source);
-      } catch (error) {
+      } catch (_) {
         _log.w('Network source is unavailable');
-        rethrow;
+        return null;
       }
     }
     if (!media.isContentUri) {
@@ -1621,9 +1519,6 @@ class MusicPlayerHandler extends BaseAudioHandler
     Duration startPosition = Duration.zero,
   }) async {
     if (_disposed || index < 0 || index >= _media.length) return;
-    final networkRecovery = _reloadingNetwork;
-    _reloadingNetwork = false;
-    if (!networkRecovery) _networkRuntimeRetries = 0;
     if (_reloadingAfterServerDied) {
       _reloadingAfterServerDied = false;
     } else {
@@ -1644,9 +1539,6 @@ class MusicPlayerHandler extends BaseAudioHandler
     final generation = ++_playRequestGeneration;
     _sourceReady = false;
     _playbackError = null;
-    _recoveringNetwork = networkRecovery;
-    _engineBuffering = false;
-    _bufferingDeadline?.cancel();
     // Advance the requested index synchronously so consecutive Next taps do
     // not all target the same song while AutoMix/source preparation awaits.
     _index = index;
@@ -1761,9 +1653,6 @@ class MusicPlayerHandler extends BaseAudioHandler
       duration: media.duration,
     );
     _runtime.personalization.begin(_learningTrack(media));
-    if (recordHistory || !_serverListening.isForSource(media.source)) {
-      _serverListening.begin(media.source);
-    }
     mediaItem.add(_toMediaItem(media));
     _lastBroadcastPosition = Duration.zero;
     _lastPositionBroadcastAt = null;
@@ -1812,26 +1701,7 @@ class MusicPlayerHandler extends BaseAudioHandler
         _log.w('Failed to open direct SAF playback lease: $e');
       }
     }
-    String? resolved;
-    try {
-      resolved =
-          playbackLease?.path ??
-          (media.isNetwork
-              ? await prepareNetworkPlayback<String?>(
-                  prepare: (_) => _resolveSource(media),
-                  current: () => _isCurrentPlayRequest(generation, media),
-                  recovering: (_) async {
-                    _recoveringNetwork = true;
-                    _broadcastState(loading: true);
-                  },
-                )
-              : await _resolveSource(media));
-    } catch (error, stack) {
-      if (_isCurrentPlayRequest(generation, media)) {
-        _reportPlaybackError(_player, error, stack);
-      }
-      return;
-    }
+    var resolved = playbackLease?.path ?? await _resolveSource(media);
     var usingLocalSafCopy = media.isContentUri && playbackLease == null;
     if (!_isCurrentPlayRequest(generation, media)) {
       if (playbackLease != null) {
@@ -1892,32 +1762,7 @@ class MusicPlayerHandler extends BaseAudioHandler
           ? effectiveStartPosition
           : null;
       try {
-        if (media.isNetwork) {
-          await prepareNetworkPlayback<void>(
-            current: () => _isCurrentPlayRequest(generation, media),
-            prepare: (attempt) async {
-              if (attempt > 0) {
-                final fresh = await _resolveSource(media);
-                if (fresh == null) {
-                  throw StateError('Audio file is unavailable');
-                }
-                resolved = fresh;
-              }
-              if (!_isCurrentPlayRequest(generation, media)) return;
-              await _startResolvedSource(resolved!, generation, media, startAt);
-            },
-            recovering: (_) async {
-              _recoveringNetwork = true;
-              _broadcastState(loading: true);
-              await _player.cancelPreparation();
-              if (_isCurrentPlayRequest(generation, media)) {
-                await _player.stop();
-              }
-            },
-          );
-        } else {
-          await _startResolvedSource(resolved, generation, media, startAt);
-        }
+        await _startResolvedSource(resolved, generation, media, startAt);
         if (playbackLease != null) {
           await PlatformBridge.closeContentUriPlaybackLease(
             playbackLease.token,
@@ -1954,10 +1799,6 @@ class MusicPlayerHandler extends BaseAudioHandler
       }
       if (!_isCurrentPlayRequest(generation, media)) return;
       _sourceReady = true;
-      _recoveringNetwork = false;
-      if (media.isNetwork) {
-        unawaited(ServerScrobbleOutbox.instance.nowPlaying(media.source));
-      }
       if (media.source.startsWith('network://')) {
         unawaited(_loadNetworkMetadata(media, generation));
       }
@@ -2690,7 +2531,6 @@ class MusicPlayerHandler extends BaseAudioHandler
 
   Future<void> _dispose() async {
     _autoplay.reset();
-    _bufferingDeadline?.cancel();
     _disposed = true;
     _runtime.personalization.finish();
     await _runtime.personalization.flush();

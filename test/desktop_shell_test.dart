@@ -127,12 +127,7 @@ void main() {
       (ref, notifier) => Stream.value(item),
     ),
     playbackStateProvider.overrideWith(
-      (ref) => Stream.value(
-        PlaybackState(
-          playing: playing,
-          processingState: AudioProcessingState.ready,
-        ),
-      ),
+      (ref) => Stream.value(PlaybackState(playing: playing)),
     ),
     musicPlayerControllerProvider.overrideWithValue(controller),
     systemVolumeProvider.overrideWith((ref) => Stream.value(0.5)),

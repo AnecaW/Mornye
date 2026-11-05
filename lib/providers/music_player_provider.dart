@@ -169,11 +169,7 @@ final playbackPositionProvider = Provider<Duration>((ref) {
 
 final playbackPlayingProvider = Provider<bool>((ref) {
   return ref.watch(
-    playbackStateProvider.select(
-      (state) =>
-          (state.value?.playing ?? false) &&
-          state.value?.processingState == AudioProcessingState.ready,
-    ),
+    playbackStateProvider.select((state) => state.value?.playing ?? false),
   );
 });
 

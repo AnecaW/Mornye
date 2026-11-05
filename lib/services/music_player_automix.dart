@@ -388,13 +388,6 @@ class _MusicAutoMix {
       handler._pendingRestorePosition = null;
       rate = plan.rate;
       handler._runtime.personalization.begin(_learningTrack(next));
-      handler._serverListening.begin(next.source);
-      handler._networkRuntimeRetries = 0;
-      handler._engineBuffering = false;
-      handler._bufferingDeadline?.cancel();
-      if (next.isNetwork) {
-        unawaited(ServerScrobbleOutbox.instance.nowPlaying(next.source));
-      }
       handler.mediaItem.add(
         handler
             ._toMediaItem(

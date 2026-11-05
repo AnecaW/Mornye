@@ -151,7 +151,3 @@ Compared against the pub.dev 6.5.0 package in the local pub cache:
 4. Run the DSP test above, then test the equalizer, source changes and
    AirPlay audio on a device.
 5. Run `flutter pub get` and `(cd ios && pod install)`, then update this file.
-
-## Navidrome preparation and buffering (5.4.0)
-
-AVPlayer timeControlStatus emits a private `mornye-buffering:true/false` log event consumed by the app deck. The observation is invalidated on disposal. Item-preparation failures include only NSError domain/code, omitting URLs and userInfo. The app bounds the complete audioplayers prepare future and resets a timed-out item before recovery; a prepared-event timeout alone cannot bound Future.wait while the native method still waits. Native simulator tests exercise delayed preparation, cancellation, repeated initialization and three formats.

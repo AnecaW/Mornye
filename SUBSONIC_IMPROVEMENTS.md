@@ -10,13 +10,13 @@ Changes are based on Mornye v5.3.0 (afee4332a257f1b6aeb288229eddf04ac0777b3c). T
 - TLS validation, explicit certificate trust, same-origin redirect restrictions, and fresh per-request salted authentication remain enabled.
 - Cached progressive reads share a single fill. A cache write failure can continue through an authenticated remote range at the same byte offset.
 
-These are concrete fixes for failure paths found in code. They do not prove that the particular reported iPhone failure is fully resolved: that requires reproduction on an iPhone with the user's server and files. The 5.4.0 integration additionally bounds complete native preparation and retries recoverable network initialization failures; see NAVIDROME_INTEGRATION.md.
+These are concrete fixes for failure paths found in code. They do not prove that the particular reported iPhone failure is fully resolved: that requires reproduction on an iPhone with the user's server and files. No retries were added to the native AVPlayer preparation failure itself.
 
 ## Faster loading and metadata
 
 Album scans request at most four albums at a time. Results preserve ordering, publish incrementally, and retain the scanner's failure/cancellation behavior. Per-song metadata persists across reader/application restarts for five minutes, with explicit refresh and stale fallback on socket failures/timeouts. The metadata directory bounds cover images and metadata documents separately. Existing library scans continue to persist the library in the existing database.
 
-Artist/album/playlist REST responses now use the bounded, account-scoped persistent metadata cache described below. Full-library startup performance still needs measurement against a large real Navidrome library.
+Artist/album/playlist browsing does not gain a new complete persistent REST-response cache in this change. Full-library startup performance still needs measurement against a large real Navidrome library.
 
 ## Automatic audio cache
 

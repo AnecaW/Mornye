@@ -50,7 +50,6 @@ enum ReleaseMode: String {
   private var url: String?
 
   private var completionObserver: TimeObserver?
-  private var timeControlObservation: NSKeyValueObservation?
   private var playerItemStatusObservation: NSKeyValueObservation?
   private var playerItemStatusContinuation: CheckedContinuation<Void, Error>?
 
@@ -78,15 +77,6 @@ enum ReleaseMode: String {
     self.volume = volume
     self.releaseMode = releaseMode
     self.url = url
-    if #available(iOS 10.0, macOS 10.12, *) {
-      timeControlObservation = player.observe(\.timeControlStatus, options: [.new]) { [weak self] _, _ in
-        Task { @MainActor [weak self] in
-          guard let self else { return }
-          let waiting = self.isPlaying && self.player.timeControlStatus == .waitingToPlayAtSpecifiedRate
-          self.eventHandler.onLog(message: "mornye-buffering:\(waiting)")
-        }
-      }
-    }
   }
 
   func setSourceUrl(
@@ -203,8 +193,6 @@ enum ReleaseMode: String {
   }
 
   func dispose() async {
-    timeControlObservation?.invalidate()
-    timeControlObservation = nil
     await release()
     self.eventHandler.dispose()
   }
@@ -278,7 +266,7 @@ enum ReleaseMode: String {
             self.finishPlayerItemPreparation(.success(()))
           case .failed:
             self.finishPlayerItemPreparation(
-              .failure(AudioPlayerError.error("Failed to set playerItem (\((playerItem.error as NSError?)?.domain ?? "AVFoundation") \((playerItem.error as NSError?)?.code ?? 0))")))
+              .failure(AudioPlayerError.error("Failed to set playerItem")))
             self.reset()
           default:
             // Do not resume continuation yet.

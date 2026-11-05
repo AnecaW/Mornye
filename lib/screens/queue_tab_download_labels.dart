@@ -8,20 +8,9 @@ String _formatDownloadProgressLabel(
   double? visualProgress,
 }) {
   final progress = (visualProgress ?? item.progress).clamp(0.0, 1.0);
-  var speedSuffix = item.speedMBps > 0
+  final speedSuffix = item.speedMBps > 0
       ? ' • ${item.speedMBps.toStringAsFixed(1)} MB/s'
       : '';
-
-  if (item.speedMBps > 0 && item.bytesTotal > 0 && progress < 1) {
-    final received = item.bytesReceived > 0
-        ? item.bytesReceived
-        : item.bytesTotal * progress;
-    final seconds =
-        ((item.bytesTotal - received).clamp(0, item.bytesTotal) /
-                (item.speedMBps * 1024 * 1024))
-            .ceil();
-    speedSuffix += ' • ~${formatClock(seconds)} remaining';
-  }
 
   if (item.bytesTotal > 0) {
     final received = visualProgress != null

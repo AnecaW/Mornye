@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'package:mornye/services/playback_preparation.dart';
 
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
@@ -282,7 +281,6 @@ class MusicPlayerRuntime {
   Future<void>? _restoreFuture;
   final _handlers = StreamController<MusicPlayerHandler?>.broadcast(sync: true);
   final _mutedPlaybackEvents = StreamController<void>.broadcast();
-  final phase = ValueNotifier<PlaybackPhase>(PlaybackPhase.idle);
   bool _initializing = false;
   bool _disposed = false;
   Future<void>? _disposeFuture;

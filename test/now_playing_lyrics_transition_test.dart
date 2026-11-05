@@ -898,12 +898,7 @@ void main() {
         );
         mediaItems.add(item('first').copyWith(title: longTitle));
         await settlePlayer(tester);
-        playbackEvents.add(
-          PlaybackState(
-            playing: true,
-            processingState: AudioProcessingState.ready,
-          ),
-        );
+        playbackEvents.add(PlaybackState(playing: true));
         await settlePlayer(tester);
 
         final cover = find.byType(MornyePlayerArtwork);
@@ -944,12 +939,7 @@ void main() {
         expect(tester.getRect(titleFinder), title);
         expect(tester.getRect(find.byType(PlayerVolumeControl)), volume);
 
-        playbackEvents.add(
-          PlaybackState(
-            playing: true,
-            processingState: AudioProcessingState.ready,
-          ),
-        );
+        playbackEvents.add(PlaybackState(playing: true));
         await settlePlayer(tester);
         expect(tester.getRect(cover).width, closeTo(playingCover.width, 0.01));
         expect(tester.takeException(), isNull);
@@ -1515,10 +1505,7 @@ void main() {
           tester,
           theme: MornyeTheme.build(Brightness.dark),
           size: const Size(393, 852),
-          playback: PlaybackState(
-            playing: true,
-            processingState: AudioProcessingState.ready,
-          ),
+          playback: PlaybackState(playing: true),
           wrapPlayer: (player) => Builder(
             builder: (context) => MediaQuery(
               data: MediaQuery.of(
@@ -1630,12 +1617,7 @@ void main() {
         await tester.pump(const Duration(seconds: 6));
         expect(lyricsButton.hitTestable(), findsOneWidget);
 
-        playback.add(
-          PlaybackState(
-            playing: true,
-            processingState: AudioProcessingState.ready,
-          ),
-        );
+        playback.add(PlaybackState(playing: true));
         await tester.pump();
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 4900));
@@ -1651,12 +1633,7 @@ void main() {
         expect(lyricsButton.hitTestable(), findsOneWidget);
 
         // Pausing during the countdown must cancel the pending hide too.
-        playback.add(
-          PlaybackState(
-            playing: true,
-            processingState: AudioProcessingState.ready,
-          ),
-        );
+        playback.add(PlaybackState(playing: true));
         await tester.pump();
         await tester.pump();
         await tester.pump(const Duration(seconds: 3));
@@ -1665,12 +1642,7 @@ void main() {
         await tester.pump(const Duration(seconds: 6));
         expect(lyricsButton.hitTestable(), findsOneWidget);
 
-        playback.add(
-          PlaybackState(
-            playing: true,
-            processingState: AudioProcessingState.ready,
-          ),
-        );
+        playback.add(PlaybackState(playing: true));
         await tester.pump();
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 4900));
@@ -1693,10 +1665,7 @@ void main() {
           tester,
           theme: AppTheme.light(),
           size: landscape ? const Size(852, 393) : const Size(393, 852),
-          playback: PlaybackState(
-            playing: true,
-            processingState: AudioProcessingState.ready,
-          ),
+          playback: PlaybackState(playing: true),
         );
         mediaItems.add(item('many'));
         await settlePlayer(tester);
@@ -1759,10 +1728,7 @@ void main() {
       tester,
       theme: AppTheme.light(),
       size: const Size(852, 393),
-      playback: PlaybackState(
-        playing: true,
-        processingState: AudioProcessingState.ready,
-      ),
+      playback: PlaybackState(playing: true),
     );
     mediaItems.add(item('many'));
     await settlePlayer(tester);
@@ -1799,10 +1765,7 @@ void main() {
         tester,
         theme: MornyeTheme.build(Brightness.dark),
         size: const Size(393, 852),
-        playback: PlaybackState(
-          playing: true,
-          processingState: AudioProcessingState.ready,
-        ),
+        playback: PlaybackState(playing: true),
         wrapPlayer: (player) => Builder(
           builder: (context) => MediaQuery(
             data: MediaQuery.of(context).copyWith(accessibleNavigation: true),
@@ -2488,12 +2451,7 @@ void main() {
           size: landscape ? const Size(852, 393) : const Size(393, 852),
           playbackEvents: playback.stream,
         );
-        playback.add(
-          PlaybackState(
-            playing: true,
-            processingState: AudioProcessingState.ready,
-          ),
-        );
+        playback.add(PlaybackState(playing: true));
         mediaItems.add(item('first'));
         await settlePlayer(tester);
         final pause = find.widgetWithIcon(
@@ -2524,12 +2482,7 @@ void main() {
         expect(tester.getRect(next), nextBounds);
         expect(tester.getRect(find.byType(PlayerVolumeControl)), volumeBounds);
 
-        playback.add(
-          PlaybackState(
-            playing: true,
-            processingState: AudioProcessingState.ready,
-          ),
-        );
+        playback.add(PlaybackState(playing: true));
         await settlePlayer(tester);
         expect(
           tester.getSize(findAppIcon(CupertinoIcons.pause_fill)),
@@ -3023,10 +2976,7 @@ void main() {
         tester,
         theme: MornyeTheme.build(Brightness.dark),
         size: const Size(393, 852),
-        playback: PlaybackState(
-          playing: true,
-          processingState: AudioProcessingState.ready,
-        ),
+        playback: PlaybackState(playing: true),
       );
       mediaItems.add(item('first'));
       await settlePlayer(tester);
@@ -3213,10 +3163,7 @@ void main() {
             tester,
             theme: MornyeTheme.build(Brightness.dark),
             size: const Size(393, 852),
-            playback: PlaybackState(
-              playing: true,
-              processingState: AudioProcessingState.ready,
-            ),
+            playback: PlaybackState(playing: true),
             motionArtwork: motion
                 ? const MotionArtwork('file:///cover.mp4', aspectRatio: 1)
                 : null,
@@ -3982,10 +3929,7 @@ void main() {
           tester,
           theme: MornyeTheme.build(Brightness.dark),
           size: landscape ? const Size(844, 390) : const Size(390, 844),
-          playback: PlaybackState(
-            playing: true,
-            processingState: AudioProcessingState.ready,
-          ),
+          playback: PlaybackState(playing: true),
           wrapPlayer: (player) => Builder(
             builder: (context) => MediaQuery(
               data: MediaQuery.of(context).copyWith(disableAnimations: true),

@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'package:mornye/screens/music_libraries_screen.dart';
 import 'dart:io';
 import 'package:flutter/foundation.dart'
     show ValueListenable, listEquals, setEquals;
@@ -119,14 +118,8 @@ const _historyItemForCompletionBridge = CompletionBridgeTracker.historyItemFor;
 class QueueTab extends ConsumerStatefulWidget {
   final String? librarySection;
   final bool isTabActive;
-  final bool manageLibraries;
 
-  const QueueTab({
-    super.key,
-    this.librarySection,
-    this.isTabActive = true,
-    this.manageLibraries = true,
-  });
+  const QueueTab({super.key, this.librarySection, this.isTabActive = true});
 
   @override
   ConsumerState<QueueTab> createState() => _QueueTabState();
@@ -523,12 +516,6 @@ class _QueueTabState extends ConsumerState<QueueTab> {
 
   @override
   Widget build(BuildContext context) {
-    if (widget.manageLibraries && widget.librarySection == null) {
-      return MusicLibrariesScreen(
-        indexedLibrary: (_) =>
-            const Scaffold(body: QueueTab(manageLibraries: false)),
-      );
-    }
     if (context.isMornye && widget.librarySection == null) {
       return MornyeLibraryScreen(
         onOpenSection: (section) => pushPage<void>(
