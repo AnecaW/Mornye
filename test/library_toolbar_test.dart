@@ -322,6 +322,9 @@ void main() {
     tester,
   ) async {
     await pumpLibrary(tester, desktop: true);
+    // Leave room below the toolbar for the full menu after the source selector.
+    tester.view.physicalSize = const Size(1280, 1100);
+    await tester.pump(const Duration(milliseconds: 100));
     final l10n = l10nOf(tester);
     final sort = toolButton(null, label: l10n.libraryFilterSortLatest);
     final sortRect = tester.getRect(sort);
