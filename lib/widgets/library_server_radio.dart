@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:mornye/widgets/app_sliver_header.dart';
+import 'package:mornye/widgets/library_source_selector.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mornye/l10n/l10n.dart';
 import 'package:mornye/providers/library_source_provider.dart';
@@ -13,27 +15,30 @@ class LibraryServerRadio extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final source = ref.watch(effectiveLibrarySourceProvider);
-    if (source == deviceMusicSource) return const SizedBox.shrink();
+
     final id = musicSourceConnectionId(source);
     final connections =
         ref.watch(librarySourceConnectionsProvider).value ??
         const <NetworkConnection>[];
     final stations =
         <({NetworkConnection server, Map<String, dynamic> station})>[];
+    var loading = false;
+    var unavailable = false;
     for (final connection in connections.where(
       (c) =>
-          c.protocol == NetworkProtocol.subsonic && (id == null || c.id == id),
+          source != deviceMusicSource &&
+          c.protocol == NetworkProtocol.subsonic &&
+          (id == null || c.id == id),
     )) {
-      final rows =
-          ref
-              .watch(
-                serverRadioStationsProvider((
-                  connection: connection.id,
-                  account: musicSourceAccount(connection),
-                )),
-              )
-              .value ??
-          const <Map<String, dynamic>>[];
+      final result = ref.watch(
+        serverRadioStationsProvider((
+          connection: connection.id,
+          account: musicSourceAccount(connection),
+        )),
+      );
+      loading |= result.isLoading;
+      unavailable |= result.hasError;
+      final rows = result.value ?? const <Map<String, dynamic>>[];
       for (final row in rows) {
         final uri = Uri.tryParse(row['streamUrl']?.toString() ?? '');
         if (uri != null &&
@@ -44,11 +49,23 @@ class LibraryServerRadio extends ConsumerWidget {
         }
       }
     }
-    if (stations.isEmpty) return const SizedBox.shrink();
-    return ExpansionTile(
-      leading: const Icon(Icons.radio_outlined),
-      title: Text(context.l10n.libraryServerRadio),
+    return Column(
       children: [
+        if (loading) const LinearProgressIndicator(),
+        if (stations.isEmpty && !loading)
+          Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(
+              unavailable
+                  ? context.l10n.libraryRadioUnavailable
+                  : context.l10n.libraryRadioEmpty,
+            ),
+          ),
+        if (unavailable && stations.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(context.l10n.libraryRadioUnavailable),
+          ),
         for (final row in stations)
           ListTile(
             leading: const Icon(Icons.play_circle_outline),
@@ -68,4 +85,17 @@ class LibraryServerRadio extends ConsumerWidget {
       ],
     );
   }
+}
+
+/// Same library-level navigation destination on mobile and desktop.
+class LibraryRadioPage extends StatelessWidget {
+  const LibraryRadioPage({super.key});
+  @override
+  Widget build(BuildContext context) => CustomScrollView(
+    slivers: [
+      AppSliverHeader.page(title: context.l10n.libraryServerRadio),
+      const SliverToBoxAdapter(child: LibrarySourceSelector()),
+      const SliverToBoxAdapter(child: LibraryServerRadio()),
+    ],
+  );
 }

@@ -451,6 +451,11 @@ class _MornyeLibraryScreenState extends ConsumerState<MornyeLibraryScreen> {
                         () => widget.onOpenSection('playlists'),
                       ),
                       (
+                        Icons.radio_outlined,
+                        context.l10n.libraryServerRadio,
+                        () => widget.onOpenSection('radio'),
+                      ),
+                      (
                         Icons.mic_none,
                         context.l10n.searchArtists,
                         () => _openPage(MornyeLibraryPage.artists),

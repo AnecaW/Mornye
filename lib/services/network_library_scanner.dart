@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:mornye/models/library_scan_activity.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
@@ -24,6 +25,7 @@ final _log = AppLogger('LocalLibrary');
 class NetworkLibraryScanner {
   NetworkLibraryScanner({
     NetworkStorageService? storage,
+    this.onActivity,
     Future<Map<String, dynamic>> Function(String)? readMetadata,
     Future<Map<String, Map<String, dynamic>>> Function(List<String>)?
     readCachedRows,
@@ -41,6 +43,7 @@ class NetworkLibraryScanner {
        _temporaryDirectory = temporaryDirectory ?? getTemporaryDirectory,
        _openOutput = openOutput ?? ((file) => file.open(mode: FileMode.write));
 
+  final void Function(LibraryScanActivity)? onActivity;
   final NetworkStorageService _storage;
   final Future<Map<String, dynamic>> Function(String)? _readMetadata;
   final Future<Map<String, Map<String, dynamic>>> Function(List<String>)?

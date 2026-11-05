@@ -57,6 +57,7 @@ class SubsonicFixture {
   /// most [searchPage] a page) list songs in this order.
   List<Map<String, dynamic>>? library;
   int searchPage = 500;
+  int albumPageSize = 200;
 
   /// The `lyricsList` answered by getLyricsBySongId; without one the server
   /// lacks the songLyrics extension.
@@ -176,7 +177,7 @@ class SubsonicFixture {
               'album': [
                 for (final id in {
                   for (final song in songs) song['albumId'],
-                }.skip(int.parse(query['offset']!)).take(200))
+                }.skip(repeatPage ? 0 : int.parse(query['offset']!)).take(albumPageSize))
                   {'id': id, 'name': id},
               ],
             },

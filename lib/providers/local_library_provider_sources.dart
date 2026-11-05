@@ -57,6 +57,12 @@ extension _LocalLibrarySources on LocalLibraryNotifier {
           .firstOrNull;
       if (!ref.mounted) return null;
       if (sourceVersion != _sourceVersion) continue;
+      final localEnabled = ref.read(settingsProvider).localLibraryEnabled;
+      if (source != null &&
+          !source.path.startsWith('network://') &&
+          !localEnabled) {
+        return null;
+      }
       return source?.enabled == true && source?.available == true
           ? source
           : null;
@@ -227,6 +233,10 @@ extension _LocalLibrarySources on LocalLibraryNotifier {
       final sources = await _db.getSources();
       var inconclusive = false;
       for (final source in sources) {
+        if (!source.enabled ||
+            (!source.path.startsWith('network://') &&
+                !ref.read(settingsProvider).localLibraryEnabled))
+          continue;
         final available = await _probePathAvailability(
           source.path,
           bookmark: source.bookmark,

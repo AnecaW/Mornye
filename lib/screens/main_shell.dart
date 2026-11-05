@@ -736,6 +736,11 @@ class _MainShellState extends ConsumerState<MainShell>
         label: l10n.searchSongs,
       ),
       DesktopSidebarLink(
+        id: 'radio',
+        icon: CupertinoIcons.antenna_radiowaves_left_right,
+        label: l10n.libraryServerRadio,
+      ),
+      DesktopSidebarLink(
         id: 'folders',
         icon: CupertinoIcons.folder,
         label: l10n.libraryFolders,
@@ -774,6 +779,7 @@ class _MainShellState extends ConsumerState<MainShell>
         ),
       ),
       'songs' => const Scaffold(body: QueueTab(librarySection: 'all')),
+      'radio' => const Scaffold(body: QueueTab(librarySection: 'radio')),
       'folders' => const LibraryDirectoryScreen(),
       'downloads' => const Scaffold(
         body: QueueTab(librarySection: 'downloads'),

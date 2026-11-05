@@ -559,10 +559,12 @@ class SubsonicClient {
   ) async* {
     final albums = <String>{};
     final songs = <String>{};
-    for (var offset = 0; offset <= 1000000; offset += 200) {
+    var offset = 0;
+    while (offset <= 1000000) {
       if (offset > 0) await checkpoint();
       final page = offset == 0 ? _albumPage(first) : await _albums(offset);
       await checkpoint();
+      if (page.isEmpty) return;
       var newAlbums = 0;
       final ids = <String>[];
       for (final album in page) {
@@ -600,10 +602,10 @@ class SubsonicClient {
           }
         }
       }
-      if (page.length < 200) return;
       if (newAlbums == 0) {
         throw const HttpException('Subsonic pagination did not advance');
       }
+      offset += page.length;
     }
     throw const HttpException('Subsonic library is too large');
   }

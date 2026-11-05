@@ -1,6 +1,7 @@
 import 'package:flutter/widgets.dart' show WidgetsBinding, AppLifecycleState;
 import 'package:mornye/providers/server_favourite_provider.dart';
 import 'dart:async';
+import 'package:mornye/providers/settings_provider.dart';
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -41,13 +42,38 @@ final librarySourceStorageProvider = Provider<NetworkStorageService>(
 );
 
 /// Choices are derived from real connections; there are no user-created profiles.
-final librarySourceConnectionsProvider =
+final savedLibrarySourceConnectionsProvider =
     FutureProvider<List<NetworkConnection>>((ref) {
       final storage = ref.watch(librarySourceStorageProvider);
       void changed() => ref.invalidateSelf();
       storage.connectionRevision.addListener(changed);
       ref.onDispose(() => storage.connectionRevision.removeListener(changed));
       return storage.connections();
+    });
+
+// Keep the saved connection and its indexed metadata when temporarily disabled.
+final librarySourceConnectionsProvider =
+    FutureProvider<List<NetworkConnection>>((ref) async {
+      final saved = await ref.watch(
+        savedLibrarySourceConnectionsProvider.future,
+      );
+      if (saved.isEmpty || !ref.mounted) return saved;
+      final disabled = ref.watch(
+        localLibraryProvider.select(
+          (state) =>
+              (state.sources
+                      .where(
+                        (s) => !s.enabled && s.path.startsWith('network://'),
+                      )
+                      .map((s) => Uri.parse(s.path).host)
+                      .toSet()
+                      .toList()
+                    ..sort())
+                  .join('|'),
+        ),
+      );
+      final ids = disabled.split('|').toSet();
+      return saved.where((c) => !ids.contains(c.id)).toList(growable: false);
     });
 
 final selectedLibrarySourceProvider =
@@ -96,6 +122,23 @@ class LibrarySourceSelection extends Notifier<String> {
 /// A removed server cannot accidentally fall back to displaying device music.
 final effectiveLibrarySourceProvider = Provider<String>((ref) {
   final selected = ref.watch(selectedLibrarySourceProvider);
+  final local = ref.watch(
+    settingsProvider.select((s) => s.localLibraryEnabled),
+  );
+  if (selected == deviceMusicSource && !local) return allMusicSources;
+  final id = musicSourceConnectionId(selected);
+  if (id != null) {
+    final connections = ref.watch(librarySourceConnectionsProvider);
+    if (connections.hasValue &&
+        !connections.requireValue.any((c) => c.id == id) &&
+        (ref
+                .watch(savedLibrarySourceConnectionsProvider)
+                .value
+                ?.any((c) => c.id == id) ??
+            false)) {
+      return allMusicSources;
+    }
+  }
   return selected;
 });
 
@@ -153,11 +196,26 @@ String musicSourceLabel(
 /// Reuses the app's original network indexer and database. It never uploads audio,
 /// creates server libraries or changes a local folder's source configuration.
 final librarySourceSyncProvider = FutureProvider.autoDispose
-    .family<void, String>(_syncExistingMusicSource);
+    .family<void, String>(_syncExistingMusicSource, retry: (_, _) => null);
 
 Future<void> _syncExistingMusicSource(Ref ref, String selected) async {
-  ref.watch(sourceRefreshTickProvider);
-  ref.watch(serverLibraryChangesProvider);
+  // A timer must never dispose/restart an in-flight scan. Its next tick will
+  // check the revision after this operation has actually completed.
+  var busy = true;
+  ref.listen(sourceRefreshTickProvider, (_, next) {
+    if (!busy) ref.invalidateSelf();
+  });
+  ref.listen(serverLibraryChangesProvider, (_, next) {
+    if (!busy) ref.invalidateSelf();
+  });
+  try {
+    await _synchronizeExistingMusicSource(ref, selected);
+  } finally {
+    busy = false;
+  }
+}
+
+Future<void> _synchronizeExistingMusicSource(Ref ref, String selected) async {
   final connections = await ref.watch(librarySourceConnectionsProvider.future);
   if (selected == allMusicSources) {
     var unavailable = false;
@@ -224,6 +282,18 @@ Future<void> _syncExistingMusicSource(Ref ref, String selected) async {
       if (scan is Map && scan['scanning'] != true && scan['lastScan'] != null) {
         revision = '${scan['lastScan']}:${scan['count']}';
       }
+      if (revision == null) {
+        try {
+          final indexes = (await client.request('getIndexes'))['indexes'];
+          if (indexes is Map &&
+              indexes['lastModified'] is num &&
+              (indexes['lastModified'] as num) > 0) {
+            revision = 'indexes:${indexes['lastModified']}';
+          }
+        } on SubsonicException catch (error) {
+          if (error.code == 40 || error.code == 41) rethrow;
+        }
+      }
     } on SubsonicException catch (error) {
       if (error.code == 40 || error.code == 41) {
         throw StateError('Server authentication failed.');
@@ -249,18 +319,26 @@ Future<void> _syncExistingMusicSource(Ref ref, String selected) async {
             (revision == null && recent))) {
       continue;
     }
-    while (ref.mounted && ref.read(localLibraryProvider).isScanning) {
-      await Future<void>.delayed(const Duration(milliseconds: 150));
-    }
     if (!ref.mounted) return;
+    if (ref
+        .read(localLibraryProvider)
+        .cancelledScanSources
+        .contains(indexed.id))
+      return;
+    final beforeScan = indexed.lastScannedAt;
     await library.startSourceScan(indexed.id, waitForCurrentScan: true);
-    final saved = await LibraryDatabase.instance.getSourceByPath(path);
+    if (!ref.mounted || ref.read(localLibraryProvider).scanWasCancelled) return;
+    final saved = ref
+        .read(localLibraryProvider)
+        .sources
+        .where((source) => source.path == path)
+        .firstOrNull;
     if (saved?.lastScanError != null) {
       throw StateError(
         'The server is temporarily unavailable. Previously synchronized music remains available.',
       );
     }
-    if (saved?.lastScannedAt != null) {
+    if (saved?.lastScannedAt != null && saved!.lastScannedAt != beforeScan) {
       await prefs.setInt(lastSyncKey, DateTime.now().millisecondsSinceEpoch);
       if (revision != null) await prefs.setString(revisionKey, revision);
     }

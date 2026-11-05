@@ -19,7 +19,7 @@ import 'package:mornye/utils/local_library_scan_prefs.dart';
 
 class _Settings extends SettingsNotifier {
   @override
-  AppSettings build() => const AppSettings();
+  AppSettings build() => const AppSettings(localLibraryEnabled: true);
 
   @override
   Future<void> ensureLoaded() async {}
@@ -760,4 +760,53 @@ void main() {
     expect(state.scanWasCancelled, isTrue);
     expect(state.isScanning, isFalse);
   });
+  test(
+    'disabling Local Library cancels active work and prevents subsequent source scans',
+    () async {
+      completeOnCancel = true;
+      final active = library.startSourceScan('active');
+      await _waitFor(() => scans.length == 1);
+      container.read(settingsProvider.notifier).setLocalLibraryEnabled(false);
+      await active.timeout(const Duration(seconds: 2));
+      expect(container.read(localLibraryProvider).isScanning, isFalse);
+      expect(container.read(localLibraryProvider).scanWasCancelled, isTrue);
+      expect(database.sources.any((s) => s.id == 'active'), isTrue);
+      await library.startSourceScan('active');
+      expect(scans, hasLength(1));
+    },
+  );
+
+  test(
+    'disabling a NAS interrupts a blocked listing without deleting its source',
+    () async {
+      await storage.save(
+        const NetworkConnection(
+          id: 'nas',
+          name: 'NAS',
+          protocol: NetworkProtocol.smb,
+          address: 'smb://nas.test/music/',
+        ),
+      );
+      database.sources[0] = LocalLibrarySource(
+        id: 'active',
+        path: 'network://nas/',
+        displayName: 'NAS',
+        available: true,
+      );
+      final active = library.startSourceScan('active', forceFullScan: true);
+      await storage.started.future.timeout(const Duration(seconds: 2));
+      await library
+          .setSourceEnabled('active', false)
+          .timeout(const Duration(seconds: 2));
+      await active;
+      final source = database.sources.firstWhere((s) => s.id == 'active');
+      expect(source.enabled, isFalse);
+      expect(await storage.connections(), hasLength(1));
+      expect(container.read(localLibraryProvider).isScanning, isFalse);
+      expect(
+        container.read(localLibraryProvider).cancelledScanSources,
+        contains('active'),
+      );
+    },
+  );
 }

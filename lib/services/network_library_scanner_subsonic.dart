@@ -7,6 +7,7 @@ extension on NetworkLibraryScanner {
     required Future<void> Function() checkpoint,
     required void Function(int, int, String) onProgress,
   }) async {
+    onActivity?.call(const LibraryScanActivity(phase: 'connecting'));
     await checkpoint();
     final client = _storage.openSubsonic(connection, fresh: true);
     _activeSubsonic = client;
@@ -25,16 +26,48 @@ extension on NetworkLibraryScanner {
       output = writer;
       final buffer = StringBuffer();
       final artwork = <String, String?>{};
+      int? total;
+      onActivity?.call(const LibraryScanActivity(phase: 'information'));
+      try {
+        final response = await client.request('getScanStatus');
+        final status = response['scanStatus'];
+        if (status is Map &&
+            status['scanning'] != true &&
+            status['count'] is num) {
+          total = (status['count'] as num).toInt();
+        }
+      } catch (_) {
+        await checkpoint(); // Optional endpoint: catalog requests still decide availability.
+      }
       final started = DateTime.now();
+      final albumIds = <String>{};
+      final artistIds = <String>{};
+      void report(String phase, int count) => onActivity?.call(
+        LibraryScanActivity(
+          phase: phase,
+          processed: count,
+          total: total,
+          albums: albumIds.length,
+          artists: artistIds.length,
+          elapsed: DateTime.now().difference(started),
+        ),
+      );
+      report('catalogue', 0);
       var count = 0;
       var buffered = 0;
       await for (final song in client.catalog(checkpoint: checkpoint)) {
         await checkpoint();
+        final album = song.data['albumId']?.toString();
+        final artist = (song.data['artistId'] ?? song.data['artist'])
+            ?.toString();
+        if (album != null && album.isNotEmpty) albumIds.add(album);
+        if (artist != null && artist.isNotEmpty) artistIds.add(artist);
         String? cover;
         if (song.coverId.isNotEmpty) {
           if (!artwork.containsKey(song.coverId)) {
             // A search3 catalog keeps no album's songs together.
             if (artwork.length >= 20000) artwork.remove(artwork.keys.first);
+            report('artwork', count);
             try {
               artwork[song.coverId] = await client.cachedCover(
                 song,
@@ -69,6 +102,7 @@ extension on NetworkLibraryScanner {
           buffered = 0;
         }
         onProgress(count, 0, song.title);
+        report('metadata', count);
       }
       if (buffer.isNotEmpty) await writer.writeString(buffer.toString());
       await writer.flush();
@@ -81,6 +115,7 @@ extension on NetworkLibraryScanner {
           'The server account changed during synchronization. Retry the scan.',
         );
       }
+      report('indexing', count);
       complete = true;
       return LibraryScanNDJSONFile(
         file: file,

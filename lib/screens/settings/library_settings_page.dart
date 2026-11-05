@@ -349,6 +349,8 @@ class _LibrarySettingsPageState extends ConsumerState<LibrarySettingsPage> {
         return context.l10n.searchArtists;
       case 'playlists':
         return context.l10n.searchPlaylists;
+      case 'radio':
+        return context.l10n.libraryServerRadio;
       case 'folders':
         return context.l10n.libraryFolders;
       default:
@@ -370,6 +372,7 @@ class _LibrarySettingsPageState extends ConsumerState<LibrarySettingsPage> {
             ('artists', Icons.person),
             ('playlists', Icons.queue_music),
             ('folders', Icons.folder_outlined),
+            ('radio', Icons.radio_outlined),
           ])
             AppChoice(value, icon, _getDefaultViewLabel(context, value)),
         ],

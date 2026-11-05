@@ -18,7 +18,7 @@ class _Settings extends SettingsNotifier {
   final String _path;
 
   @override
-  AppSettings build() => const AppSettings();
+  AppSettings build() => const AppSettings(localLibraryEnabled: true);
 
   @override
   Future<void> ensureLoaded() async {

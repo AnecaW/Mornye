@@ -795,6 +795,25 @@ void main() {
       if (uri.pathSegments.last == '$method.view') uri.queryParameters,
   ];
 
+  test('album pagination respects server-capped short pages and ends on empty', () async {
+    server.albumPageSize = 2;
+    server.library = [for (var i = 0; i < 5; i++) {...server.song, 'id': 'song$i', 'albumId': 'album$i'}];
+    final client = storage.openSubsonic(server.connection());
+    addTearDown(client.close);
+    final songs = await client.catalog(checkpoint: () async {}).toList();
+    expect(songs, hasLength(5));
+    expect(requested('getAlbumList2').map((p) => p['offset']), ['0','2','4','5']);
+  });
+
+  test('repeating short album pages fail instead of silently truncating the library', () async {
+    server.albumPageSize = 2; server.repeatPage = true;
+    server.library = [for (var i = 0; i < 5; i++) {...server.song, 'id': 'song$i', 'albumId': 'album$i'}];
+    final client = storage.openSubsonic(server.connection());
+    addTearDown(client.close);
+    await expectLater(client.catalog(checkpoint: () async {}).toList(), throwsA(isA<HttpException>()));
+    expect(requested('getAlbumList2'), hasLength(2));
+  });
+
   test(
     'a Mornye desktop syncs through search3 pages with the same rows',
     () async {
@@ -844,7 +863,7 @@ void main() {
       server.type = null;
       server.library = songs;
       final walked = await rows();
-      expect(requested('getAlbumList2'), hasLength(1));
+      expect(requested('getAlbumList2'), hasLength(2));
       expect(requested('getAlbum'), hasLength(120));
       expect(requested('search3'), isEmpty);
       expect(requested('getCoverArt'), isEmpty);

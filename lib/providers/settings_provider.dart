@@ -122,6 +122,7 @@ class SettingsNotifier extends Notifier<AppSettings> {
     'artists',
     'playlists',
     'folders',
+    'radio',
   };
   static const Set<String> _extensionVerificationBrowserModeValues = {
     'external_first',

@@ -8004,5 +8004,22 @@
   "libraryChooseSource": "Muziekbron",
   "librarySourceUnavailable": "Server niet bereikbaar. Eerder opgehaalde muziek blijft beschikbaar.",
   "libraryUploadMusic": "Muziek toevoegen aan server",
-  "libraryServerRadio": "Radio"
+  "libraryServerRadio": "Radio",
+  "libraryManageSources": "Bibliotheken in-/uitschakelen",
+  "libraryRadioEmpty": "Er zijn geen radiozenders beschikbaar voor deze bibliotheek.",
+  "libraryRadioUnavailable": "Radio is tijdelijk niet bereikbaar. Probeer te vernieuwen.",
+  "libraryScanConnecting": "Verbinden met de bibliotheek…",
+  "libraryScanInformation": "Bibliotheekinformatie ophalen…",
+  "libraryScanCatalogue": "Albums en nummers ophalen…",
+  "libraryScanArtwork": "Albumhoezen ophalen…",
+  "libraryScanMetadata": "Metadata van nummers verwerken…",
+  "libraryScanIndexing": "Lokale cache indexeren…",
+  "libraryScanEstimating": "Resterende tijd berekenen…",
+  "libraryScanUnknownTotal": "Totaal onbekend — geen tijdschatting beschikbaar",
+  "libraryScanInitial": "Eerste volledige scan",
+  "libraryScanSync": "Bibliotheek synchroniseren",
+  "libraryScanFinished": "Scan voltooid",
+  "libraryScanStopped": "Scan geannuleerd. Bestaande muziek blijft bewaard.",
+  "libraryScanFailed": "Scan mislukt. Eerder opgeslagen muziek blijft bewaard.",
+  "libraryScanPhaseEstimate": "Geschatte tijd voor deze fase"
 }

@@ -1,4 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mornye/providers/settings_provider.dart';
+import 'package:mornye/models/settings.dart';
 import 'package:mornye/providers/library_source_provider.dart';
 import 'package:mornye/providers/library_collections_provider.dart';
 import 'package:mornye/services/library_collections_database.dart';
@@ -10,6 +12,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:mornye/services/server_scrobbling.dart';
 import 'package:mornye/services/navidrome_library.dart';
 import 'package:mornye/services/network_storage_service.dart';
+
+class _EnabledDeviceSettings extends SettingsNotifier {
+  @override
+  AppSettings build() => const AppSettings(localLibraryEnabled: true);
+}
 
 class _DeviceCollections implements LibraryCollectionsDatabase {
   int writes = 0;
@@ -389,6 +396,7 @@ void main() {
       final container = ProviderContainer(
         overrides: [
           librarySourceStorageProvider.overrideWithValue(storage),
+          settingsProvider.overrideWith(_EnabledDeviceSettings.new),
           libraryCollectionsProvider.overrideWith(
             () => LibraryCollectionsNotifier(database: db),
           ),

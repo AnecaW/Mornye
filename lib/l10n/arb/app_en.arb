@@ -10065,5 +10065,22 @@
   "libraryChooseSource": "Music source",
   "librarySourceUnavailable": "Server unavailable. Cached music remains available.",
   "libraryUploadMusic": "Add music to server",
-  "libraryServerRadio": "Radio"
+  "libraryServerRadio": "Radio",
+  "libraryManageSources": "Enable libraries",
+  "libraryRadioEmpty": "No radio stations are available for this library.",
+  "libraryRadioUnavailable": "Radio is temporarily unavailable. Try refreshing.",
+  "libraryScanConnecting": "Connecting to the library…",
+  "libraryScanInformation": "Fetching library information…",
+  "libraryScanCatalogue": "Fetching albums and songs…",
+  "libraryScanArtwork": "Fetching album artwork…",
+  "libraryScanMetadata": "Processing song metadata…",
+  "libraryScanIndexing": "Indexing the local cache…",
+  "libraryScanEstimating": "Calculating remaining time…",
+  "libraryScanUnknownTotal": "Total unknown — no time estimate available",
+  "libraryScanInitial": "First full scan",
+  "libraryScanSync": "Synchronizing library",
+  "libraryScanFinished": "Scan completed",
+  "libraryScanStopped": "Scan cancelled. Existing music is preserved.",
+  "libraryScanFailed": "Scan failed. Cached music is preserved.",
+  "libraryScanPhaseEstimate": "Estimated time for this phase"
 }

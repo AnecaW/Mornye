@@ -177,6 +177,7 @@ class _QueueTabState extends ConsumerState<QueueTab> {
     'artists',
     'playlists',
     'folders',
+    'radio',
   ];
   bool _albumsShowSingles = false;
 
@@ -527,6 +528,7 @@ class _QueueTabState extends ConsumerState<QueueTab> {
         ),
       );
     }
+    if (widget.librarySection == 'radio') return const LibraryRadioPage();
     final musicSource = ref.watch(effectiveLibrarySourceProvider);
     final includeNetwork = ref.watch(libraryIncludesNetworkSourcesProvider);
     ref.listen(librarySourceConnectionsProvider, (previous, next) {
@@ -916,10 +918,6 @@ class _QueueTabState extends ConsumerState<QueueTab> {
 
                 if (widget.librarySection != 'downloads')
                   const SliverToBoxAdapter(child: LibrarySourceSelector()),
-                if (widget.librarySection == 'playlists' ||
-                    (widget.librarySection == null &&
-                        historyFilterMode == 'playlists'))
-                  const SliverToBoxAdapter(child: LibraryServerRadio()),
 
                 if (shouldShowLibraryControls || hasQueueItems)
                   SliverToBoxAdapter(
@@ -978,6 +976,7 @@ class _QueueTabState extends ConsumerState<QueueTab> {
                             ).length,
                           ),
                           (context.l10n.libraryFolders, null),
+                          (context.l10n.libraryServerRadio, null),
                         ],
                       ),
                     ),
@@ -1022,6 +1021,11 @@ class _QueueTabState extends ConsumerState<QueueTab> {
                       onPageChanged: _onFilterPageChanged,
                       itemCount: _filterModes.length,
                       itemBuilder: (context, index) {
+                        if (_filterModes[index] == 'radio') {
+                          return const SingleChildScrollView(
+                            child: LibraryServerRadio(),
+                          );
+                        }
                         if (_filterModes[index] == 'artists') {
                           return _buildArtistsPage(context, colorScheme);
                         }

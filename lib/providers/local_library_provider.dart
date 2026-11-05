@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:mornye/models/library_scan_activity.dart';
 import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:flutter/painting.dart' show PaintingBinding;
@@ -29,6 +30,8 @@ const _excludedDownloadedCountKey = 'local_library_excluded_downloaded_count';
 final _prefs = SharedPreferences.getInstance();
 
 class LocalLibraryState {
+  final Set<String> cancelledScanSources;
+  final LibraryScanActivity? scanActivity;
   final bool isLoading;
   final bool loadFailed;
   final bool isScanning;
@@ -53,6 +56,8 @@ class LocalLibraryState {
   final Set<String> _isrcSet;
 
   LocalLibraryState({
+    this.cancelledScanSources = const {},
+    this.scanActivity,
     this.isLoading = false,
     this.loadFailed = false,
     this.isScanning = false,
@@ -94,6 +99,8 @@ class LocalLibraryState {
   }
 
   LocalLibraryState copyWith({
+    Set<String>? cancelledScanSources,
+    LibraryScanActivity? scanActivity,
     bool? isLoading,
     bool? loadFailed,
     bool? isScanning,
@@ -118,6 +125,8 @@ class LocalLibraryState {
     Set<String>? isrcSet,
   }) {
     return LocalLibraryState(
+      cancelledScanSources: cancelledScanSources ?? this.cancelledScanSources,
+      scanActivity: scanActivity ?? this.scanActivity,
       isLoading: isLoading ?? this.isLoading,
       loadFailed: loadFailed ?? this.loadFailed,
       isScanning: isScanning ?? this.isScanning,
@@ -182,6 +191,7 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
             _log.w('Library scan progress stream timeout, fallback to polling'),
         onPollError: (e) => _log.w('Library scan progress polling failed: $e'),
       );
+  DateTime? _scanStartedAt;
   bool _isLoaded = false;
   bool _hasLoadedFromDatabase = false;
   Future<void>? _loadFuture;
@@ -216,6 +226,16 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
 
   @override
   LocalLibraryState build() {
+    ref.listen(settingsProvider.select((s) => s.localLibraryEnabled), (
+      previous,
+      enabled,
+    ) {
+      if (!enabled &&
+          _activeScanPath != null &&
+          !_activeScanPath!.startsWith('network://')) {
+        unawaited(cancelScan());
+      }
+    });
     _uploadedLocalChanges = NavidromeTransfers.instance.localChanges.listen((
       file,
     ) {
@@ -454,6 +474,11 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
     _sourceVersion++;
     if (!enabled) await _cancelSourceScan(sourceId);
     await _db.updateSourceState(sourceId, enabled: enabled);
+    if (enabled) {
+      state = state.copyWith(
+        cancelledScanSources: {...state.cancelledScanSources}..remove(sourceId),
+      );
+    }
     await _refreshSummaryFromStorage();
     if (enabled &&
         source?.available == true &&
@@ -523,6 +548,14 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
     await _scanSourcesSequentially(sourceIds, forceFullScan: forceFullScan);
   }
 
+  /// Explicit refresh permits a user-cancelled synchronization to run again.
+  void resumeCancelledScans() {
+    state = state.copyWith(
+      cancelledScanSources: const {},
+      scanWasCancelled: false,
+    );
+  }
+
   Future<void> startSourceScan(
     String sourceId, {
     bool forceFullScan = false,
@@ -573,6 +606,7 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
     if (sourceId != null) _pendingReconnectScans.remove(sourceId);
     _scanCancelRequested = false;
     _scanPauseRequested = false;
+    _scanStartedAt = DateTime.now();
     _nativeLibraryRequestId = PlatformBridge.supportsCoreBackend
         ? 'library-scan-${DateTime.now().microsecondsSinceEpoch}'
         : null;
@@ -605,6 +639,11 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
     if (!ref.mounted || (!_scanInProgress && !state.isScanning)) return;
 
     _log.i('Cancelling library scan');
+    if (_activeScanSourceId case final id?) {
+      state = state.copyWith(
+        cancelledScanSources: {...state.cancelledScanSources, id},
+      );
+    }
     _scanCancelRequested = true;
     try {
       await _networkScanner?.cancelPending();

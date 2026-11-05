@@ -57,6 +57,15 @@ extension _LocalLibraryScan on LocalLibraryNotifier {
   }) async {
     final scanner = NetworkLibraryScanner(
       storage: _networkStorage,
+      onActivity: (activity) {
+        if (ref.mounted && !_scanCancelRequested) {
+          state = state.copyWith(
+            scanActivity: activity,
+            scanTotalFiles: activity.total ?? 0,
+            scanProgress: (activity.fraction ?? 0) * 100,
+          );
+        }
+      },
       readCachedRows: (paths) => _db.readNetworkScanRows(sourceId, paths),
     );
     _networkScanner = scanner;
@@ -219,6 +228,7 @@ extension _LocalLibraryScan on LocalLibraryNotifier {
         'Starting library scan: $folderPath (incremental: ${!forceFullScan})',
       );
       state = state.copyWith(
+        scanActivity: const LibraryScanActivity(phase: 'connecting'),
         isScanning: true,
         scanIsFinalizing: false,
         scanIsPaused: false,
@@ -721,6 +731,12 @@ extension _LocalLibraryScan on LocalLibraryNotifier {
 
     if (shouldUpdateState) {
       state = state.copyWith(
+        scanActivity: LibraryScanActivity(
+          phase: 'metadata',
+          processed: scannedFiles,
+          total: totalFiles > 0 ? totalFiles : null,
+          elapsed: DateTime.now().difference(_scanStartedAt ?? DateTime.now()),
+        ),
         scanProgress: displayProgress,
         scanCurrentFile: currentFile,
         scanTotalFiles: totalFiles,
