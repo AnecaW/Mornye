@@ -9,10 +9,15 @@ on:
         required: false
         default: ''
         type: string
+      verify_only:
+        description: 'Run checks for the immutable source without rebuilding mobile packages'
+        required: false
+        default: false
+        type: boolean
 permissions:
   contents: read
 concurrency:
-  group: mobile-delivery-${{ github.ref }}-${{ inputs.source_commit != '' && 'ios-only' || 'full' }}
+  group: mobile-delivery-${{ github.ref }}-${{ inputs.verify_only && 'verify-only' || (inputs.source_commit != '' && 'ios-only' || 'full') }}
   cancel-in-progress: true
 env:
   # The proprietary Discord SDK is not available in a clean fork. The existing
@@ -20,11 +25,25 @@ env:
   MORNYE_DISCORD_SDK: "0"
 jobs:
   verify:
-    if: ${{ inputs.source_commit == '' }}
+    if: ${{ inputs.source_commit == '' || inputs.verify_only }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.source_commit || github.sha }}
+      - name: Resolve verification source
+        id: source
+        env:
+          REQUESTED_SOURCE: ${{ inputs.source_commit }}
+        run: |
+          set -euo pipefail
+          source=$(git rev-parse HEAD)
+          if [ -n "$REQUESTED_SOURCE" ]; then
+            [[ "$REQUESTED_SOURCE" =~ ^[0-9a-f]{40}$ ]]
+            test "$source" = "$REQUESTED_SOURCE"
+          fi
+          echo "sha=$source" >> "$GITHUB_OUTPUT"
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
         with:
           channel: stable
@@ -33,6 +52,18 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libclang-dev ffmpeg
       - run: flutter pub get && dart scripts/prepare_flutter_sdk.dart
       - run: flutter analyze --no-fatal-infos
+      - name: Prepare native test assets
+        run: |
+          set -euo pipefail
+          ready=false
+          for attempt in 1 2 3; do
+            if flutter test --no-pub test/library_media_identity_test.dart; then
+              ready=true
+              break
+            fi
+            if [ "$attempt" -lt 3 ]; then sleep 10; fi
+          done
+          "$ready"
       - run: mkdir -p build/test-results && flutter test --concurrency 4 --file-reporter json:build/test-results/flutter.jsonl
       - name: Delivery verifier tests
         if: always()
@@ -43,11 +74,11 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
-          name: verification-${{ github.sha }}
+          name: verification-${{ steps.source.outputs.sha }}
           path: build/test-results/
           if-no-files-found: ignore
   android:
-    if: ${{ inputs.source_commit == '' }}
+    if: ${{ inputs.source_commit == '' && !inputs.verify_only }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -120,6 +151,7 @@ jobs:
         if: always()
         run: rm -f android/key.properties "$RUNNER_TEMP/mornye-delivery.jks"
   ios:
+    if: ${{ !inputs.verify_only }}
     runs-on: xcode-27
     timeout-minutes: 90
     steps:
