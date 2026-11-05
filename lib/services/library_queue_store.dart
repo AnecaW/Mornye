@@ -229,11 +229,11 @@ class LibraryQueueStore {
           COALESCE(SUM(CASE WHEN grouped.track_count = 1 THEN 1 ELSE 0 END), 0) AS single_count
         FROM ${LibrarySchema.visibleView} l
         JOIN (
-          SELECT ${sourceAlbumKeySql('candidate')} AS album_key, COUNT(*) AS track_count
+          SELECT ${sourceAlbumKeySql('candidate')} AS album_key, MIN(candidate.album_key) AS raw_album_key, COUNT(*) AS track_count
           FROM ${LibrarySchema.visibleView} candidate
           WHERE ${_notShadowedByHistory('candidate')}
           GROUP BY ${sourceAlbumKeySql('candidate')}
-        ) grouped ON grouped.album_key = ${sourceAlbumKeySql('l')}
+        ) grouped ON grouped.raw_album_key = l.album_key AND grouped.album_key = ${sourceAlbumKeySql('l')}
         WHERE ${where.join(' AND ')}
       ''');
     }
@@ -713,13 +713,14 @@ class LibraryQueueStore {
         ${unfiltered ? '' : '''JOIN (
           SELECT
             ${sourceAlbumKeySql('candidate')} AS album_key,
+            MIN(candidate.album_key) AS raw_album_key,
             COUNT(*) AS track_count,
             MAX(COALESCE(sort_added, 0)) AS latest_added
           FROM ${LibrarySchema.visibleView} candidate
           WHERE ${_notShadowedByHistory('candidate')}
           GROUP BY ${sourceAlbumKeySql('candidate')}
           HAVING COUNT(*) > $minimumTracks
-        ) c ON c.album_key = ${sourceAlbumKeySql('l')}'''}
+        ) c ON c.raw_album_key = l.album_key AND c.album_key = ${sourceAlbumKeySql('l')}'''}
         ${assessesCompleteness ? 'JOIN ($completenessSql) ac ON ac.album_key = ${sourceAlbumKeySql('l')}' : ''}
         ${where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}'}
         GROUP BY $albumKey
