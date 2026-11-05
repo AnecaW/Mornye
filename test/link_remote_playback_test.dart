@@ -494,6 +494,12 @@ void main() {
   test('retries failed artwork after reconnecting without looping', () async {
     artworkUnavailable = true;
     client.push(_state());
+    // Await the actual failed requests before asserting that later state
+    // messages do not retry them; a fixed 5ms wait races disk scheduling.
+    for (var turn = 0; turn < 500 && artwork.length < 2; turn++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(artwork, hasLength(2));
     await settle();
     expect((await playback.mediaItems.first)!.artUri, isNull);
     final failed = artwork.length;
@@ -669,7 +675,7 @@ void main() {
   test('reports a song file on its way to the desktop', () async {
     final dir = await Directory.systemTemp.createTemp('link_remote_');
     addTearDown(() => dir.delete(recursive: true));
-    final path = '${dir.path}/mine.flac';
+    final path = p.join(dir.path, 'mine.flac');
     await File(path).writeAsBytes([1, 2, 3]);
     client.onPost = (op, body) => switch (op) {
       LinkOps.handoffPlay when body['check'] == true => {

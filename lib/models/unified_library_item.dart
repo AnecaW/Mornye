@@ -139,7 +139,7 @@ class UnifiedLibraryItem {
     if (historyItem != null) {
       final h = historyItem!;
       return Track(
-        id: h.id,
+        id: subsonicCollectionSource(h.filePath) ?? h.id,
         name: h.trackName,
         artistName: h.artistName,
         albumName: h.albumName,
@@ -150,13 +150,13 @@ class UnifiedLibraryItem {
         trackNumber: h.trackNumber,
         discNumber: h.discNumber,
         releaseDate: h.releaseDate,
-        source: h.service,
+        source: subsonicCollectionSource(h.filePath) ?? h.service,
       );
     }
     if (localItem != null) {
       final l = localItem!;
       return Track(
-        id: l.id,
+        id: subsonicCollectionSource(l.filePath) ?? l.id,
         name: l.trackName,
         artistName: l.artistName,
         albumName: l.albumName,
@@ -167,7 +167,7 @@ class UnifiedLibraryItem {
         trackNumber: l.trackNumber,
         discNumber: l.discNumber,
         releaseDate: l.releaseDate,
-        source: 'local',
+        source: subsonicCollectionSource(l.filePath) ?? 'local',
       );
     }
     return Track(
@@ -179,4 +179,22 @@ class UnifiedLibraryItem {
       duration: 0,
     );
   }
+}
+
+/// Keep the account-scoped server identity when an indexed server song is
+/// presented to favourite/playlist actions rather than its local database id.
+String? subsonicCollectionSource(String path) {
+  final uri = Uri.tryParse(path);
+  if (uri == null ||
+      uri.scheme != 'network' ||
+      uri.host.isEmpty ||
+      uri.userInfo.isNotEmpty ||
+      uri.hasQuery ||
+      uri.hasFragment) {
+    return null;
+  }
+  final parts = uri.pathSegments;
+  return parts.length == 3 && parts[0] == 'subsonic' && parts[1] == 'song'
+      ? path
+      : null;
 }

@@ -65,4 +65,44 @@ void main() {
       await db.close();
     }
   });
+  test(
+    'selected indexed network connections never include another source',
+    () async {
+      final db = await SqliteProcessDatabase.open();
+      try {
+        final store = await createLibraryPagingFixture(db, albumsPerSource: 4);
+        await db.execute(
+          "UPDATE library SET file_path='network://one/music/a.flac' WHERE id='local-0-1'",
+        );
+        await db.execute(
+          "UPDATE library SET file_path='network://one-two/music/b.flac' WHERE id='local-0-2'",
+        );
+        final selected = await store.trackPage(
+          const QueueLibraryDbQuery(
+            source: 'local',
+            networkScope: {'one'},
+            includeDevice: false,
+            limit: 100,
+            includeSingleTrackAlbums: true,
+          ),
+        );
+        expect(selected.rows, hasLength(1));
+        expect(
+          (selected.rows.single['item'] as Map<String, dynamic>)['filePath'],
+          'network://one/music/a.flac',
+        );
+        final empty = await store.trackPage(
+          const QueueLibraryDbQuery(
+            source: 'local',
+            networkScope: {},
+            includeDevice: false,
+            includeSingleTrackAlbums: true,
+          ),
+        );
+        expect(empty.rows, isEmpty);
+      } finally {
+        await db.close();
+      }
+    },
+  );
 }

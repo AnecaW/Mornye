@@ -325,6 +325,8 @@ class QueueLibraryDbQuery {
   final String sortMode;
   final bool includeLocal;
   final bool deviceOnly;
+  final Set<String>? networkScope;
+  final bool includeDevice;
   final QueueLibraryDbCursor? cursor;
 
   const QueueLibraryDbQuery({
@@ -341,6 +343,8 @@ class QueueLibraryDbQuery {
     this.sortMode = 'latest',
     this.includeLocal = true,
     this.deviceOnly = false,
+    this.networkScope,
+    this.includeDevice = true,
     this.cursor,
   });
 }

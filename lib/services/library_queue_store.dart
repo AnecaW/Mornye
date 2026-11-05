@@ -260,6 +260,7 @@ class LibraryQueueStore {
     QueueLibraryDbQuery request,
   ) async {
     if (request.deviceOnly ||
+        request.networkScope != null ||
         sqlite.normalizeLookupText(request.searchQuery).isNotEmpty ||
         request.albumArtist != null ||
         request.quality != null ||
@@ -895,6 +896,19 @@ class LibraryQueueStore {
     required String lyricsKnownExpr,
     required String hasReplayGainExpr,
   }) {
+    if (request.networkScope case final scope?) {
+      final choices = <String>[];
+      if (request.includeDevice) {
+        choices.add(
+          "($filePathExpr NOT LIKE 'network://%' AND $filePathExpr NOT LIKE 'http://%' AND $filePathExpr NOT LIKE 'https://%')",
+        );
+      }
+      for (final id in scope) {
+        choices.add("$filePathExpr LIKE ? ESCAPE '\\'");
+        args.add('network://${_escapeLikePattern(id)}/%');
+      }
+      where.add(choices.isEmpty ? '0' : '(${choices.join(' OR ')})');
+    }
     if (request.deviceOnly) {
       for (final scheme in const ['network://%', 'http://%', 'https://%']) {
         where.add('$filePathExpr NOT LIKE ?');

@@ -1,4 +1,7 @@
 import 'dart:async';
+import 'package:mornye/providers/music_libraries_provider.dart';
+import 'package:mornye/screens/music_libraries_screen.dart';
+import 'package:mornye/screens/navidrome_library_screen.dart';
 import 'dart:io';
 import 'dart:ui' show ImageFilter;
 import 'package:device_info_plus/device_info_plus.dart';
@@ -713,6 +716,59 @@ class _MainShellState extends ConsumerState<MainShell>
   /// The Library pages under the Mornye desktop sidebar's Library heading,
   /// as in Music. Recently Added is the Library root.
   List<DesktopSidebarLink> _desktopLibraryLinks({required int queueCount}) {
+    final profile = ref.watch(musicLibrariesProvider).value?.active;
+    if (profile == null || !profile.all) {
+      final server = ref.watch(activeServerLibraryProvider);
+      return [
+        DesktopSidebarLink(
+          id: DesktopSidebarLink.libraryRootId,
+          icon: Icons.library_music,
+          label: profile?.name ?? context.l10n.navLibrary,
+        ),
+        if (server != null) ...const [
+          DesktopSidebarLink(
+            id: 'recent',
+            icon: Icons.schedule,
+            label: 'Recently added',
+          ),
+          DesktopSidebarLink(
+            id: 'artists',
+            icon: Icons.person_outline,
+            label: 'Artists',
+          ),
+          DesktopSidebarLink(
+            id: 'albums',
+            icon: Icons.album_outlined,
+            label: 'Albums',
+          ),
+          DesktopSidebarLink(
+            id: 'songs',
+            icon: Icons.music_note,
+            label: 'Songs',
+          ),
+          DesktopSidebarLink(
+            id: 'starredSongs',
+            icon: Icons.favorite_outline,
+            label: 'Favourite songs',
+          ),
+          DesktopSidebarLink(
+            id: 'playlists',
+            icon: Icons.playlist_play,
+            label: 'Server playlists',
+          ),
+          DesktopSidebarLink(
+            id: 'played',
+            icon: Icons.history,
+            label: 'Recently played albums',
+          ),
+          DesktopSidebarLink(
+            id: 'radio',
+            icon: Icons.radio,
+            label: 'Internet radio',
+          ),
+        ],
+      ];
+    }
     final l10n = context.l10n;
     return [
       DesktopSidebarLink(
@@ -752,6 +808,21 @@ class _MainShellState extends ConsumerState<MainShell>
   /// The page a desktop sidebar or rail link opens in the Library tab, or
   /// null for the Library root.
   Widget? _desktopLibraryPage(String id) {
+    final profile = ref.read(musicLibrariesProvider).value?.active;
+    if (profile == null || !profile.all) {
+      if (id == DesktopSidebarLink.libraryRootId) return null;
+      final server = ref.read(activeServerLibraryProvider);
+      if (server != null) {
+        return NavidromeLibraryScreen(
+          connection: server,
+          section: serverLibrarySectionForSidebar(id) ?? 'home',
+        );
+      }
+      if (profile?.local == true && profile!.connections.isEmpty) {
+        return const DeviceMusicScreen();
+      }
+      return const Scaffold(body: QueueTab());
+    }
     const playlistPrefix = 'playlist:';
     if (id.startsWith(playlistPrefix)) {
       return LibraryTracksFolderScreen(

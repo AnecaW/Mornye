@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:mornye/utils/logger.dart';
 import 'package:crypto/crypto.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:mornye/services/navidrome_library.dart';
@@ -66,6 +67,7 @@ class ServerListeningSession {
 class ServerScrobbleOutbox {
   ServerScrobbleOutbox({NetworkStorageService? storage})
     : _storage = storage ?? NetworkStorageService.instance;
+  static final _log = AppLogger('ServerPlaybackSync');
   static const _key = 'subsonic_scrobble_outbox_v1';
   static final instance = ServerScrobbleOutbox();
   final NetworkStorageService _storage;
@@ -128,8 +130,11 @@ class ServerScrobbleOutbox {
     return operation.then((_) => flush());
   }
 
-  Future<void> flush() =>
-      _flushing ??= _flush().whenComplete(() => _flushing = null);
+  Future<void> flush() => _flushing ??= _flush()
+      .catchError((Object error) {
+        _log.w('Playback reports remain pending (${error.runtimeType})');
+      })
+      .whenComplete(() => _flushing = null);
   Future<void> _flush() async {
     await _tail;
     final prefs = await SharedPreferences.getInstance();
@@ -157,8 +162,8 @@ class ServerScrobbleOutbox {
         });
         _tail = removal.catchError((Object _) {});
         await removal;
-      } catch (_) {
-        /* Retain failed submissions for playback/resume retry. */
+      } catch (error) {
+        _log.w('A playback submission remains pending (${error.runtimeType})');
       }
     }
   }

@@ -4,7 +4,7 @@ This feature branch extends the verified 5.3.1 fork release. It retains the exis
 
 ## Libraries
 
-The Library tab now has a persisted library selector. All music lists every saved connected source and device music in separate source groups. Create a named library, select its connections and whether it includes device music, then rename/reconfigure/delete it from the menu. Deleting a library never deletes files or server data. Selecting a server-only profile exposes only its configured connections. The server views retrieve their own account's artists, albums, songs, genres, playlists, favourites, recent/frequent albums and radio; they never merge the local index or another server's results. Device-track SQL excludes network and HTTP rows before pagination. The existing combined indexed view is available under All music > Indexed music.
+The Library tab now has a persisted library selector. All music lists every saved connected source and device music in source groups. All songs in this library combines paged server results with device/indexed-folder tracks, labels their source, publishes successful results incrementally and bounds concurrent source reads to four. Non-Subsonic folders must first be indexed through their existing source browser. Create a named library, select its connections and whether it includes device music, then rename/reconfigure/delete it from the menu. Deleting a library never deletes files or server data. Selecting a server-only profile exposes only its configured connections. Desktop sidebar shortcuts obey the selected profile; combined local playlists are hidden outside All music. The server views retrieve their own account's artists, albums, songs, genres, playlists, favourites, recent/frequent albums and radio; they never merge the local index or another server's results. Device-track SQL excludes network and HTTP rows before pagination. The existing combined indexed view is available under All music > Indexed music.
 
 Each server view supports refresh, foreground/resume refresh and a one-minute refresh while visible. Metadata remains account-scoped and cached for five minutes; failed refreshes preserve an already loaded view with a visible synchronization error. Large song/album lists load in pages. New profiles save connection IDs, not credentials; saved connections continue using the existing secure credential store.
 
@@ -37,3 +37,7 @@ References consulted:
 - https://www.subsonic.org/pages/api.jsp
 - https://github.com/navidrome/navidrome/blob/master/server/subsonic/playlists.go
 - https://www.navidrome.org/docs/developers/api-v1/
+
+## Local real-server acceptance
+
+An isolated Windows Navidrome 0.64.2 instance, bound only to loopback, passed API acceptance through Mornye's actual client: playlist duplicates/order, rename/delete, an external-edit conflict, song/album/artist stars, ratings, scrobble/play counts, recent albums and radio CRUD. A generated 1,002-track library passed unique paged listing, 100 random authenticated HTTP range streams, completed-cache offline resolution and the combined catalogue's 11-page traversal with an unselected account excluded. These are local API/transport measurements, not physical-iPhone audible-start or user-NAS acceptance. Temporary test-server processes were stopped after validation.

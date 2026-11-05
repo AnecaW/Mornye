@@ -1,7 +1,25 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:mornye/providers/library_collections_provider.dart';
+import 'package:mornye/widgets/desktop/desktop_navigation.dart';
 import 'package:mornye/providers/music_libraries_provider.dart';
+
+class _LocalCollections extends LibraryCollectionsNotifier {
+  @override
+  LibraryCollectionsState build() => LibraryCollectionsState(
+    isLoaded: true,
+    playlists: [
+      UserPlaylistCollection(
+        id: 'private',
+        name: 'Local playlist',
+        createdAt: DateTime(2026),
+        updatedAt: DateTime(2026),
+        tracks: [],
+      ),
+    ],
+  );
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -43,6 +61,27 @@ void main() {
     expect(container.read(musicLibrariesProvider).requireValue.selected, 'all');
     await expectLater(notifier.remove('all'), throwsArgumentError);
   });
+  test(
+    'desktop local playlists stay hidden in a server-only library',
+    () async {
+      final container = ProviderContainer(
+        overrides: [
+          libraryCollectionsProvider.overrideWith(_LocalCollections.new),
+        ],
+      );
+      addTearDown(container.dispose);
+      await container.read(musicLibrariesProvider.future);
+      expect(container.read(desktopSidebarPlaylistsProvider), hasLength(1));
+      await container
+          .read(musicLibrariesProvider.notifier)
+          .save(name: 'Server only', local: false, connections: {'server-one'});
+      expect(container.read(desktopSidebarPlaylistsProvider), isEmpty);
+      expect(serverLibrarySectionForSidebar('artists'), 'artists');
+      expect(serverLibrarySectionForSidebar('playlists'), 'playlists');
+      expect(serverLibrarySectionForSidebar('recent'), 'newest');
+      expect(serverLibrarySectionForSidebar('playlist:local-id'), isNull);
+    },
+  );
   test(
     'all music includes connected servers while single-server scope stays isolated',
     () {

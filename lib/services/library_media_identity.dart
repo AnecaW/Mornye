@@ -47,17 +47,23 @@ Track collectionTrackForMedia(
   MediaItem item,
   UnifiedLibraryItem? match, {
   CoverStore? covers,
-}) =>
-    match?.toTrack() ??
-    Track(
-      id: item.id,
-      name: item.title,
-      artistName: item.artist ?? '',
-      albumName: item.album ?? '',
-      coverUrl: _collectionCover(item, covers ?? CoverStore.instance),
-      duration: item.duration?.inSeconds ?? 0,
-      source: 'local',
-    );
+}) {
+  final source = subsonicCollectionSource(
+    item.extras?['source']?.toString() ?? item.id,
+  );
+  final track =
+      match?.toTrack() ??
+      Track(
+        id: item.id,
+        name: item.title,
+        artistName: item.artist ?? '',
+        albumName: item.album ?? '',
+        coverUrl: _collectionCover(item, covers ?? CoverStore.instance),
+        duration: item.duration?.inSeconds ?? 0,
+        source: 'local',
+      );
+  return source == null ? track : track.copyWith(id: source, source: source);
+}
 
 String? _collectionCover(MediaItem item, CoverStore covers) {
   final reference = item.extras?['artworkRef']?.toString();

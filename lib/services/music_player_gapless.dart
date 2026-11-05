@@ -217,8 +217,9 @@ class _MusicGapless {
     handler._networkRuntimeRetries = 0;
     handler._engineBuffering = false;
     handler._bufferingDeadline?.cancel();
-    if (next.isNetwork)
+    if (next.isNetwork) {
       unawaited(ServerScrobbleOutbox.instance.nowPlaying(next.source));
+    }
     handler.mediaItem.add(
       handler
           ._toMediaItem(next, resolvedSource: _nextIsCopy ? path : null)

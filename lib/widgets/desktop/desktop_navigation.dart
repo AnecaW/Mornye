@@ -1,3 +1,4 @@
+import 'package:mornye/providers/music_libraries_provider.dart';
 import 'dart:ui' show lerpDouble;
 
 import 'package:flutter/cupertino.dart' show CupertinoIcons;
@@ -68,7 +69,9 @@ final desktopSidebarLink = ValueNotifier<String?>(null);
 
 /// The user's playlists listed in the Mornye sidebar.
 final desktopSidebarPlaylistsProvider = Provider<List<UserPlaylistCollection>>(
-  (ref) => ref.watch(libraryCollectionsProvider.select((s) => s.playlists)),
+  (ref) => ref.watch(musicLibrariesProvider).value?.active.all == true
+      ? ref.watch(libraryCollectionsProvider.select((s) => s.playlists))
+      : const [],
 );
 
 /// The profile in the Mornye sidebar's account row, once it has loaded.

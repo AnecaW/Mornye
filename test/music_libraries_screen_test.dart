@@ -49,6 +49,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('Navidrome'), findsOneWidget);
+    expect(find.text('All songs in this library'), findsOneWidget);
     expect(find.text('Other server'), findsNothing);
     expect(find.text('Music on this device'), findsNothing);
     expect(find.text('Only Navidrome'), findsWidgets);

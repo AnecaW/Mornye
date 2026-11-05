@@ -1,5 +1,6 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:mornye/providers/server_favourite_provider.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:mornye/theme/mornye_theme.dart';
 import 'package:flutter/services.dart';
@@ -40,13 +41,27 @@ class TrackCollectionQuickActions extends ConsumerWidget {
   /// Track options: a bottom sheet (Material) or popover (Mornye) on phones
   /// and tablets, a context menu at [position] or under [context] on
   /// desktop.
-  static void showTrackOptionsSheet(
+  static Future<void> showTrackOptionsSheet(
     BuildContext context,
     WidgetRef ref,
     Track track, {
     bool hasLocalPlaybackCandidate = false,
     Offset? position,
-  }) {
+  }) async {
+    final source = track.id.startsWith('network://') ? track.id : track.source;
+    if (source?.startsWith('network://') == true) {
+      try {
+        await ref.read(serverFavouriteProvider(source!).future);
+      } catch (error) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('$error')));
+        }
+        return;
+      }
+      if (!context.mounted) return;
+    }
     if (isDesktopPlatform) {
       final origin =
           position ??
@@ -127,7 +142,12 @@ List<List<ContextMenuAction>> trackOptionMenuGroups(
   final l10n = context.l10n;
   final root = Navigator.of(context, rootNavigator: true).context;
   final collections = ref.read(libraryCollectionsProvider);
-  final isLoved = collections.isLoved(track);
+  final source = track.id.startsWith('network://')
+      ? track.id
+      : track.source ?? track.id;
+  final isLoved =
+      ref.read(serverFavouriteProvider(source)).value ??
+      collections.isLoved(track);
   final isInWishlist = collections.isInWishlist(track);
   final qualityVariantAction = resolveQualityVariantMenuAction(
     allowQualityVariants: ref.read(settingsProvider).allowQualityVariants,
@@ -252,9 +272,14 @@ class _TrackOptionsSheet extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final colorScheme = Theme.of(context).colorScheme;
 
-    final isLoved = ref.watch(
+    final localLoved = ref.watch(
       libraryCollectionsProvider.select((state) => state.isLoved(track)),
     );
+    final source = track.id.startsWith('network://')
+        ? track.id
+        : track.source ?? track.id;
+    final isLoved =
+        ref.watch(serverFavouriteProvider(source)).value ?? localLoved;
     final isInWishlist = ref.watch(
       libraryCollectionsProvider.select((state) => state.isInWishlist(track)),
     );

@@ -137,3 +137,37 @@ final musicLibrariesProvider =
 final libraryConnectionsProvider = FutureProvider<List<NetworkConnection>>(
   (ref) => NetworkStorageService.instance.connections(),
 );
+
+/// A single server-only profile can route desktop shortcuts without ever
+/// entering the combined on-device index.
+final activeServerLibraryProvider = Provider<NetworkConnection?>((ref) {
+  final profile = ref.watch(musicLibrariesProvider).value?.active;
+  if (profile == null ||
+      profile.all ||
+      profile.local ||
+      profile.connections.length != 1) {
+    return null;
+  }
+  return ref
+      .watch(libraryConnectionsProvider)
+      .value
+      ?.where(
+        (c) =>
+            profile.acceptsConnection(c.id) &&
+            c.protocol == NetworkProtocol.subsonic,
+      )
+      .firstOrNull;
+});
+String? serverLibrarySectionForSidebar(String id) => switch (id) {
+  'recent' => 'newest',
+  'played' => 'recent',
+  'radio' => 'radios',
+  'artists' ||
+  'albums' ||
+  'songs' ||
+  'playlists' ||
+  'starredSongs' ||
+  'starredAlbums' ||
+  'starredArtists' => id,
+  _ => null,
+};

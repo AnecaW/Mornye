@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:mornye/screens/music_library_tracks_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mornye/providers/music_libraries_provider.dart';
@@ -207,6 +208,20 @@ class MusicLibrariesScreen extends ConsumerWidget {
                 active.all
                     ? 'All connected sources. Server data stays scoped to its account.'
                     : 'Only the sources configured for this library.',
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.queue_music),
+              title: const Text('All songs in this library'),
+              subtitle: const Text(
+                'Combined selected sources, with source labels',
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute<void>(
+                  builder: (_) => MusicLibraryTracksScreen(profile: active),
+                ),
               ),
             ),
             if (active.all || active.local)

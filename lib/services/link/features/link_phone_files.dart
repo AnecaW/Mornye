@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:path/path.dart' as p;
 
 import 'package:audio_service/audio_service.dart' show MediaItem;
 import 'package:mornye/services/link/link_client_api.dart';
@@ -94,7 +95,7 @@ class LinkPhoneFiles {
     if (isContentUri(source)) {
       return LinkPhoneFile(fileId: linkFileIdFor(source, 0), source: source);
     }
-    if (!source.startsWith('/')) return null;
+    if (!p.isAbsolute(source)) return null;
     final extension = linkUploadExtensionOf(source);
     if (extension == null) return null;
     try {
