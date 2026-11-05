@@ -14,6 +14,7 @@ final class AudioPlayersStreamHandler {
   func onDuration(millis: Int) {}
   func onComplete() {}
   func dispose() {}
+  func onError(code: String, message: String, details: String) {}
 }
 
 @main struct AccurateSeekTests {

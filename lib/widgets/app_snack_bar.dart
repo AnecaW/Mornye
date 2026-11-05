@@ -75,11 +75,7 @@ class _TransientSnackBar extends SnackBar {
 /// Reports a failure to open a local file with a plain Material snackbar.
 void showCannotOpenFileSnackBar(BuildContext context, Object error) {
   ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(
-      content: Text(
-        context.l10n.snackbarCannotOpenFile(context.friendlyError(error)),
-      ),
-    ),
+    SnackBar(content: Text(context.l10n.playbackStreamUnavailable)),
   );
 }
 

@@ -6,6 +6,12 @@ import 'package:mornye/utils/desktop_platform.dart';
 /// Transport state reported by a [PlaybackDeck].
 enum PlaybackDeckState { stopped, playing, paused, completed, disposed }
 
+/// Optional native buffering observation; existing engines keep their behavior.
+abstract interface class PlaybackBufferingDeck {
+  bool get isBuffering;
+  Stream<bool> get onBufferingChanged;
+}
+
 /// The engine behind `PlaybackDependencies.createDeck`.
 enum PlaybackEngine {
   /// audioplayers: Android, iOS and macOS, where the forks carry the

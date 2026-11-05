@@ -42,14 +42,15 @@ void main() {
       final failed = PlaybackState(
         processingState: AudioProcessingState.error,
         errorCode: 1,
-        errorMessage: 'Audio output failed',
+        errorMessage:
+            'Failed to set source. AVPlayerItem.Status.failed on setSourceUrl: Failed to set playerItem token=secret',
       );
       states.add(failed);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 350));
       await tester.pumpAndSettle();
       expect(
-        find.text('Cannot open file: Audio output failed'),
+        find.text('Stream temporarily unavailable. Try again.'),
         findsOneWidget,
       );
       expect(
@@ -60,7 +61,10 @@ void main() {
       await tester.pumpAndSettle();
       states.add(failed.copyWith(updatePosition: const Duration(seconds: 1)));
       await tester.pumpAndSettle();
-      expect(find.text('Cannot open file: Audio output failed'), findsNothing);
+      expect(
+        find.text('Stream temporarily unavailable. Try again.'),
+        findsNothing,
+      );
       expect(tester.takeException(), isNull);
     });
 
@@ -106,17 +110,26 @@ void main() {
         states.add(ready);
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 400));
-        expect(find.text('Cannot open file: Cancelled source'), findsNothing);
+        expect(
+          find.text('Stream temporarily unavailable. Try again.'),
+          findsNothing,
+        );
 
         // A lasting failure is still visible, then clears when playback works.
         states.add(failed);
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 350));
         await tester.pumpAndSettle();
-        expect(find.text('Cannot open file: Cancelled source'), findsOneWidget);
+        expect(
+          find.text('Stream temporarily unavailable. Try again.'),
+          findsOneWidget,
+        );
         states.add(ready);
         await tester.pumpAndSettle();
-        expect(find.text('Cannot open file: Cancelled source'), findsNothing);
+        expect(
+          find.text('Stream temporarily unavailable. Try again.'),
+          findsNothing,
+        );
         expect(tester.takeException(), isNull);
       },
     );

@@ -127,7 +127,7 @@ PlaybackDeckState _deckState(PlayerState state) => switch (state) {
 /// The audioplayers deck (Android, iOS, macOS), with Android's native USB
 /// path. Each prepare owns a token so delayed native events cannot affect a
 /// new song.
-class AudioplayersPlaybackDeck implements PlaybackDeck {
+class AudioplayersPlaybackDeck implements PlaybackDeck, PlaybackBufferingDeck {
   AudioplayersPlaybackDeck({
     required String playerId,
     bool? nativeAvailable,
@@ -155,6 +155,12 @@ class AudioplayersPlaybackDeck implements PlaybackDeck {
         (event) {
           if (_direct || _disposed) return;
           switch (event.eventType) {
+            case AudioEventType.log:
+              if (event.logMessage == 'mornye.buffering=1' ||
+                  event.logMessage == 'mornye.buffering=0') {
+                _buffering = event.logMessage == 'mornye.buffering=1';
+                _bufferingEvents.add(_buffering);
+              }
             case AudioEventType.duration:
               _durations.add(event.duration!);
             case AudioEventType.complete:
@@ -240,6 +246,12 @@ class AudioplayersPlaybackDeck implements PlaybackDeck {
     }
   }
 
+  bool _buffering = false;
+  final _bufferingEvents = StreamController<bool>.broadcast();
+  @override
+  bool get isBuffering => _buffering;
+  @override
+  Stream<bool> get onBufferingChanged => _bufferingEvents.stream;
   final bool _nativeAvailable;
   final _states = StreamController<PlaybackDeckState>.broadcast();
   final _durations = StreamController<Duration>.broadcast();
@@ -453,10 +465,11 @@ class AudioplayersPlaybackDeck implements PlaybackDeck {
     // stop mode retains the native source. Android can reuse the same
     // /proc/self/fd number for a different SAF file, so URL equality must not
     // reuse the previous MediaPlayer or its pending preparation callbacks.
-    await _ordinary.release();
-    _ordinaryError = null;
     final abandoned = _ordinaryPreparation = Completer<void>();
     try {
+      await _ordinary.release();
+      if (abandoned.isCompleted || _disposed) return;
+      _ordinaryError = null;
       // A network source waits for its server, up to the plugin's prepare
       // timeout; a newer song abandons it instead of queueing behind it.
       await Future.any([_ordinary.setSource(source), abandoned.future]);
@@ -663,5 +676,6 @@ class AudioplayersPlaybackDeck implements PlaybackDeck {
     await _durations.close();
     await _positions.close();
     await _completions.close();
+    await _bufferingEvents.close();
   }
 }

@@ -1,4 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
+import 'package:mornye/services/playback_load.dart';
+import 'package:mornye/services/music_playback_deck.dart';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
@@ -85,7 +88,7 @@ void main() {
       final player = AudioPlayer();
       addTearDown(player.dispose);
       await player.setVolume(0);
-      final url = await storage.resolve(source);
+      final url = await storage.preparePlayback(source, PlaybackLoad());
       expect(Uri.parse(url).query, isEmpty);
       await player
           .setSource(UrlSource(url))
@@ -140,4 +143,52 @@ void main() {
       await player.pause();
     });
   }
+  testWidgets(
+    'native AVPlayer cancels a blocked NAS load and survives 20 source changes',
+    (tester) async {
+      final server = await SubsonicFixture.start();
+      addTearDown(server.close);
+      server.audio = _wave();
+      server.song['suffix'] = 'wav';
+      final storage = NetworkStorageService(
+        read: () async => null,
+        write: (_) async {},
+        ensureAccess: (_) async {},
+      );
+      addTearDown(storage.dispose);
+      await storage.save(server.connection());
+      final source = NetworkStorageService.source(
+        'fixture',
+        SubsonicSong(server.song).path,
+      );
+      final deck = AudioplayersPlaybackDeck(
+        playerId: 'native-cancellation-stress',
+        nativeAvailable: false,
+        equalizerAvailable: false,
+      );
+      addTearDown(deck.dispose);
+      await deck.configureOutput();
+      await deck.setVolume(0);
+      server.blockMethod = 'stream';
+      final initial = deck.setNetworkSource(await storage.resolve(source));
+      await server.held.future.timeout(const Duration(seconds: 10));
+      await deck.cancelPreparation().timeout(const Duration(seconds: 2));
+      await initial.timeout(const Duration(seconds: 2));
+      server.blockMethod = null;
+      server.release.complete();
+      for (var i = 0; i < 20; i++) {
+        final preparing = deck.setNetworkSource(await storage.resolve(source));
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        await deck.cancelPreparation();
+        await preparing.timeout(const Duration(seconds: 2));
+      }
+      await deck.setNetworkSource(
+        await storage.preparePlayback(source, PlaybackLoad()),
+      );
+      await deck.resume();
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      expect((await deck.getCurrentPosition())!.inMilliseconds, greaterThan(0));
+      await deck.pause();
+    },
+  );
 }

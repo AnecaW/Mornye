@@ -44,11 +44,20 @@ class _PlaybackFeedbackState extends ConsumerState<PlaybackFeedback> {
           }
           final notice = _errorNotice = showAppSnackBar(
             context,
-            content: Text(
-              context.l10n.snackbarCannotOpenFile(
-                context.friendlyError(message),
-              ),
+            action: SnackBarAction(
+              label: context.l10n.playbackTryAgain,
+              onPressed: () => ref
+                  .read(musicPlayerControllerProvider)
+                  .togglePlayPause(false),
             ),
+            content: Text(switch (message) {
+              'playback_network' => context.l10n.playbackServerUnavailable,
+              'playback_authentication' => context.l10n.playbackSignInRequired,
+              'playback_missing' => context.l10n.playbackTrackMissing,
+              'playback_invalidAudio' => context.l10n.playbackInvalidAudio,
+              'playback_cache' => context.l10n.playbackCacheUnavailable,
+              _ => context.l10n.playbackStreamUnavailable,
+            }),
           );
           unawaited(
             notice.closed.then((_) {

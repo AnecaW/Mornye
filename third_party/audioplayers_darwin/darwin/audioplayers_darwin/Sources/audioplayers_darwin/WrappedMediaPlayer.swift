@@ -51,6 +51,9 @@ enum ReleaseMode: String {
 
   private var completionObserver: TimeObserver?
   private var playerItemStatusObservation: NSKeyValueObservation?
+  private let preparationTimeout: TimeInterval
+  private var preparationDeadline: Task<Void, Never>?
+  private var playerTimeControlObservation: NSKeyValueObservation?
   private var playerItemStatusContinuation: CheckedContinuation<Void, Error>?
 
   init(
@@ -60,8 +63,10 @@ enum ReleaseMode: String {
     playbackRate: Double = defaultPlaybackRate,
     volume: Double = defaultVolume,
     releaseMode: ReleaseMode = defaultReleaseMode,
-    url: String? = nil
+    url: String? = nil,
+    preparationTimeout: TimeInterval = 15
   ) {
+    self.preparationTimeout = preparationTimeout
     self.reference = reference
     self.eventHandler = eventHandler
     self.player = player
@@ -77,6 +82,13 @@ enum ReleaseMode: String {
     self.volume = volume
     self.releaseMode = releaseMode
     self.url = url
+    self.playerTimeControlObservation = player.observe(\AVPlayer.timeControlStatus) { [weak self] _, _ in
+      Task { @MainActor [weak self] in
+        guard let self, self.player.currentItem != nil else { return }
+        let waiting = self.player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+        self.eventHandler.onLog(message: waiting ? "mornye.buffering=1" : "mornye.buffering=0")
+      }
+    }
   }
 
   func setSourceUrl(
@@ -214,7 +226,7 @@ enum ReleaseMode: String {
       let parsedUrl = isLocal
         ? URL(fileURLWithPath: url.deletingPrefix("file://")) : URL(string: url)
     else {
-      throw AudioPlayerError.error("Url not valid: \(url)")
+      throw AudioPlayerError.error("Invalid playback URL")
     }
 
     // A file still being written (the app marks its URL) cannot be indexed:
@@ -254,19 +266,35 @@ enum ReleaseMode: String {
   ) async throws {
     try await withCheckedThrowingContinuation { continuation in
       playerItemStatusContinuation = continuation
+      let timeoutNanos = UInt64(max(0.01, preparationTimeout) * 1_000_000_000)
+      preparationDeadline = Task { @MainActor [weak self, weak playerItem] in
+        do { try await Task.sleep(nanoseconds: timeoutNanos) } catch { return }
+        guard let self, let playerItem, self.player.currentItem === playerItem,
+          self.playerItemStatusContinuation != nil else { return }
+        self.finishPlayerItemPreparation(.failure(NSError(domain: "MornyePlayback", code: -1001)))
+        self.reset()
+      }
       playerItemStatusObservation = playerItem.observe(\AVPlayerItem.status) {
         [weak self] (playerItem, change) in
         let status = playerItem.status
         let message = "player status: \(status), change: \(change)"
         Task { @MainActor [weak self, weak playerItem] in
           guard let self, let playerItem, self.player.currentItem === playerItem else { return }
+          guard playerItem.status == status else { return }
           self.eventHandler.onLog(message: message)
           switch status {
           case .readyToPlay:
             self.finishPlayerItemPreparation(.success(()))
           case .failed:
-            self.finishPlayerItemPreparation(
-              .failure(AudioPlayerError.error("Failed to set playerItem")))
+            let preparing = self.playerItemStatusContinuation != nil
+            let failure = playerItem.error ?? NSError(domain: "MornyePlayback", code: -1)
+            let diagnostic = failure as NSError
+            self.eventHandler.onLog(message: "AVPlayer failed domain=\(diagnostic.domain) code=\(diagnostic.code)")
+            self.finishPlayerItemPreparation(.failure(failure))
+            if !preparing {
+              self.eventHandler.onError(code: "DarwinAudioError", message: "Playback unavailable",
+                details: "domain=\(diagnostic.domain) code=\(diagnostic.code)")
+            }
             self.reset()
           default:
             // Do not resume continuation yet.
@@ -280,8 +308,12 @@ enum ReleaseMode: String {
   }
 
   private func finishPlayerItemPreparation(_ result: Result<Void, Error>) {
-    playerItemStatusObservation?.invalidate()
-    playerItemStatusObservation = nil
+    preparationDeadline?.cancel()
+    preparationDeadline = nil
+    if case .failure = result {
+      playerItemStatusObservation?.invalidate()
+      playerItemStatusObservation = nil
+    }
     let continuation = playerItemStatusContinuation
     playerItemStatusContinuation = nil
     continuation?.resume(with: result)

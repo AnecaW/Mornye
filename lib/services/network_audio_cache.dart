@@ -23,6 +23,7 @@ class NetworkAudioCache {
 
   final Future<Directory> Function() _directory;
   final _pending = <String, Future<void>>{};
+  final _verified = <String, ({int size, DateTime modified})>{};
   final _fills = <String, NetworkCacheFill>{};
   Future<void> _background = Future.value();
   bool enabled = true;
@@ -88,9 +89,39 @@ class NetworkAudioCache {
   Future<File?> lookup(String key, String suffix, {bool touch = true}) async {
     final file = File(p.join((await _directory()).path, _name(key, suffix)));
     if (!await file.exists()) return null;
-    if (await file.length() == 0) return null;
-    if (touch) await file.setLastModified(DateTime.now());
-    return file;
+    final proof = File('${file.path}.proof');
+    try {
+      final stat = await file.stat();
+      final verified = _verified[file.path];
+      if (stat.size <= 0 ||
+          verified == null ||
+          verified.size != stat.size ||
+          verified.modified != stat.modified) {
+        final expected = jsonDecode(await proof.readAsString()) as Map;
+        if (expected['bytes'] != stat.size ||
+            expected['sha256'] !=
+                (await sha256.bind(file.openRead()).first).toString()) {
+          throw const FormatException('Unverified audio cache');
+        }
+      }
+      if (touch) await file.setLastModified(DateTime.now());
+      final current = await file.stat();
+      _verified[file.path] = (size: current.size, modified: current.modified);
+      return file;
+    } on Object {
+      _verified.remove(file.path);
+      try {
+        await file.delete();
+      } on FileSystemException {
+        /* Expendable cache only. */
+      }
+      try {
+        await proof.delete();
+      } on FileSystemException {
+        /* Already gone. */
+      }
+      return null;
+    }
   }
 
   /// At most one foreground and one background cache fill. Playback itself
@@ -135,6 +166,12 @@ class NetworkAudioCache {
         if (await partial.length() <= 0 || await partial.length() > maxBytes) {
           throw const FileSystemException('Audio exceeds cache limit');
         }
+        final digest = (await sha256.bind(partial.openRead()).first).toString();
+        final length = await partial.length();
+        await File('${target.path}.proof').writeAsString(
+          jsonEncode({'bytes': length, 'sha256': digest}),
+          flush: true,
+        );
         await partial.rename(target.path);
         fill.published = true;
         await trim(keep: target.path);
@@ -148,6 +185,10 @@ class NetworkAudioCache {
         }
         _fills.remove(key);
         if (await partial.exists()) await partial.delete();
+        if (!fill.published) {
+          final proof = File('${target.path}.proof');
+          if (await proof.exists()) await proof.delete();
+        }
       }
     }
 
@@ -166,18 +207,23 @@ class NetworkAudioCache {
     if (!await dir.exists()) return 0;
     var bytes = 0;
     await for (final item in dir.list(followLinks: false)) {
-      if (item is File) bytes += await item.length();
+      if (item is File && !item.path.endsWith('.proof'))
+        bytes += await item.length();
     }
     return bytes;
   }
 
   Future<void> remove(String key, String suffix) async {
     final file = File(p.join((await _directory()).path, _name(key, suffix)));
+    _verified.remove(file.path);
     if (await file.exists()) await file.delete();
+    final proof = File('${file.path}.proof');
+    if (await proof.exists()) await proof.delete();
   }
 
   Future<void> clear() async {
     _epoch++;
+    _verified.clear();
     await Future.wait(
       _pending.values.toList().map((f) => f.catchError((Object _) {})),
     );
@@ -194,7 +240,10 @@ class NetworkAudioCache {
     final files = <({File file, FileStat stat})>[];
     var bytes = 0;
     await for (final item in dir.list(followLinks: false)) {
-      if (item is! File || item.path.endsWith('.part')) continue;
+      if (item is! File ||
+          item.path.endsWith('.part') ||
+          item.path.endsWith('.proof'))
+        continue;
       final stat = await item.stat();
       files.add((file: item, stat: stat));
       bytes += stat.size;
@@ -207,6 +256,9 @@ class NetworkAudioCache {
       }
       try {
         await item.file.delete();
+        _verified.remove(item.file.path);
+        final proof = File('${item.file.path}.proof');
+        if (await proof.exists()) await proof.delete();
         bytes -= item.stat.size;
       } on FileSystemException {
         /* A playing file can be locked on Windows. */

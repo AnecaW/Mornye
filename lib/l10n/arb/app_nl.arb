@@ -8021,5 +8021,12 @@
   "libraryScanFinished": "Scan voltooid",
   "libraryScanStopped": "Scan geannuleerd. Bestaande muziek blijft bewaard.",
   "libraryScanFailed": "Scan mislukt. Eerder opgeslagen muziek blijft bewaard.",
-  "libraryScanPhaseEstimate": "Geschatte tijd voor deze fase"
+  "libraryScanPhaseEstimate": "Geschatte tijd voor deze fase",
+  "playbackStreamUnavailable": "Stream tijdelijk niet beschikbaar. Probeer opnieuw.",
+  "playbackServerUnavailable": "De muziekserver is niet bereikbaar. Controleer je verbinding en probeer opnieuw.",
+  "playbackSignInRequired": "Controleer je aanmeldgegevens voor de muziekserver.",
+  "playbackInvalidAudio": "Dit audiobestand kan niet worden afgespeeld.",
+  "playbackTrackMissing": "Dit nummer is niet meer beschikbaar.",
+  "playbackCacheUnavailable": "De opgeslagen audio kan niet worden gelezen. Probeer opnieuw te streamen.",
+  "playbackTryAgain": "Opnieuw proberen"
 }

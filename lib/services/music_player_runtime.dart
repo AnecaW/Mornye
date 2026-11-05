@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:mornye/services/playback_load.dart';
 import 'dart:io';
 
 import 'package:audio_service/audio_service.dart';
@@ -59,7 +60,8 @@ class PlaybackDependencies {
     this.audioSession = _getAudioSession,
     this.readMetadata = PlatformBridge.readFileMetadata,
     this.readNetworkMetadata = _readNetworkMetadata,
-    this.resolveNetworkSource = _resolveNetworkSource,
+    Future<String> Function(String)? resolveNetworkSource,
+    Future<String> Function(String, PlaybackLoad)? prepareNetworkSource,
     this.networkSourceReachable = _networkSourceReachable,
     this.recoverMissingFile = _recoverMissingFile,
     this.recoverMovedDownload = _recoverMovedDownload,
@@ -83,7 +85,11 @@ class PlaybackDependencies {
     this.notificationChannel = const MethodChannel(
       'com.zarz.mornye/playback_notification',
     ),
-  }) : _sessionDatabase = sessionDatabase,
+  }) : resolveNetworkSource = resolveNetworkSource ?? _resolveNetworkSource,
+       prepareNetworkSource =
+           prepareNetworkSource ??
+           (resolveNetworkSource == null ? _prepareNetworkSource : null),
+       _sessionDatabase = sessionDatabase,
        _libraryDatabase = libraryDatabase,
        _historyDatabase = historyDatabase,
        _collectionsDatabase = collectionsDatabase,
@@ -104,6 +110,7 @@ class PlaybackDependencies {
   readMetadata;
   final Future<Map<String, dynamic>> Function(String) readNetworkMetadata;
   final Future<String> Function(String) resolveNetworkSource;
+  final Future<String> Function(String, PlaybackLoad)? prepareNetworkSource;
 
   /// Whether a `network://` Library song can play now, as autoplay asks
   /// before queueing it.
@@ -189,6 +196,10 @@ class PlaybackDependencies {
       SongAnalysis(library: library);
   static Future<Map<String, dynamic>> _readNetworkMetadata(String source) =>
       NetworkMetadataService.instance.read(source);
+  static Future<String> _prepareNetworkSource(
+    String source,
+    PlaybackLoad load,
+  ) => NetworkStorageService.instance.preparePlayback(source, load);
   static Future<String> _resolveNetworkSource(String source) =>
       NetworkStorageService.instance.resolve(source);
   static Future<bool> _networkSourceReachable(String source) =>

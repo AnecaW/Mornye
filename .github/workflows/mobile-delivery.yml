@@ -225,6 +225,17 @@ jobs:
           path: dist/ios/
           if-no-files-found: error
           retention-days: 30
+      - name: Test native AVPlayer lifecycle
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          native=third_party/audioplayers_darwin/darwin/audioplayers_darwin/Sources/audioplayers_darwin
+          mkdir -p .tmp/native-tests
+          xcrun swiftc -parse-as-library -target "$(uname -m)-apple-macos14.0" \
+            "$native/WrappedMediaPlayer.swift" "$native/Utils.swift" "$native/AudioPlayerError.swift" \
+            "$native/EqualizerAudioTap.swift" "$native/EqualizerDSP.swift" \
+            third_party/audioplayers_darwin/tests/SourceLifecycleTests.swift -o .tmp/native-tests/source-lifecycle
+          .tmp/native-tests/source-lifecycle
       - name: Test AVPlayer with authenticated Subsonic streams
         timeout-minutes: 20
         run: |
@@ -235,7 +246,7 @@ jobs:
           ffmpeg -v error -f lavfi -i sine=frequency=440:duration=2 -ar 44100 -ac 1 .tmp/audio/tone.mp3
           # Only boot runtimes supported by the selected Xcode simulator SDK.
           export SIMULATOR_SDK_VERSION="$(xcrun --sdk iphonesimulator --show-sdk-version)"
-          device=$(xcrun simctl list devices available --json | python3 -c 'import json,os,re,sys; sdk=tuple(map(int,(os.environ["SIMULATOR_SDK_VERSION"].split(".")+["0"])[:2])); groups=json.load(sys.stdin)["devices"]; candidates=[(tuple(map(int,re.search(r"iOS-(\d+)-(\d+)",key).groups())),group) for key,group in groups.items() if re.search(r"iOS-(\d+)-(\d+)",key)]; print(next(d["udid"] for version,group in sorted(candidates,key=lambda item:item[0],reverse=True) if version[0]==sdk[0] and version<=sdk for d in group if "iPhone" in d["name"]))')
+          device=$(xcrun simctl list devices available --json | python3 -c 'import json,os,re,sys; sdk=tuple(map(int,(os.environ["SIMULATOR_SDK_VERSION"].split(".")+["0"])[:2])); groups=json.load(sys.stdin)["devices"]; candidates=[(tuple(map(int,re.search(r"iOS-(\d+)-(\d+)",key).groups())),group) for key,group in groups.items() if re.search(r"iOS-(\d+)-(\d+)",key)]; print(next(d["udid"] for version,group in sorted(candidates,key=lambda item:item[0]) if version[0]==sdk[0] and version<=sdk for d in group if "iPhone" in d["name"]))')
           simulator="$(xcode-select -p)/Applications/Simulator.app"
           if [ -d "$simulator" ]; then
             open -a "$simulator" --args -CurrentDeviceUDID "$device" || true

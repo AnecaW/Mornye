@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:mornye/services/playback_load.dart';
 import 'dart:convert';
 import 'dart:io';
 
@@ -653,6 +654,234 @@ const _track = PlayableMedia(
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  for (final count in [5, 10, 20]) {
+    test(
+      '$count rapid skips supersede a blocked NAS resolve and only start the final selection',
+      () async {
+        final blocked = Completer<String>();
+        final entered = Completer<void>();
+        final decks = <_Deck>[];
+        final runtime = _runtime(
+          decks: decks,
+          resolveNetworkSource: (source) {
+            if (source.endsWith('/1.flac')) {
+              if (!entered.isCompleted) entered.complete();
+              return blocked.future;
+            }
+            return Future.value(
+              'https://stream.test/${source.split('/').last}',
+            );
+          },
+        );
+        final handler = await runtime.initialize();
+        final tracks = [
+          for (var i = 0; i < count + 2; i++)
+            PlayableMedia(
+              id: 'nas$i',
+              source: 'network://nas/$i.flac',
+              title: 'Track $i',
+              artist: 'Artist',
+            ),
+        ];
+        await handler.setQueueAndPlay(tracks);
+        final first = handler.skipToNext();
+        await entered.future;
+        final requests = [
+          first,
+          for (var i = 1; i < count; i++) handler.skipToNext(),
+        ];
+        expect(handler.mediaItem.value?.id, 'nas$count');
+        await Future.wait(requests).timeout(const Duration(seconds: 2));
+        expect(
+          decks.single.sources.last,
+          'stream https://stream.test/$count.flac',
+        );
+        final sourceCount = decks.single.sources.length;
+        blocked.complete('https://stream.test/1.flac');
+        await _settle();
+        await _settle();
+        expect(decks.single.sources.length, sourceCount);
+        expect(handler.mediaItem.value?.id, 'nas$count');
+        expect(handler.playbackState.value.playing, isTrue);
+      },
+    );
+  }
+  test(
+    'transient NAS preparation errors recover within three attempts',
+    () async {
+      var attempts = 0;
+      final decks = <_Deck>[];
+      final handler = await _runtime(
+        decks: decks,
+        resolveNetworkSource: (source) async {
+          if (++attempts < 3) throw const SocketException('offline');
+          return 'https://stream.test/song.flac';
+        },
+      ).initialize();
+      await handler.setQueueAndPlay([
+        const PlayableMedia(
+          id: 'nas',
+          source: 'network://nas/song.flac',
+          title: 'NAS',
+          artist: 'Artist',
+        ),
+      ]);
+      expect(attempts, 3);
+      expect(handler.playbackState.value.playing, isTrue);
+      expect(handler.playbackState.value.errorMessage, isNull);
+    },
+  );
+  test(
+    'invalid authentication is not retried and only a safe category reaches UI state',
+    () async {
+      var attempts = 0;
+      final handler = await _runtime(
+        resolveNetworkSource: (source) async {
+          attempts++;
+          throw const PlaybackFailure(PlaybackFailureKind.authentication);
+        },
+      ).initialize();
+      await handler.setQueueAndPlay([
+        const PlayableMedia(
+          id: 'nas',
+          source: 'network://nas/song.flac',
+          title: 'NAS',
+          artist: 'Artist',
+        ),
+      ]);
+      expect(attempts, 1);
+      expect(handler.playbackState.value.playing, isFalse);
+      expect(
+        handler.playbackState.value.errorMessage,
+        'playback_authentication',
+      );
+      expect(
+        handler.playbackState.value.processingState,
+        AudioProcessingState.error,
+      );
+    },
+  );
+
+  for (final count in [5, 10, 20]) {
+    test(
+      '$count rapid shuffle skips keep the visible queue order despite a slow NAS',
+      () async {
+        final blocked = Completer<String>(), entered = Completer<void>();
+        String? slow;
+        final decks = <_Deck>[];
+        final handler = await _runtime(
+          decks: decks,
+          resolveNetworkSource: (source) {
+            if (source == slow) {
+              if (!entered.isCompleted) entered.complete();
+              return blocked.future;
+            }
+            return Future.value(
+              'https://stream.test/${source.split('/').last}',
+            );
+          },
+        ).initialize();
+        await handler.setQueueAndPlay([
+          for (var i = 0; i < count + 2; i++)
+            PlayableMedia(
+              id: 'shuffle$i',
+              source: 'network://nas/$i.flac',
+              title: 'Song $i',
+              artist: 'Artist',
+            ),
+        ]);
+        await handler.setShuffleMode(AudioServiceShuffleMode.all);
+        final order = List<MediaItem>.of(handler.queue.value);
+        slow = order[1].extras!['source'] as String;
+        final first = handler.skipToNext();
+        await entered.future;
+        final requests = [
+          first,
+          for (var i = 1; i < count; i++) handler.skipToNext(),
+        ];
+        expect(handler.mediaItem.value?.id, order[count].id);
+        await Future.wait(requests).timeout(const Duration(seconds: 2));
+        expect(handler.mediaItem.value?.id, order[count].id);
+        expect(handler.queue.value.map((x) => x.id), order.map((x) => x.id));
+        blocked.complete('https://stream.test/stale.flac');
+        await _settle();
+        expect(decks.single.sources.last, isNot(contains('stale')));
+        expect(handler.playbackState.value.playing, isTrue);
+      },
+    );
+  }
+  test(
+    'rapid Previous and Next while buffering end on the selected track',
+    () async {
+      final pending = Completer<String>(), entered = Completer<void>();
+      final decks = <_Deck>[];
+      final handler = await _runtime(
+        decks: decks,
+        resolveNetworkSource: (source) {
+          if (source.endsWith('/1.flac')) {
+            if (!entered.isCompleted) entered.complete();
+            return pending.future;
+          }
+          return Future.value('https://stream.test/${source.split('/').last}');
+        },
+      ).initialize();
+      await handler.setQueueAndPlay([
+        for (var i = 0; i < 5; i++)
+          PlayableMedia(
+            id: 'mixed$i',
+            source: 'network://nas/$i.flac',
+            title: 'Song $i',
+            artist: 'Artist',
+          ),
+      ]);
+      final first = handler.skipToNext();
+      await entered.future;
+      await Future.wait([
+        first,
+        handler.skipToNext(),
+        handler.skipToPrevious(),
+        handler.skipToNext(),
+        handler.skipToNext(),
+        handler.skipToPrevious(),
+      ]).timeout(const Duration(seconds: 2));
+      expect(handler.mediaItem.value?.id, 'mixed2');
+      pending.complete('https://stream.test/stale.flac');
+      await _settle();
+      expect(decks.single.sources.last, 'stream https://stream.test/2.flac');
+    },
+  );
+  test(
+    'offline retries terminate and playback recovers without restarting the runtime',
+    () async {
+      var online = false, requests = 0;
+      final handler = await _runtime(
+        resolveNetworkSource: (source) async {
+          requests++;
+          if (!online) throw const SocketException('offline');
+          return 'https://stream.test/restored.flac';
+        },
+      ).initialize();
+      await handler.setQueueAndPlay([
+        const PlayableMedia(
+          id: 'nas',
+          source: 'network://nas/song.flac',
+          title: 'Song',
+          artist: 'Artist',
+        ),
+      ]);
+      expect(requests, 3);
+      expect(
+        handler.playbackState.value.processingState,
+        AudioProcessingState.error,
+      );
+      expect(handler.playbackState.value.errorMessage, 'playback_network');
+      online = true;
+      await handler.play();
+      expect(handler.playbackState.value.playing, isTrue);
+      expect(handler.playbackState.value.errorMessage, isNull);
+    },
+  );
 
   test(
     'Android updates every queued copy before playing a moved download',
@@ -1611,10 +1840,7 @@ void main() {
     final handler = await runtime.initialize();
     await handler.setQueueAndPlay([_track]);
     expect(decks.single.sources, isEmpty);
-    expect(
-      handler.playbackState.value.errorMessage,
-      contains('Audio file is unavailable'),
-    );
+    expect(handler.playbackState.value.errorMessage, 'playback_missing');
   });
 
   test('denied or failed audio focus cannot resume a paused source', () async {

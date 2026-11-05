@@ -1,5 +1,7 @@
 import 'package:mornye/services/server_scrobbling.dart';
 import 'dart:async';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:mornye/services/playback_load.dart';
 import 'dart:io';
 import 'dart:math';
 
@@ -27,7 +29,10 @@ import 'package:mornye/services/cover_store.dart';
 import 'package:mornye/services/music_player_runtime.dart';
 import 'package:mornye/services/music_playback_deck.dart';
 import 'package:mornye/services/network_storage_service.dart'
-    show subsonicSongIdFromPath, NetworkStorageService;
+    show
+        subsonicSongIdFromPath,
+        NetworkStorageService,
+        NetworkPlaybackPreparation;
 import 'package:mornye/services/playback_deck.dart';
 import 'package:mornye/services/automix_analysis.dart';
 import 'package:mornye/services/automix_phase_lock.dart';
@@ -142,6 +147,18 @@ class MusicPlayerHandler extends BaseAudioHandler
   final List<StreamSubscription<dynamic>> _subscriptions = [];
   int _index = -1;
   int _playRequestGeneration = 0;
+  PlaybackLoad? _activeLoad;
+  int _unavailableShuffleSkips = 0;
+  int _networkRecoveries = 0;
+  bool _recoveringNetwork = false;
+  int? _waitingForNetworkGeneration;
+  int _nextPlayGeneration() {
+    _activeLoad?.cancel();
+    _activeLoad = null;
+    _waitingForNetworkGeneration = null;
+    return ++_playRequestGeneration;
+  }
+
   final _metadataChanges = <String, Object>{};
   String? _activeResolvedPath;
   bool _disposed = false;
@@ -283,9 +300,13 @@ class MusicPlayerHandler extends BaseAudioHandler
     );
     _player = _dependencies.createDeck('music-player');
     _normalizationCache = PlaybackNormalizationCache(
-      readMetadata: _dependencies.readMetadata,
+      readMetadata: (path, {displayName}) => path.startsWith('network://')
+          ? _dependencies
+                .readNetworkMetadata(path)
+                .timeout(const Duration(seconds: 5))
+          : _dependencies.readMetadata(path, displayName: displayName),
       onReadError: (error) =>
-          _log.w('Failed to read gain tags for normalization: $error'),
+          _log.w('Gain metadata unavailable (${error.runtimeType})'),
     );
     _playbackAutomation = PlaybackAutomation(
       isPlaying: () =>
@@ -330,6 +351,25 @@ class MusicPlayerHandler extends BaseAudioHandler
   void _init() {
     if (_initialized) return;
     _initialized = true;
+    if (_dependencies.isIOS || _dependencies.isAndroid) {
+      _subscriptions.add(
+        Connectivity().onConnectivityChanged.listen((networks) {
+          if (!networks.contains(ConnectivityResult.none) &&
+              _waitingForNetworkGeneration == _playRequestGeneration &&
+              _index >= 0 &&
+              !_disposed) {
+            _waitingForNetworkGeneration = null;
+            unawaited(
+              _playIndex(
+                _index,
+                recordHistory: false,
+                startPosition: playbackState.value.position,
+              ),
+            );
+          }
+        }, onError: (Object _) {}),
+      );
+    }
     _configurePersonalization();
     void recordListening() {
       final item = mediaItem.value;
@@ -534,6 +574,10 @@ class MusicPlayerHandler extends BaseAudioHandler
           }
         },
       ),
+      if (player is PlaybackBufferingDeck)
+        (player as PlaybackBufferingDeck).onBufferingChanged.listen((_) {
+          if (identical(player, _player)) _broadcastState();
+        }),
       player.onPositionChanged.listen((position) {
         if (identical(player, _player)) _handlePositionChanged(position);
       }),
@@ -559,12 +603,52 @@ class MusicPlayerHandler extends BaseAudioHandler
       return;
     }
     if (_reloadAfterServerDied(error)) return;
+    final failure = PlaybackFailure.classify(error);
+    final network =
+        _index >= 0 && _index < _media.length && _media[_index].isNetwork;
+    if (network &&
+        _sourceReady &&
+        failure.retryable &&
+        !_userPaused &&
+        _networkRecoveries < 2) {
+      _networkRecoveries++;
+      _sourceReady = false;
+      final generation = _playRequestGeneration;
+      final position = playbackState.value.position;
+      final load = _activeLoad;
+      _broadcastState(playerState: PlaybackDeckState.paused, loading: true);
+      unawaited(() async {
+        try {
+          if (load != null) await load.backoff(_networkRecoveries - 1);
+          if (_disposed || generation != _playRequestGeneration || _userPaused)
+            return;
+          _recoveringNetwork = true;
+          await _playIndex(
+            _index,
+            recordHistory: false,
+            startPosition: position,
+          );
+        } on PlaybackSuperseded {
+          /* A newer transport command owns playback. */
+        }
+      }());
+      return;
+    }
+    if (network &&
+        failure.kind == PlaybackFailureKind.network &&
+        !_userPaused) {
+      _waitingForNetworkGeneration = _playRequestGeneration;
+    }
     _sourceReady = false;
     _playbackError = error;
     _userPaused = true;
     _pausedByInterruption = false;
     _playbackAutomation.cancelPendingActions();
-    _log.e('Playback failed for ${mediaItem.value?.title}', error, stackTrace);
+    _log.e(
+      'Playback failed: ${PlaybackFailure.classify(error).kind.name}',
+      null,
+      stackTrace,
+    );
     _broadcastState(playerState: PlaybackDeckState.stopped);
     final generation = _playRequestGeneration;
     unawaited(
@@ -842,7 +926,16 @@ class MusicPlayerHandler extends BaseAudioHandler
   void _broadcastState({PlaybackDeckState? playerState, bool? loading}) {
     final state = playerState ?? _player.state;
     final failed = _playbackError != null;
-    final playing = !failed && state == PlaybackDeckState.playing;
+    final buffering =
+        _player is PlaybackBufferingDeck &&
+        (_player as PlaybackBufferingDeck).isBuffering &&
+        !_userPaused;
+    loading ??= buffering || (_switchingGeneration != 0 && !_sourceReady);
+    final playing =
+        !failed &&
+        !buffering &&
+        state == PlaybackDeckState.playing &&
+        (loading != true || _dependencies.isAndroid);
     if (playing && _sourceReady && _index >= 0 && _index < _media.length) {
       final source = _media[_index].source;
       if (source.startsWith('network://') &&
@@ -878,7 +971,9 @@ class MusicPlayerHandler extends BaseAudioHandler
             ? AudioProcessingState.loading
             : _mapProcessingState(state),
         errorCode: failed ? 1 : null,
-        errorMessage: _playbackError?.toString(),
+        errorMessage: _playbackError == null
+            ? null
+            : PlaybackFailure.classify(_playbackError!).toString(),
         playing: playing,
         queueIndex: _index >= 0 ? _index : null,
         speed: _autoMix.rate,
@@ -1149,7 +1244,7 @@ class MusicPlayerHandler extends BaseAudioHandler
       }
       if (resolved == null) return;
       final volume = await _normalizationVolumeFor(
-        resolved,
+        media.source.startsWith('network://') ? media.source : resolved,
         cacheKey: media.isContentUri ? media.source : null,
         displayName: playbackLease?.displayName,
       );
@@ -1170,11 +1265,25 @@ class MusicPlayerHandler extends BaseAudioHandler
     }());
   }
 
-  Future<String?> _resolveSource(PlayableMedia media) async {
+  Future<String?> _resolveSource(
+    PlayableMedia media, {
+    PlaybackLoad? load,
+  }) async {
     if (media.source.startsWith('network://')) {
       try {
+        if (load != null) {
+          final prepare = _dependencies.prepareNetworkSource;
+          final path = await load.wait(
+            prepare != null
+                ? prepare(media.source, load)
+                : _dependencies.resolveNetworkSource(media.source),
+          );
+          load.preparedPath = path;
+          return path;
+        }
         return await _dependencies.resolveNetworkSource(media.source);
       } catch (_) {
+        if (load != null) rethrow;
         _log.w('Network source is unavailable');
         return null;
       }
@@ -1431,7 +1540,7 @@ class MusicPlayerHandler extends BaseAudioHandler
   }) async {
     if (items.isEmpty) return;
     _autoplay.reset();
-    _playRequestGeneration++;
+    _nextPlayGeneration();
     _media
       ..clear()
       ..addAll(items);
@@ -1565,6 +1674,8 @@ class MusicPlayerHandler extends BaseAudioHandler
     Duration startPosition = Duration.zero,
   }) async {
     if (_disposed || index < 0 || index >= _media.length) return;
+    if (!_recoveringNetwork) _networkRecoveries = 0;
+    _recoveringNetwork = false;
     if (_reloadingAfterServerDied) {
       _reloadingAfterServerDied = false;
     } else {
@@ -1582,13 +1693,29 @@ class MusicPlayerHandler extends BaseAudioHandler
     if (startPosition <= Duration.zero) {
       _pendingRestorePosition = null;
     }
-    final generation = ++_playRequestGeneration;
+    final generation = _nextPlayGeneration();
     _serverTrackGeneration++;
     _sourceReady = false;
     _playbackError = null;
     // Advance the requested index synchronously so consecutive Next taps do
     // not all target the same song while AutoMix/source preparation awaits.
     _index = index;
+    _activeLoad = PlaybackLoad();
+    if (userSkip) _unavailableShuffleSkips = 0;
+    mediaItem.add(_toMediaItem(_media[index]));
+    _broadcastPosition(
+      normalizedPlaybackResumePosition(
+        startPosition,
+        duration: _media[index].duration,
+      ),
+      force: true,
+    );
+    _broadcastState(
+      playerState: _dependencies.isAndroid
+          ? PlaybackDeckState.playing
+          : PlaybackDeckState.paused,
+      loading: true,
+    );
     unawaited(_autoplay.fill());
     final media = _media[index];
     _switchingGeneration = generation;
@@ -1671,7 +1798,9 @@ class MusicPlayerHandler extends BaseAudioHandler
               if (!_isCurrentPlayRequest(generation, media)) return;
               if (next.source.startsWith('network://')) {
                 try {
-                  await storage.cacheAudio(next.source, background: true);
+                  final load = _activeLoad;
+                  if (load == null || load.cancelled) return;
+                  await storage.preparePlayback(next.source, load);
                 } catch (_) {
                   /* Playback continues when prefetch is unavailable. */
                 }
@@ -1688,6 +1817,73 @@ class MusicPlayerHandler extends BaseAudioHandler
     PlayableMedia media, {
     required bool recordHistory,
     required Duration startPosition,
+  }) async {
+    final load = _activeLoad ?? PlaybackLoad();
+    for (var attempt = 0; attempt < (media.isNetwork ? 3 : 1); attempt++) {
+      try {
+        load.check();
+        await _loadIndexAttempt(
+          generation,
+          media,
+          recordHistory: recordHistory && attempt == 0,
+          startPosition: startPosition,
+          load: load,
+        );
+        return;
+      } on PlaybackSuperseded {
+        return;
+      } catch (error, stack) {
+        if (!_isCurrentPlayRequest(generation, media) || load.cancelled) return;
+        final failure = PlaybackFailure.classify(error);
+        _log.w(
+          'Playback preparation attempt ${attempt + 1}: ${failure.kind.name}',
+        );
+        if (media.isNetwork && failure.retryable && attempt < 2) {
+          await _player.cancelPreparation();
+          if (media.source.startsWith('network://')) {
+            try {
+              await NetworkStorageService.instance
+                  .invalidatePlaybackPreparation(
+                    media.source,
+                    corruptCache:
+                        failure.kind == PlaybackFailureKind.player &&
+                        load.preparedPath != null &&
+                        !load.preparedPath!.startsWith('http'),
+                  );
+            } catch (_) {
+              /* The injected resolver may not use saved connections. */
+            }
+          }
+          try {
+            await load.backoff(attempt);
+          } on PlaybackSuperseded {
+            return;
+          }
+          if (!_isCurrentPlayRequest(generation, media)) return;
+          continue;
+        }
+        if (_shuffle &&
+            media.isNetwork &&
+            failure.retryable &&
+            _index + 1 < _media.length &&
+            _unavailableShuffleSkips < 2) {
+          _unavailableShuffleSkips++;
+          _log.w('Skipping unavailable shuffle item after bounded retries');
+          unawaited(_playIndex(_index + 1));
+          return;
+        }
+        _reportPlaybackError(_player, error, stack);
+        return;
+      }
+    }
+  }
+
+  Future<void> _loadIndexAttempt(
+    int generation,
+    PlayableMedia media, {
+    required bool recordHistory,
+    required Duration startPosition,
+    required PlaybackLoad load,
   }) async {
     _pausedByInterruption = false;
     _interruptionActive = false;
@@ -1707,7 +1903,12 @@ class MusicPlayerHandler extends BaseAudioHandler
     // Claim the playing state up front (while the app is still in the
     // foreground window) so audio_service can start its foreground service
     // before the async source resolve below.
-    _broadcastState(playerState: PlaybackDeckState.playing, loading: true);
+    _broadcastState(
+      playerState: _dependencies.isAndroid
+          ? PlaybackDeckState.playing
+          : PlaybackDeckState.paused,
+      loading: true,
+    );
     await _claimHardwareMediaButtons();
     if (!_isCurrentPlayRequest(generation, media)) return;
     if (_dependencies.isAndroid && !media.isNetwork) {
@@ -1748,7 +1949,8 @@ class MusicPlayerHandler extends BaseAudioHandler
         _log.w('Failed to open direct SAF playback lease: $e');
       }
     }
-    var resolved = playbackLease?.path ?? await _resolveSource(media);
+    var resolved =
+        playbackLease?.path ?? await _resolveSource(media, load: load);
     var usingLocalSafCopy = media.isContentUri && playbackLease == null;
     if (!_isCurrentPlayRequest(generation, media)) {
       if (playbackLease != null) {
@@ -1757,6 +1959,8 @@ class MusicPlayerHandler extends BaseAudioHandler
       return;
     }
     if (resolved == null) {
+      if (media.isNetwork)
+        throw const PlaybackFailure(PlaybackFailureKind.missing);
       _reportPlaybackError(
         _player,
         StateError('Audio file is unavailable'),
@@ -1781,7 +1985,7 @@ class MusicPlayerHandler extends BaseAudioHandler
       // always set (1.0 when disabled/untagged) so a previous track's
       // attenuation can't leak into the next one.
       var normalizationVolume = await _normalizationVolumeFor(
-        resolved,
+        media.source.startsWith('network://') ? media.source : resolved,
         cacheKey: media.isContentUri ? media.source : null,
         displayName: playbackLease?.displayName,
       );
@@ -1869,6 +2073,7 @@ class MusicPlayerHandler extends BaseAudioHandler
       unawaited(_ensureDurationKnown(media, generation));
     } catch (e, stackTrace) {
       if (!_isCurrentPlayRequest(generation, media)) return;
+      if (media.isNetwork) rethrow;
       _reportPlaybackError(_player, e, stackTrace);
     } finally {
       if (playbackLease != null) {
@@ -2165,7 +2370,7 @@ class MusicPlayerHandler extends BaseAudioHandler
     unawaited(_runtime.personalization.flush());
     unawaited(_runtime.taste.flush());
     unawaited(_runtime.ranker.flush());
-    final generation = ++_playRequestGeneration;
+    final generation = _nextPlayGeneration();
     _switchingGeneration = 0;
     _userPaused = true;
     await _player.cancelPreparation();
@@ -2248,7 +2453,7 @@ class MusicPlayerHandler extends BaseAudioHandler
     _playbackAutomation.cancelPendingActions();
     _autoplay.reset();
     cancelSleepTimer();
-    final generation = ++_playRequestGeneration;
+    final generation = _nextPlayGeneration();
     _switchingGeneration = 0;
     _userPaused = true;
     await _player.cancelPreparation();
@@ -2303,7 +2508,6 @@ class MusicPlayerHandler extends BaseAudioHandler
 
   @override
   Future<void> skipToPrevious() async {
-    await _cancelTransitions();
     if (playbackState.value.position > const Duration(seconds: 3)) {
       await _player.seek(Duration.zero);
       _broadcastPosition(Duration.zero, force: true);
@@ -2590,7 +2794,7 @@ class MusicPlayerHandler extends BaseAudioHandler
     _listeningTimer?.cancel();
     _dependencies.recorder.update(null, playing: false, ended: true);
     await _dependencies.recorder.flush();
-    _playRequestGeneration++;
+    _nextPlayGeneration();
     _headphoneMonitoringRevision++;
     await _automationVolumeSubscription?.cancel();
     await _automationDevicesSubscription?.cancel();

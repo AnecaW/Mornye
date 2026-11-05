@@ -17,6 +17,7 @@ final class AudioPlayersStreamHandler {
   func onDuration(millis: Int) {}
   func onComplete() { completedCount += 1 }
   func dispose() {}
+  func onError(code: String, message: String, details: String) {}
 }
 
 final class DeferredPlayer: AVPlayer {
@@ -189,6 +190,18 @@ final class DeferredPlayer: AVPlayer {
         throw Failure.message("Disposal left a source or emitted a prepared event")
       }
       print("PASS: replacing and disposing loading sources completes cancelled preparation")
+      let stalled = DeferredPlayer()
+      let timeoutEvents = AudioPlayersStreamHandler()
+      let bounded = WrappedMediaPlayer(reference: AudioplayersDarwinPlugin(), eventHandler: timeoutEvents,
+        player: stalled, preparationTimeout: 0.05)
+      let unknown = Preparation(bounded, url: "/stalled.wav")
+      try await requireCancelled(unknown)
+      guard stalled.currentItem == nil, timeoutEvents.preparedCount == 0 else {
+        throw Failure.message("An unknown item did not terminate safely after its deadline")
+      }
+      await bounded.dispose()
+      print("PASS: unknown AVPlayerItem preparation has a bounded deadline")
+
       try await testNativePreparationAndStaleCompletion()
       print("PASS: native preparation succeeds or fails once, and ignores old completion events")
       try await testNextPlayerStartsOnCompletion()

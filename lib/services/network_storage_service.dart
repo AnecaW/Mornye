@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'package:mornye/utils/logger.dart';
+import 'package:mornye/services/playback_load.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -23,6 +25,7 @@ import 'package:xml/xml.dart';
 part 'network_storage_upload.dart';
 part 'network_storage_delete.dart';
 part 'network_storage_subsonic.dart';
+part 'network_storage_playback.dart';
 
 typedef _SmbListingInput = ({
   List<({String name, bool directory, int size, int modifiedTime})> files,
@@ -304,6 +307,7 @@ class NetworkStorageService {
     audioCache: NetworkAudioCache(),
     metadataCache: SubsonicResponseCache(),
   );
+  final _playbackPrefixes = <String, _PlaybackPrefix>{};
   final SubsonicResponseCache? metadataCache;
   final NetworkAudioCache? audioCache;
   static const _storage = FlutterSecureStorage(
@@ -652,7 +656,7 @@ class NetworkStorageService {
         return local.path;
       }
       // Caching is best effort and must never prevent ordinary streaming.
-      unawaited(cacheAudio(source).catchError((Object _) {}));
+      // Playback reads progressively; it must not launch a competing full-file download.
     }
     await _readyConnection(host, path);
     _server ??= HttpServer.bind(InternetAddress.loopbackIPv4, 0).then((server) {
@@ -666,7 +670,10 @@ class NetworkStorageService {
       _server = null;
       rethrow;
     }
-    final token = newId();
+    // AVPlayer uses the path suffix as well as MIME to select its decoder.
+    final suffix = path.split('.').last.toLowerCase();
+    final token =
+        '${newId()}.${RegExp(r'^[a-z0-9]{1,8}$').hasMatch(suffix) ? suffix : 'audio'}';
     while (_routes.length >= 256) {
       _routes.remove(_routes.keys.first);
     }
@@ -1666,7 +1673,9 @@ class NetworkStorageService {
       }
       final c = await connection(route.id);
       final range = request.headers.value(HttpHeaders.rangeHeader);
-      read = await _cachedRead(c, route.path, range);
+      read =
+          _playbackPrefixRead(c, route.path, range) ??
+          await _cachedRead(c, route.path, range);
       if (read == null) {
         try {
           read = await _openRead(
@@ -1726,6 +1735,7 @@ class NetworkStorageService {
     final server = _server;
     _server = null;
     _routes.clear();
+    _playbackPrefixes.clear();
     for (final client in _readClients.values) {
       client.close(force: true);
     }

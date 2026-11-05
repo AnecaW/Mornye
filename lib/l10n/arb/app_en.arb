@@ -10082,5 +10082,12 @@
   "libraryScanFinished": "Scan completed",
   "libraryScanStopped": "Scan cancelled. Existing music is preserved.",
   "libraryScanFailed": "Scan failed. Cached music is preserved.",
-  "libraryScanPhaseEstimate": "Estimated time for this phase"
+  "libraryScanPhaseEstimate": "Estimated time for this phase",
+  "playbackStreamUnavailable": "Stream temporarily unavailable. Try again.",
+  "playbackServerUnavailable": "The music server is unavailable. Check your connection and try again.",
+  "playbackSignInRequired": "Check your music server login details.",
+  "playbackInvalidAudio": "This audio file cannot be played.",
+  "playbackTrackMissing": "This track is no longer available.",
+  "playbackCacheUnavailable": "The saved audio could not be read. Try streaming it again.",
+  "playbackTryAgain": "Try again"
 }
