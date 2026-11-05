@@ -153,6 +153,9 @@ class MusicPlayerHandler extends BaseAudioHandler
   bool _recoveringNetwork = false;
   int? _waitingForNetworkGeneration;
   int _nextPlayGeneration() {
+    if (_activeLoad != null && !_activeLoad!.cancelled) {
+      _log.d('Superseding playback request=$_playRequestGeneration');
+    }
     _activeLoad?.cancel();
     _activeLoad = null;
     _waitingForNetworkGeneration = null;
@@ -620,7 +623,9 @@ class MusicPlayerHandler extends BaseAudioHandler
       unawaited(() async {
         try {
           if (load != null) await load.backoff(_networkRecoveries - 1);
-          if (_disposed || generation != _playRequestGeneration || _userPaused) {
+          if (_disposed ||
+              generation != _playRequestGeneration ||
+              _userPaused) {
             return;
           }
           _recoveringNetwork = true;
@@ -1701,7 +1706,11 @@ class MusicPlayerHandler extends BaseAudioHandler
     // Advance the requested index synchronously so consecutive Next taps do
     // not all target the same song while AutoMix/source preparation awaits.
     _index = index;
-    _activeLoad = PlaybackLoad();
+    _activeLoad = PlaybackLoad(requestId: generation);
+    final diagnosticSource = Uri.tryParse(_media[index].source);
+    _log.d(
+      'Playback request=$generation trackHash=${_media[index].id.hashCode} source=${diagnosticSource?.scheme ?? "file"} library=${diagnosticSource?.scheme == "network" ? diagnosticSource!.host : "device-or-direct"}',
+    );
     if (userSkip) _unavailableShuffleSkips = 0;
     mediaItem.add(_toMediaItem(_media[index]));
     _broadcastPosition(
@@ -1819,7 +1828,8 @@ class MusicPlayerHandler extends BaseAudioHandler
     required bool recordHistory,
     required Duration startPosition,
   }) async {
-    final load = _activeLoad ?? PlaybackLoad();
+    final load = _activeLoad ?? PlaybackLoad(requestId: generation);
+    final preparationClock = Stopwatch()..start();
     for (var attempt = 0; attempt < (media.isNetwork ? 3 : 1); attempt++) {
       try {
         load.check();
@@ -1830,6 +1840,11 @@ class MusicPlayerHandler extends BaseAudioHandler
           startPosition: startPosition,
           load: load,
         );
+        if (_isCurrentPlayRequest(generation, media) && _sourceReady) {
+          _log.d(
+            'Playback ready request=$generation elapsedMs=${preparationClock.elapsedMilliseconds} attempts=${attempt + 1}',
+          );
+        }
         return;
       } on PlaybackSuperseded {
         return;
@@ -1837,7 +1852,7 @@ class MusicPlayerHandler extends BaseAudioHandler
         if (!_isCurrentPlayRequest(generation, media) || load.cancelled) return;
         final failure = PlaybackFailure.classify(error);
         _log.w(
-          'Playback preparation attempt ${attempt + 1}: ${failure.kind.name}',
+          'Playback request=$generation attempt=${attempt + 1} failure=${failure.kind.name}',
         );
         if (media.isNetwork && failure.retryable && attempt < 2) {
           await _player.cancelPreparation();

@@ -37,6 +37,9 @@ extension NetworkPlaybackPreparation on NetworkStorageService {
       );
       if (local != null) {
         cache.pinPlayback(local.path);
+        _playbackLog.d(
+          'Playback request=${load.requestId} cache=verified trackHash=${source.hashCode}',
+        );
         return local.path;
       }
     }
@@ -44,7 +47,9 @@ extension NetworkPlaybackPreparation on NetworkStorageService {
     final key = _audioCacheKey(c, path);
     final checked = _playbackPrefixes[key];
     if (checked != null && checked.expires.isAfter(DateTime.now())) {
-      _playbackLog.d('Reusing bounded stream preparation');
+      _playbackLog.d(
+        'Playback request=${load.requestId} cache=prefix trackHash=${source.hashCode}',
+      );
       return load.wait(resolve(source));
     }
     final clock = Stopwatch()..start();
@@ -141,7 +146,7 @@ extension NetworkPlaybackPreparation on NetworkStorageService {
         mime.startsWith('audio/') ? mime : networkContentType(path),
       );
       _playbackLog.d(
-        'Stream checked: status=$status bytes=${prefix.length} elapsedMs=${clock.elapsedMilliseconds}',
+        'Playback request=${load.requestId} stream status=$status bytes=${prefix.length} elapsedMs=${clock.elapsedMilliseconds} trackHash=${source.hashCode}',
       );
       setReachable(host, reachable: true);
       return await load.wait(resolve(source));

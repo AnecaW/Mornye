@@ -3,6 +3,8 @@ import 'dart:io';
 
 /// One selected track owns its preparation, backoff and bounded prefetch.
 class PlaybackLoad {
+  PlaybackLoad({this.requestId});
+  final int? requestId;
   String? preparedPath;
   final _cancelled = Completer<void>();
   final _cleanup = <void Function()>[];
