@@ -17,6 +17,7 @@ import 'package:mornye/services/batch_track_actions.dart';
 import 'package:mornye/theme/mornye_theme.dart';
 import 'package:mornye/widgets/app_action_button.dart';
 import 'package:mornye/widgets/app_alert_dialog.dart';
+import 'package:mornye/widgets/app_progress_indicator.dart';
 import 'package:mornye/widgets/app_switch.dart';
 import 'package:mornye/widgets/batch_convert_sheet.dart';
 import 'package:mornye/widgets/mornye_context_menu.dart';
@@ -328,10 +329,10 @@ void main() {
       for (var attempt = 0; attempt < 100; attempt++) {
         await Future<void>.delayed(const Duration(milliseconds: 10));
         await tester.pump();
-        if (find.byType(LinearProgressIndicator).evaluate().isEmpty) break;
+        if (find.byType(AppProgressIndicator).evaluate().isEmpty) break;
       }
     });
-    expect(find.byType(LinearProgressIndicator), findsNothing);
+    expect(find.byType(AppProgressIndicator), findsNothing);
     await tester.pumpAndSettle();
     final title = find.byWidgetPredicate(
       (widget) =>
