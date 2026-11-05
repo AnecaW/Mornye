@@ -117,11 +117,9 @@ QueueLibraryDbQuery libraryBrowseQuery(LibraryBrowsePageRequest request) =>
 final libraryBrowsePageLoaderProvider =
     Provider<Future<LibraryBrowsePage> Function(LibraryBrowsePageRequest)>(
       (ref) => (request) async {
-        final query = queryForMusicSource(
-          libraryBrowseQuery(request),
-          ref.read(effectiveLibrarySourceProvider),
-          includeNetwork: ref.read(libraryIncludesNetworkSourcesProvider),
-        );
+        final query = ref
+            .read(musicLibraryScopeProvider)
+            .apply(libraryBrowseQuery(request));
         if (request.browse.artists) {
           return LibraryBrowsePage.fromRows(
             await LibraryDatabase.instance.getQueueArtistPage(query),
@@ -173,7 +171,10 @@ class LibraryBrowseNotifier extends AsyncNotifier<LibraryBrowseState> {
       settingsProvider.select((s) => s.localLibraryEnabled),
     );
     ref.watch(downloadHistoryProvider.select((s) => s.loadedIndexVersion));
-    final includeNetwork = ref.watch(libraryIncludesNetworkSourcesProvider);
+    final includeNetwork = ref
+        .watch(musicLibraryScopeProvider)
+        .activeServers
+        .isNotEmpty;
     if (_includeLocal || includeNetwork) {
       ref.watch(localLibraryProvider.select((s) => s.loadedIndexVersion));
     }

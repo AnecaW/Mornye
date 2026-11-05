@@ -110,6 +110,51 @@ void main() {
     await assertion.timeout(const Duration(seconds: 1));
     server.release.complete();
   });
+  test('consecutive audio preparations reuse the same server socket', () async {
+    await storage.preparePlayback(source, PlaybackLoad());
+    final second = NetworkStorageService.source(
+      'fixture',
+      subsonicSongPath('second', 'flac'),
+    );
+    await storage.preparePlayback(second, PlaybackLoad());
+    final ports = [
+      for (var i = 0; i < server.requests.length; i++)
+        if (server.requests[i].path.contains('/stream.')) server.peerPorts[i],
+    ];
+    expect(ports, hasLength(2));
+    expect(ports.toSet(), hasLength(1));
+  });
+  test(
+    'closing an API client does not interrupt another pooled request',
+    () async {
+      server.blockMethod = 'getArtists';
+      final blocked = storage.openSubsonic(server.connection());
+      final other = storage.openSubsonic(server.connection());
+      addTearDown(other.close);
+      final pending = blocked.request('getArtists');
+      final failure = expectLater(pending, throwsA(anything));
+      await server.held.future;
+      blocked.close();
+      await failure.timeout(const Duration(seconds: 1));
+      final result = await other.request('ping');
+      expect(result['status'], 'ok');
+      final url = await storage.preparePlayback(source, PlaybackLoad());
+      expect(url, contains('127.0.0.1'));
+      server.release.complete();
+    },
+  );
+  test(
+    'API calls keep their shared connection after each client is closed',
+    () async {
+      final first = storage.openSubsonic(server.connection());
+      await first.request('ping');
+      first.close();
+      final second = storage.openSubsonic(server.connection());
+      await second.request('ping');
+      second.close();
+      expect(server.peerPorts.toSet(), hasLength(1));
+    },
+  );
   test(
     'verified complete cache plays offline and corrupt data is removed',
     () async {

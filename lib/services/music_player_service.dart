@@ -579,7 +579,16 @@ class MusicPlayerHandler extends BaseAudioHandler
       ),
       if (player is PlaybackBufferingDeck)
         (player as PlaybackBufferingDeck).onBufferingChanged.listen((_) {
-          if (identical(player, _player)) _broadcastState();
+          if (identical(player, _player)) {
+            final buffering = (player as PlaybackBufferingDeck).isBuffering;
+            if (_sourceReady)
+              _activeLoad?.mark(
+                buffering
+                    ? PlaybackPreparationStage.buffering
+                    : PlaybackPreparationStage.playing,
+              );
+            _broadcastState();
+          }
         }),
       player.onPositionChanged.listen((position) {
         if (identical(player, _player)) _handlePositionChanged(position);
@@ -641,7 +650,8 @@ class MusicPlayerHandler extends BaseAudioHandler
       return;
     }
     if (network &&
-        failure.kind == PlaybackFailureKind.network &&
+        (failure.kind == PlaybackFailureKind.network ||
+            failure.kind == PlaybackFailureKind.timeout) &&
         !_userPaused) {
       _waitingForNetworkGeneration = _playRequestGeneration;
     }
@@ -1706,7 +1716,10 @@ class MusicPlayerHandler extends BaseAudioHandler
     // Advance the requested index synchronously so consecutive Next taps do
     // not all target the same song while AutoMix/source preparation awaits.
     _index = index;
-    _activeLoad = PlaybackLoad(requestId: generation);
+    _activeLoad = PlaybackLoad(
+      requestId: generation,
+      bitrate: _media[index].bitrate,
+    );
     final diagnosticSource = Uri.tryParse(_media[index].source);
     _log.d(
       'Playback request=$generation trackHash=${_media[index].id.hashCode} source=${diagnosticSource?.scheme ?? "file"} library=${diagnosticSource?.scheme == "network" ? diagnosticSource!.host : "device-or-direct"}',
@@ -1769,6 +1782,14 @@ class MusicPlayerHandler extends BaseAudioHandler
     PlayableMedia media,
     Duration? position,
   ) async {
+    final load = _activeLoad;
+    load?.mark(PlaybackPreparationStage.buffering);
+    if (_player is PlaybackPreparationDeck && load != null) {
+      await (_player as PlaybackPreparationDeck).configurePreparation(
+        load.bufferPolicy,
+      );
+      if (!_isCurrentPlayRequest(generation, media)) return;
+    }
     // AudioPlayer.play combines prepare/seek/resume without a cancellation
     // boundary. A late prepare from an old request could resume the wrong
     // source. Serialize preparation and recheck before making it audible.
@@ -1791,6 +1812,7 @@ class MusicPlayerHandler extends BaseAudioHandler
       );
     }
     if (!_isCurrentPlayRequest(generation, media)) return;
+    load?.mark(PlaybackPreparationStage.readyToPlay);
     if (position != null) {
       await _player.seek(position);
       if (!_isCurrentPlayRequest(generation, media)) return;
@@ -1818,7 +1840,18 @@ class MusicPlayerHandler extends BaseAudioHandler
                 try {
                   final load = _activeLoad;
                   if (load == null || load.cancelled) return;
-                  await storage.preparePlayback(next.source, load);
+                  final prefetch = PlaybackLoad(
+                    requestId: generation,
+                    bitrate: next.bitrate,
+                    prefetch: true,
+                  );
+                  final unregister = load.onCancel(prefetch.cancel);
+                  try {
+                    await storage.preparePlayback(next.source, prefetch);
+                  } finally {
+                    unregister();
+                    prefetch.cancel();
+                  }
                 } catch (_) {
                   /* Playback continues when prefetch is unavailable. */
                 }
@@ -1879,7 +1912,8 @@ class MusicPlayerHandler extends BaseAudioHandler
             }
           }
           try {
-            await load.backoff(attempt);
+            load.mark(PlaybackPreparationStage.recovering);
+            await load.backoff(attempt, retryAfter: failure.retryAfter);
           } on PlaybackSuperseded {
             return;
           }
@@ -1896,6 +1930,7 @@ class MusicPlayerHandler extends BaseAudioHandler
           unawaited(_playIndex(_index + 1));
           return;
         }
+        load.mark(PlaybackPreparationStage.failed);
         _reportPlaybackError(_player, error, stack);
         return;
       }
@@ -2077,6 +2112,10 @@ class MusicPlayerHandler extends BaseAudioHandler
       }
       if (!_isCurrentPlayRequest(generation, media)) return;
       _sourceReady = true;
+      if (!(_player is PlaybackBufferingDeck &&
+          (_player as PlaybackBufferingDeck).isBuffering)) {
+        load.mark(PlaybackPreparationStage.playing);
+      }
       if (media.source.startsWith('network://')) {
         unawaited(_loadNetworkMetadata(media, generation));
       }

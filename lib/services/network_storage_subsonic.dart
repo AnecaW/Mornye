@@ -219,7 +219,12 @@ extension SubsonicStorage on NetworkStorageService {
     if (connection.protocol != NetworkProtocol.subsonic) {
       throw const FormatException('Expected a Subsonic connection');
     }
-    return SubsonicClient._(this, connection, _client(), fresh: fresh);
+    return SubsonicClient._(
+      this,
+      connection,
+      _readClient(connection),
+      fresh: fresh,
+    );
   }
 
   Future<List<NetworkEntry>> searchSubsonic(
@@ -247,10 +252,14 @@ class SubsonicClient {
   final NetworkConnection connection;
   final HttpClient _http;
   bool _closed = false;
+  final _requests = <HttpClientRequest>{};
 
   void close() {
     _closed = true;
-    _http.close(force: true);
+    for (final request in _requests) {
+      request.abort();
+    }
+    _requests.clear();
   }
 
   /// Live reads and mutations support repeated Subsonic form parameters.
@@ -324,41 +333,56 @@ class SubsonicClient {
   ]) async {
     if (_closed) throw StateError('Subsonic request cancelled');
     final target = _subsonicTarget(connection, method, arguments);
-    final response = await _storage._request(
-      _http,
-      connection,
-      post ? 'POST' : 'GET',
-      post ? target.replace(query: '') : target,
-      formBody: post ? target.query : null,
-    );
-    if (response.statusCode != 200) {
-      await _storage._discardResponse(response);
-      throw HttpException('Server returned ${response.statusCode}');
-    }
-    final bytes = BytesBuilder();
-    await for (final chunk in response.timeout(NetworkStorageService.timeout)) {
-      if (_closed) throw StateError('Subsonic request cancelled');
-      if (bytes.length + chunk.length > 8 * 1024 * 1024) {
-        throw const HttpException('Subsonic response is too large');
-      }
-      bytes.add(chunk);
-    }
-    final Map<String, dynamic> result;
+    final owned = <HttpClientRequest>{};
     try {
-      result = bytes.length > 64 * 1024
-          ? await compute(_decodeSubsonicResponse, bytes.takeBytes())
-          : _decodeSubsonicResponse(bytes.takeBytes());
-    } on FormatException {
-      throw const HttpException('Invalid Subsonic response');
+      final response = await _storage._request(
+        _http,
+        connection,
+        post ? 'POST' : 'GET',
+        post ? target.replace(query: '') : target,
+        formBody: post ? target.query : null,
+        onRequest: (request) {
+          if (_closed) {
+            request.abort();
+            throw StateError('Subsonic request cancelled');
+          }
+          _requests.add(request);
+          owned.add(request);
+        },
+      );
+      if (response.statusCode != 200) {
+        await _storage._discardResponse(response);
+        throw HttpException('Server returned ${response.statusCode}');
+      }
+      final bytes = BytesBuilder();
+      await for (final chunk in response.timeout(
+        NetworkStorageService.timeout,
+      )) {
+        if (_closed) throw StateError('Subsonic request cancelled');
+        if (bytes.length + chunk.length > 8 * 1024 * 1024) {
+          throw const HttpException('Subsonic response is too large');
+        }
+        bytes.add(chunk);
+      }
+      final Map<String, dynamic> result;
+      try {
+        result = bytes.length > 64 * 1024
+            ? await compute(_decodeSubsonicResponse, bytes.takeBytes())
+            : _decodeSubsonicResponse(bytes.takeBytes());
+      } on FormatException {
+        throw const HttpException('Invalid Subsonic response');
+      }
+      if (result['status'] == 'failed') {
+        final code = _subsonicMap(result['error'])['code'];
+        throw SubsonicException(code is num ? code.toInt() : 0);
+      }
+      if (result['status'] != 'ok') {
+        throw const HttpException('Invalid Subsonic response');
+      }
+      return result;
+    } finally {
+      _requests.removeAll(owned);
     }
-    if (result['status'] == 'failed') {
-      final code = _subsonicMap(result['error'])['code'];
-      throw SubsonicException(code is num ? code.toInt() : 0);
-    }
-    if (result['status'] != 'ok') {
-      throw const HttpException('Invalid Subsonic response');
-    }
-    return result;
   }
 
   NetworkEntry _artist(Map<String, dynamic> value) => NetworkEntry(

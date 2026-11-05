@@ -25,11 +25,9 @@ final libraryDirectoryIndexProvider =
       final includeLocal = ref.watch(
         settingsProvider.select((s) => s.localLibraryEnabled),
       );
-      final scope = queryForMusicSource(
-        QueueLibraryDbQuery(includeLocal: includeLocal),
-        ref.watch(effectiveLibrarySourceProvider),
-        includeNetwork: ref.watch(libraryIncludesNetworkSourcesProvider),
-      );
+      final scope = ref
+          .watch(musicLibraryScopeProvider)
+          .apply(QueueLibraryDbQuery(includeLocal: includeLocal));
       if (scope.includeLocal) {
         ref.watch(
           localLibraryProvider.select((state) => state.loadedIndexVersion),

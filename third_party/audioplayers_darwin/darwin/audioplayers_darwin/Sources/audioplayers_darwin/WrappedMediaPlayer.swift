@@ -37,6 +37,8 @@ enum ReleaseMode: String {
   private var equalizerConfiguration: [String: Any] = [:]
   private var equalizerAttached = false
 
+  func equalizerDiagnostics() -> [String: Any] { equalizer.diagnostics() }
+
   func setEqualizer(_ configuration: [String: Any]) async throws {
     equalizerConfiguration = configuration
     equalizer.dsp.configure(configuration)
@@ -52,6 +54,62 @@ enum ReleaseMode: String {
   private var completionObserver: TimeObserver?
   private var playerItemStatusObservation: NSKeyValueObservation?
   private let preparationTimeout: TimeInterval
+  private var preparationTimeoutOverride: TimeInterval?
+  private var minimumStartBuffer: TimeInterval = 0
+  private var forwardBuffer: TimeInterval = 0
+  private var preparingNetwork = false
+  private var prerollPending = false
+  private var bufferObservations: [NSKeyValueObservation] = []
+
+  func setBufferingPolicy(_ configuration: [String: Any]) {
+    func finite(_ key: String, _ fallback: Double, _ lower: Double, _ upper: Double) -> Double {
+      guard let value = configuration[key] as? NSNumber, value.doubleValue.isFinite else { return fallback }
+      return min(upper, max(lower, value.doubleValue))
+    }
+    minimumStartBuffer = finite("minimumSeconds", 0.35, 0, 3)
+    forwardBuffer = finite("forwardSeconds", 4, 0, 12)
+    preparationTimeoutOverride = finite("prepareTimeoutSeconds", 30, 15, 45)
+    player.automaticallyWaitsToMinimizeStalling = true
+  }
+
+  private func checkBufferedPreparation(_ item: AVPlayerItem) {
+    guard player.currentItem === item, item.status == .readyToPlay,
+      playerItemStatusContinuation != nil else { return }
+    if !preparingNetwork || minimumStartBuffer <= 0 {
+      finishPlayerItemPreparation(.success(())); return
+    }
+    let currentSeconds = CMTimeGetSeconds(item.currentTime())
+    let position = currentSeconds.isFinite ? max(0, currentSeconds) : 0
+    let duration = CMTimeGetSeconds(item.duration)
+    let needed = duration.isFinite && duration > position
+      ? min(minimumStartBuffer, duration - position) : minimumStartBuffer
+    let buffered = item.loadedTimeRanges.map { $0.timeRangeValue }.filter {
+      CMTimeGetSeconds($0.start) <= position + 0.05
+    }.compactMap { range -> Double? in
+      let end = CMTimeGetSeconds(CMTimeRangeGetEnd(range))
+      return end.isFinite ? max(0, end - position) : nil
+    }.max() ?? 0
+    if item.isPlaybackLikelyToKeepUp || item.isPlaybackBufferFull || buffered + 0.01 >= needed {
+      eventHandler.onLog(message: "mornye.ready bufferedMs=\(Int(min(3600, buffered) * 1000))")
+      finishPlayerItemPreparation(.success(()))
+    } else {
+      eventHandler.onLog(message: "mornye.buffering=1")
+      if !prerollPending {
+        prerollPending = true
+        player.preroll(atRate: Float(playbackRate)) { [weak self, weak item] finished in
+          Task { @MainActor [weak self, weak item] in
+            guard let self, let item, self.player.currentItem === item,
+              self.playerItemStatusContinuation != nil else { return }
+            self.prerollPending = false
+            if finished && item.status == .readyToPlay {
+              self.eventHandler.onLog(message: "mornye.ready preroll=1")
+              self.finishPlayerItemPreparation(.success(()))
+            }
+          }
+        }
+      }
+    }
+  }
   private var preparationDeadline: Task<Void, Never>?
   private var playerTimeControlObservation: NSKeyValueObservation?
   private var playerItemStatusContinuation: CheckedContinuation<Void, Error>?
@@ -87,6 +145,9 @@ enum ReleaseMode: String {
         guard let self, self.player.currentItem != nil else { return }
         let waiting = self.player.timeControlStatus == .waitingToPlayAtSpecifiedRate
         self.eventHandler.onLog(message: waiting ? "mornye.buffering=1" : "mornye.buffering=0")
+        if self.player.timeControlStatus == .playing {
+          self.eventHandler.onLog(message: "mornye.phase=playing")
+        }
       }
     }
   }
@@ -102,6 +163,11 @@ enum ReleaseMode: String {
       reset()
       self.url = url
       let playerItem = try createPlayerItem(url: url, isLocal: isLocal, mimeType: mimeType)
+      preparingNetwork = !isLocal
+      if !isLocal {
+        playerItem.preferredForwardBufferDuration = forwardBuffer
+        playerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+      }
       // An outgoing item's render callbacks must not share filter history
       // or format storage with the next item.
       equalizer = EqualizerAudioTap()
@@ -266,7 +332,7 @@ enum ReleaseMode: String {
   ) async throws {
     try await withCheckedThrowingContinuation { continuation in
       playerItemStatusContinuation = continuation
-      let timeoutNanos = UInt64(max(0.01, preparationTimeout) * 1_000_000_000)
+      let timeoutNanos = UInt64(max(0.01, preparationTimeoutOverride ?? preparationTimeout) * 1_000_000_000)
       preparationDeadline = Task { @MainActor [weak self, weak playerItem] in
         do { try await Task.sleep(nanoseconds: timeoutNanos) } catch { return }
         guard let self, let playerItem, self.player.currentItem === playerItem,
@@ -284,7 +350,7 @@ enum ReleaseMode: String {
           self.eventHandler.onLog(message: message)
           switch status {
           case .readyToPlay:
-            self.finishPlayerItemPreparation(.success(()))
+            self.checkBufferedPreparation(playerItem)
           case .failed:
             let preparing = self.playerItemStatusContinuation != nil
             let failure = playerItem.error ?? NSError(domain: "MornyePlayback", code: -1)
@@ -302,6 +368,28 @@ enum ReleaseMode: String {
           }
         }
       }
+      if preparingNetwork && minimumStartBuffer > 0 {
+        bufferObservations = [
+          playerItem.observe(\AVPlayerItem.loadedTimeRanges) { [weak self] item, _ in
+            Task { @MainActor [weak self, weak item] in
+              guard let self, let item else { return }
+              self.checkBufferedPreparation(item)
+            }
+          },
+          playerItem.observe(\AVPlayerItem.isPlaybackLikelyToKeepUp) { [weak self] item, _ in
+            Task { @MainActor [weak self, weak item] in
+              guard let self, let item else { return }
+              self.checkBufferedPreparation(item)
+            }
+          },
+          playerItem.observe(\AVPlayerItem.isPlaybackBufferFull) { [weak self] item, _ in
+            Task { @MainActor [weak self, weak item] in
+              guard let self, let item else { return }
+              self.checkBufferedPreparation(item)
+            }
+          },
+        ]
+      }
       // Replacing the player item triggers continuation of the observation.
       self.player.replaceCurrentItem(with: playerItem)
     }
@@ -310,6 +398,12 @@ enum ReleaseMode: String {
   private func finishPlayerItemPreparation(_ result: Result<Void, Error>) {
     preparationDeadline?.cancel()
     preparationDeadline = nil
+    if prerollPending {
+      prerollPending = false
+      player.cancelPendingPrerolls()
+    }
+    for observation in bufferObservations { observation.invalidate() }
+    bufferObservations.removeAll()
     if case .failure = result {
       playerItemStatusObservation?.invalidate()
       playerItemStatusObservation = nil

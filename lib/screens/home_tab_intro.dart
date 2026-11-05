@@ -10,18 +10,16 @@ final _homeRecentlyAddedProvider =
     FutureProvider.autoDispose<
       ({List<UnifiedLibraryItem> items, int trackCount})
     >((ref) async {
-      final includeLocal = ref.watch(
-        settingsProvider.select((s) => s.localLibraryEnabled),
-      );
+      final scope = ref.watch(musicLibraryScopeProvider);
       // Reload when a download lands or a scan rebuilds the index.
       ref.watch(downloadHistoryProvider.select((s) => s.items.length));
       ref.watch(localLibraryProvider.select((s) => s.loadedIndexVersion));
       final database = LibraryDatabase.instance;
       final rows = await database.getQueueTrackPage(
-        QueueLibraryDbQuery(includeLocal: includeLocal, limit: _homeShelfLimit),
+        scope.apply(const QueueLibraryDbQuery(limit: _homeShelfLimit)),
       );
       final counts = await database.getQueueCounts(
-        QueueLibraryDbQuery(includeLocal: includeLocal),
+        scope.apply(const QueueLibraryDbQuery()),
       );
       final items = <UnifiedLibraryItem>[];
       for (final row in rows) {
@@ -56,9 +54,7 @@ final _homeOnRepeatProvider =
       // A deleted download or a rescan can remove a track from the shelf.
       ref.watch(downloadHistoryProvider.select((s) => s.items.length));
       ref.watch(localLibraryProvider.select((s) => s.loadedIndexVersion));
-      final includeLocal = ref.watch(
-        settingsProvider.select((s) => s.localLibraryEnabled),
-      );
+      final scope = ref.watch(musicLibraryScopeProvider);
       await listeningRecorder.flush();
       final now = DateTime.now();
       final summary = await ListeningStatisticsStore.instance.load(
@@ -78,7 +74,9 @@ final _homeOnRepeatProvider =
           continue;
         }
         final downloaded = await history.getByFilePathAsync(key);
-        if (downloaded != null) {
+        if (downloaded != null &&
+            (scope.includeDevice ||
+                scope.activeServers.contains(Uri.tryParse(key)?.host))) {
           tracks.add((
             track: total.track,
             item: UnifiedLibraryItem.fromDownloadHistory(downloaded),
@@ -87,7 +85,7 @@ final _homeOnRepeatProvider =
         }
         final ids = await database.getPhysicalFileIds([key]);
         // With Local Library off its songs stay off Home as well.
-        if (ids.isNotEmpty && !includeLocal) continue;
+        if (ids.isNotEmpty && !scope.allowsIndexedPath(key)) continue;
         final row = ids.isEmpty ? null : await database.getById(ids.first);
         if (row != null) {
           tracks.add((

@@ -1,3 +1,5 @@
+import 'package:mornye/services/music_library_scope.dart';
+export 'package:mornye/services/music_library_scope.dart';
 import 'package:flutter/widgets.dart' show WidgetsBinding, AppLifecycleState;
 import 'package:mornye/providers/server_favourite_provider.dart';
 import 'dart:async';
@@ -162,6 +164,30 @@ final libraryIncludesNetworkSourcesProvider = Provider<bool>((ref) {
       ref.watch(librarySourceConnectionsProvider).value ??
       const <NetworkConnection>[];
   return connections.any((c) => id == null || c.id == id);
+});
+
+/// The same active source boundary is used by browsing, Home and playback lookup.
+final musicLibraryScopeProvider = Provider<MusicLibraryScope>((ref) {
+  final storage = ref.watch(librarySourceStorageProvider);
+  final virtual = storage.virtualSources == null
+      ? const Iterable<String>.empty()
+      : ref
+            .watch(localLibraryProvider.select((s) => s.sources))
+            .where((s) => s.enabled && s.path.startsWith('network://'))
+            .map((s) => Uri.parse(s.path).host)
+            .where((id) => storage.virtualFor(id) != null);
+  return MusicLibraryScope(
+    deviceEnabled: ref.watch(
+      settingsProvider.select((s) => s.localLibraryEnabled),
+    ),
+    selection: ref.watch(effectiveLibrarySourceProvider),
+    enabledServers: {
+      ...(ref.watch(librarySourceConnectionsProvider).value ??
+              const <NetworkConnection>[])
+          .map((c) => c.id),
+      ...virtual,
+    },
+  );
 });
 
 QueueLibraryDbQuery queryForMusicSource(

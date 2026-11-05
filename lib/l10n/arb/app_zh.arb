@@ -6333,5 +6333,6 @@
     "description": "Option that preserves the provider artwork at its original resolution"
   },
   "liveBroadcastPaused": "Paused",
-  "liveBroadcastConnecting": "Connecting…"
+  "liveBroadcastConnecting": "Connecting…",
+  "playbackServerSlow": "The music server is taking too long. Try again?"
 }

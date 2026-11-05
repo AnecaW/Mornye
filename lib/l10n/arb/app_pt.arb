@@ -4151,5 +4151,6 @@
   "nowPlayingPreviousTrack": "Faixa anterior",
   "nowPlayingNextTrack": "Próxima faixa",
   "liveBroadcastPaused": "Paused",
-  "liveBroadcastConnecting": "Connecting…"
+  "liveBroadcastConnecting": "Connecting…",
+  "playbackServerSlow": "The music server is taking too long. Try again?"
 }

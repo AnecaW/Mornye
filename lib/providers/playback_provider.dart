@@ -1,3 +1,4 @@
+import 'package:mornye/providers/library_source_provider.dart';
 import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -272,6 +273,9 @@ class PlaybackController extends Notifier<PlaybackState> {
       library: _library,
       history: _history,
       includeLocal: ref.read(settingsProvider).localLibraryEnabled,
+      scope: ref
+          .read(musicLibraryScopeProvider)
+          .apply(const QueueLibraryDbQuery()),
       recoverDownload: (source, id) => recovery.recover(
         source,
         historyId: id,

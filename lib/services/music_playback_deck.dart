@@ -1,3 +1,4 @@
+import 'package:mornye/services/playback_buffer_policy.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -127,7 +128,8 @@ PlaybackDeckState _deckState(PlayerState state) => switch (state) {
 /// The audioplayers deck (Android, iOS, macOS), with Android's native USB
 /// path. Each prepare owns a token so delayed native events cannot affect a
 /// new song.
-class AudioplayersPlaybackDeck implements PlaybackDeck, PlaybackBufferingDeck {
+class AudioplayersPlaybackDeck
+    implements PlaybackDeck, PlaybackBufferingDeck, PlaybackPreparationDeck {
   AudioplayersPlaybackDeck({
     required String playerId,
     bool? nativeAvailable,
@@ -327,6 +329,16 @@ class AudioplayersPlaybackDeck implements PlaybackDeck, PlaybackBufferingDeck {
   }
 
   @override
+  Future<void> configurePreparation(PlaybackBufferPolicy policy) async {
+    if (!_darwinSourceReplacement) return;
+    await _ordinary.getDuration();
+    await _effects.invokeMethod<void>('setBufferingPolicy', {
+      'playerId': _ordinary.playerId,
+      'configuration': policy.toNative(),
+    });
+  }
+
+  @override
   Future<void> configureOutput() async {
     // AudioPlayer.release() itself calls stop(). On Darwin, stop mode seeks
     // the outgoing remote item; release mode drops it without fetching bytes.
@@ -493,7 +505,9 @@ class AudioplayersPlaybackDeck implements PlaybackDeck, PlaybackBufferingDeck {
     final abandoned = _ordinaryPreparation = Completer<void>();
     try {
       await _ordinary.release();
-      if (abandoned.isCompleted || _disposed || generation != _sourceGeneration) {
+      if (abandoned.isCompleted ||
+          _disposed ||
+          generation != _sourceGeneration) {
         return;
       }
       _ordinaryError = null;

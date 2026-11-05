@@ -5,22 +5,41 @@ final class EqualizerAudioTap {
   let dsp = EqualizerDSP()
   private var format = AudioStreamBasicDescription()
   private var frame = [Double](repeating: 0, count: 8)
+  private var processedFrames: Int64 = 0
+  private var inputEnergy = 0.0, outputEnergy = 0.0
+
+  func diagnostics() -> [String: Any] {
+    dsp.lock.lock(); defer { dsp.lock.unlock() }
+    let frames = Double(max(1, processedFrames))
+    return ["processedFrames": processedFrames, "sampleRate": format.mSampleRate,
+      "bits": format.mBitsPerChannel, "channels": format.mChannelsPerFrame,
+      "inputRms": sqrt(inputEnergy / frames), "outputRms": sqrt(outputEnergy / frames)]
+  }
 
   @MainActor static func attach(to item: AVPlayerItem, processor: EqualizerAudioTap) async throws {
     let protected: Bool
-    let tracks: [AVAssetTrack]
     if #available(iOS 15.0, macOS 12.0, *) {
       protected = try await item.asset.load(.hasProtectedContent)
-      tracks = try await item.asset.loadTracks(withMediaType: .audio)
+    } else { protected = item.asset.hasProtectedContent }
+    guard !protected else { throw AudioPlayerError.error("Equalizer is unavailable for protected audio") }
+    let input: AVMutableAudioMixInputParameters
+    if #available(iOS 27.0, macOS 27.0, *) {
+      // A stream's mix is not an AVAssetTrack. The mix ID supports live MP3,
+      // AAC and HLS through the same decoded-PCM DSP as ordinary files.
+      input = AVMutableAudioMixInputParameters()
+      input.trackID = AVAudioMixInputParametersTrackID.mixID.rawValue
     } else {
-      protected = item.asset.hasProtectedContent
-      tracks = item.asset.tracks(withMediaType: .audio)
-    }
-    if protected || (item.asset as? AVURLAsset)?.url.pathExtension.lowercased() == "m3u8" {
-      throw AudioPlayerError.error("Equalizer is unavailable for protected audio or HLS streams")
-    }
-    guard let track = tracks.first else {
-      throw AudioPlayerError.error("Equalizer cannot access this audio track")
+      if (item.asset as? AVURLAsset)?.url.pathExtension.lowercased() == "m3u8" {
+        throw AudioPlayerError.error("HLS equalizer processing requires iOS 27 or macOS 27")
+      }
+      let tracks: [AVAssetTrack]
+      if #available(iOS 15.0, macOS 12.0, *) {
+        tracks = try await item.asset.loadTracks(withMediaType: .audio)
+      } else { tracks = item.asset.tracks(withMediaType: .audio) }
+      guard let track = tracks.first ?? item.tracks.compactMap({ $0.assetTrack }).first(where: { $0.mediaType == .audio }) else {
+        throw AudioPlayerError.error("Equalizer cannot access this stream's audio track on this system")
+      }
+      input = AVMutableAudioMixInputParameters(track: track)
     }
     let retained = Unmanaged.passRetained(processor)
     var callbacks = MTAudioProcessingTapCallbacks(
@@ -30,8 +49,11 @@ final class EqualizerAudioTap {
       finalize: { tap in Unmanaged<EqualizerAudioTap>.fromOpaque(MTAudioProcessingTapGetStorage(tap)).release() },
       prepare: { tap, _, format in
         let processor = Unmanaged<EqualizerAudioTap>.fromOpaque(MTAudioProcessingTapGetStorage(tap)).takeUnretainedValue()
-        processor.format = format.pointee
         processor.dsp.prepare(sampleRate: format.pointee.mSampleRate)
+        processor.dsp.lock.lock()
+        processor.format = format.pointee
+        processor.processedFrames = 0; processor.inputEnergy = 0; processor.outputEnergy = 0
+        processor.dsp.lock.unlock()
       },
       unprepare: nil,
       process: { tap, count, _, buffers, framesOut, flagsOut in
@@ -43,12 +65,16 @@ final class EqualizerAudioTap {
         processor.process(buffers, frames: Int(framesOut.pointee))
       })
     var tap: MTAudioProcessingTap?
-    let status = MTAudioProcessingTapCreate(kCFAllocatorDefault, &callbacks, kMTAudioProcessingTapCreationFlag_PostEffects, &tap)
+    let status: OSStatus
+    if #available(iOS 27.0, macOS 27.0, *) {
+      status = MTAudioProcessingTapCreateWithPreferredFormat(kCFAllocatorDefault, &callbacks, kMTAudioProcessingTapCreationFlag_PostEffects, nil, &tap)
+    } else {
+      status = MTAudioProcessingTapCreate(kCFAllocatorDefault, &callbacks, kMTAudioProcessingTapCreationFlag_PostEffects, &tap)
+    }
     guard status == noErr, let tap else {
       retained.release()
       throw AudioPlayerError.error("Could not create equalizer audio tap: \(status)")
     }
-    let input = AVMutableAudioMixInputParameters(track: track)
     input.audioTapProcessor = tap
     let mix = AVMutableAudioMix()
     mix.inputParameters = [input]
@@ -78,7 +104,10 @@ final class EqualizerAudioTap {
           channel += 1
         }
       }
+      inputEnergy += frame[0] * frame[0]
       dsp.processFrame(&frame, channels: channels)
+      outputEnergy += frame[0] * frame[0]
+      processedFrames += 1
       channel = 0
       for buffer in buffers {
         let data = buffer.mData!

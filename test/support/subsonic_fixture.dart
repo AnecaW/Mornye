@@ -25,6 +25,7 @@ class SubsonicFixture {
   final HttpServer server;
   final bool secure;
   final requests = <Uri>[];
+  final peerPorts = <int?>[];
   final methods = <String>[];
   final authorizations = <String?>[];
   final ranges = <String?>[];
@@ -100,6 +101,7 @@ class SubsonicFixture {
 
   Future<void> _handle(HttpRequest request) async {
     requests.add(request.uri);
+    peerPorts.add(request.connectionInfo?.remotePort);
     methods.add(request.method);
     authorizations.add(request.headers.value('authorization'));
     ranges.add(request.headers.value('range'));
@@ -175,9 +177,10 @@ class SubsonicFixture {
           'getAlbumList2' when songs != null => {
             'albumList2': {
               'album': [
-                for (final id in {
-                  for (final song in songs) song['albumId'],
-                }.skip(repeatPage ? 0 : int.parse(query['offset']!)).take(albumPageSize))
+                for (final id
+                    in {for (final song in songs) song['albumId']}
+                        .skip(repeatPage ? 0 : int.parse(query['offset']!))
+                        .take(albumPageSize))
                   {'id': id, 'name': id},
               ],
             },

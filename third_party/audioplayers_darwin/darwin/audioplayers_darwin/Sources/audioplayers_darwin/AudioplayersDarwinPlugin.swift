@@ -211,7 +211,12 @@ public class AudioplayersDarwinPlugin: NSObject, FlutterPlugin {
       return
     }
 
-    if method == "setEqualizer" {
+    if method == "getEqualizerDiagnostics" {
+      result(player.equalizerDiagnostics())
+      return
+    } else if method == "setBufferingPolicy" {
+      player.setBufferingPolicy(args["configuration"] as? [String: Any] ?? [:])
+    } else if method == "setEqualizer" {
       guard let configuration = args["configuration"] as? [String: Any] else {
         result(FlutterError(code: "DarwinAudioError", message: "Missing equalizer configuration", details: nil))
         return

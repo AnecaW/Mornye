@@ -7,6 +7,8 @@ import 'package:mornye/models/settings.dart';
 import 'package:mornye/models/track.dart';
 import 'package:mornye/providers/download_queue_provider.dart';
 import 'package:mornye/providers/playback_provider.dart';
+import 'package:mornye/providers/library_source_provider.dart';
+import 'package:mornye/services/library_source_scope.dart';
 import 'package:mornye/providers/settings_provider.dart';
 import 'package:mornye/services/history_database.dart';
 import 'package:mornye/services/library_database.dart';
@@ -28,6 +30,23 @@ class _Library extends Fake implements LibraryDatabase {
       else
         null,
   ];
+  @override
+  Future<List<Map<String, dynamic>?>> findExistingBatchScoped(
+    List<LocalLibraryBatchLookupRequest> requests,
+    QueueLibraryDbQuery scope,
+  ) async => (await findExistingBatch(requests))
+      .map(
+        (row) =>
+            row != null &&
+                libraryScopeAllowsPath(
+                  scope,
+                  row['filePath'] as String,
+                  indexed: true,
+                )
+            ? row
+            : null,
+      )
+      .toList();
 }
 
 class _HistoryDatabase extends Fake implements HistoryDatabase {
@@ -153,9 +172,17 @@ void main() {
     _HistoryDatabase history, {
     _Library? library,
     bool localLibrary = false,
+    Set<String> servers = const {},
   }) {
     final container = ProviderContainer(
       overrides: [
+        musicLibraryScopeProvider.overrideWithValue(
+          MusicLibraryScope(
+            deviceEnabled: localLibrary,
+            selection: 'all',
+            enabledServers: servers,
+          ),
+        ),
         playbackProvider.overrideWith(
           () => PlaybackController(
             library: library ?? _Library(),
@@ -196,6 +223,25 @@ void main() {
     }
   });
 
+  test(
+    'NAS playlist paths stay playable with Local Library disabled',
+    () async {
+      final library = _Library()
+        ..paths['Track 0'] = 'network://nas/subsonic/song/a.flac';
+      final history = _HistoryDatabase();
+      final c = containerFor(
+        history,
+        library: library,
+        localLibrary: false,
+        servers: {'nas'},
+      );
+      final paths = await c
+          .read(playbackProvider.notifier)
+          .resolveTrackFilePaths(tracks(1));
+      expect(paths, ['network://nas/subsonic/song/a.flac']);
+      expect(history.deletes, isEmpty);
+    },
+  );
   test('large SAF queues use bounded batches and deduplicate paths', () async {
     final database = _HistoryDatabase();
     for (var index = 0; index < 131; index++) {

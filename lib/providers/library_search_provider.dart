@@ -59,12 +59,9 @@ final librarySearchProvider = FutureProvider.autoDispose
         settingsProvider.select((s) => s.localLibraryEnabled),
       );
       ref.watch(downloadHistoryProvider.select((s) => s.loadedIndexVersion));
-      final selected = ref.watch(effectiveLibrarySourceProvider);
-      final scope = queryForMusicSource(
-        QueueLibraryDbQuery(includeLocal: includeLocal),
-        selected,
-        includeNetwork: ref.watch(libraryIncludesNetworkSourcesProvider),
-      );
+      final scope = ref
+          .watch(musicLibraryScopeProvider)
+          .apply(QueueLibraryDbQuery(includeLocal: includeLocal));
       if (scope.includeLocal) {
         ref.watch(localLibraryProvider.select((s) => s.loadedIndexVersion));
       }

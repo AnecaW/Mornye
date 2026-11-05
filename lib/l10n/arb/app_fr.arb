@@ -8000,5 +8000,6 @@
     "description": "Keyboard Shortcuts row for the shortcut that collapses or expands the desktop sidebar"
   },
   "liveBroadcastPaused": "Paused",
-  "liveBroadcastConnecting": "Connecting…"
+  "liveBroadcastConnecting": "Connecting…",
+  "playbackServerSlow": "The music server is taking too long. Try again?"
 }

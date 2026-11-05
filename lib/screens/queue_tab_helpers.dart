@@ -433,7 +433,8 @@ final _queueLibraryPageProvider = FutureProvider.autoDispose
       ref.watch(
         downloadHistoryProvider.select((state) => state.loadedIndexVersion),
       );
-      final includeNetwork = ref.watch(libraryIncludesNetworkSourcesProvider);
+      final scope = ref.watch(musicLibraryScopeProvider);
+      final includeNetwork = scope.activeServers.isNotEmpty;
       if (request.localLibraryEnabled || includeNetwork) {
         ref.watch(
           localLibraryProvider.select((state) => state.loadedIndexVersion),
@@ -443,7 +444,9 @@ final _queueLibraryPageProvider = FutureProvider.autoDispose
       if (request.filterMode == 'playlists') {
         return const _QueueLibraryPageData();
       }
-      final dbQuery = request.toDbQuery(includeNetwork: includeNetwork);
+      final dbQuery = scope.apply(
+        request.toDbQuery(includeNetwork: includeNetwork),
+      );
       if (request.filterMode == 'albums') {
         final page = await LibraryDatabase.instance.getQueueAlbumPageResult(
           dbQuery,
@@ -527,13 +530,14 @@ final _queueLibraryCountsProvider = FutureProvider.autoDispose
       ref.watch(
         downloadHistoryProvider.select((state) => state.loadedIndexVersion),
       );
-      final includeNetwork = ref.watch(libraryIncludesNetworkSourcesProvider);
+      final scope = ref.watch(musicLibraryScopeProvider);
+      final includeNetwork = scope.activeServers.isNotEmpty;
       if (request.localLibraryEnabled || includeNetwork) {
         ref.watch(
           localLibraryProvider.select((state) => state.loadedIndexVersion),
         );
       }
       return LibraryDatabase.instance.getQueueCounts(
-        request.toDbQuery(includeNetwork: includeNetwork),
+        scope.apply(request.toDbQuery(includeNetwork: includeNetwork)),
       );
     });

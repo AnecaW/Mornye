@@ -42,3 +42,23 @@ String sourceAlbumKey(String key, String path) {
   final uri = Uri.tryParse(path);
   return uri?.scheme == 'network' ? 'network://${uri!.host}/$key' : key;
 }
+
+/// In-memory equivalent of the SQL boundary, also used before pruning History.
+bool libraryScopeAllowsPath(
+  QueueLibraryDbQuery? scope,
+  String path, {
+  bool indexed = false,
+}) {
+  if (scope == null) return true;
+  final uri = Uri.tryParse(path);
+  if (uri?.scheme == 'network') {
+    return !scope.deviceOnly &&
+        (scope.networkScope?.contains(uri!.host) ?? true);
+  }
+  if (indexed && (!scope.includeLocal || !scope.includeIndexedDevice))
+    return false;
+  if (scope.networkScope != null && !scope.includeDevice) return false;
+  if (scope.deviceOnly && (uri?.scheme == 'http' || uri?.scheme == 'https'))
+    return false;
+  return true;
+}

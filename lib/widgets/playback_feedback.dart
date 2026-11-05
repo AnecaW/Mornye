@@ -52,6 +52,7 @@ class _PlaybackFeedbackState extends ConsumerState<PlaybackFeedback> {
             ),
             content: Text(switch (message) {
               'playback_network' => context.l10n.playbackServerUnavailable,
+              'playback_timeout' => context.l10n.playbackServerSlow,
               'playback_authentication' => context.l10n.playbackSignInRequired,
               'playback_missing' => context.l10n.playbackTrackMissing,
               'playback_invalidAudio' => context.l10n.playbackInvalidAudio,

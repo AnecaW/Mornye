@@ -1,3 +1,4 @@
+import 'package:mornye/services/playback_buffer_policy.dart';
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
@@ -10,6 +11,12 @@ enum PlaybackDeckState { stopped, playing, paused, completed, disposed }
 abstract interface class PlaybackBufferingDeck {
   bool get isBuffering;
   Stream<bool> get onBufferingChanged;
+}
+
+/// Optional native preparation policy; implementations without a custom policy
+/// still wait for their engine's normal prepared event.
+abstract interface class PlaybackPreparationDeck {
+  Future<void> configurePreparation(PlaybackBufferPolicy policy);
 }
 
 /// The engine behind `PlaybackDependencies.createDeck`.

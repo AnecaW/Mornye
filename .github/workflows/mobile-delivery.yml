@@ -14,10 +14,15 @@ on:
         required: false
         default: false
         type: boolean
+      native_only:
+        description: 'Compile and test native playback without packaging'
+        required: false
+        default: false
+        type: boolean
 permissions:
   contents: read
 concurrency:
-  group: mobile-delivery-${{ github.ref }}-${{ inputs.verify_only && 'verify-only' || (inputs.source_commit != '' && 'ios-only' || 'full') }}
+  group: mobile-delivery-${{ github.ref }}-${{ inputs.native_only && 'native-only' || 'standard' }}-${{ inputs.verify_only && 'verify-only' || (inputs.source_commit != '' && 'ios-only' || 'full') }}
   cancel-in-progress: true
 env:
   # The proprietary Discord SDK is not available in a clean fork. The existing
@@ -25,7 +30,7 @@ env:
   MORNYE_DISCORD_SDK: "0"
 jobs:
   verify:
-    if: ${{ inputs.source_commit == '' || inputs.verify_only }}
+    if: ${{ !inputs.native_only && (inputs.source_commit == '' || inputs.verify_only) }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -82,7 +87,7 @@ jobs:
           path: build/test-results/
           if-no-files-found: ignore
   android:
-    if: ${{ inputs.source_commit == '' && !inputs.verify_only }}
+    if: ${{ !inputs.native_only && inputs.source_commit == '' && !inputs.verify_only }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -155,7 +160,7 @@ jobs:
         if: always()
         run: rm -f android/key.properties "$RUNNER_TEMP/mornye-delivery.jks"
   ios:
-    if: ${{ !inputs.verify_only }}
+    if: ${{ !inputs.native_only && !inputs.verify_only }}
     runs-on: xcode-27
     timeout-minutes: 90
     steps:
@@ -275,3 +280,23 @@ jobs:
           path: .tmp/ios-diagnostics/
           if-no-files-found: ignore
           retention-days: 7
+
+  native:
+    if: ${{ inputs.native_only }}
+    runs-on: xcode-27
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.source_commit || github.sha }}
+      - name: Test native AVPlayer lifecycle
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          native=third_party/audioplayers_darwin/darwin/audioplayers_darwin/Sources/audioplayers_darwin
+          mkdir -p .tmp/native-tests
+          xcrun swiftc -parse-as-library -target "$(uname -m)-apple-macos14.0" \
+            "$native/WrappedMediaPlayer.swift" "$native/Utils.swift" "$native/AudioPlayerError.swift" \
+            "$native/EqualizerAudioTap.swift" "$native/EqualizerDSP.swift" \
+            third_party/audioplayers_darwin/tests/SourceLifecycleTests.swift -o .tmp/native-tests/source-lifecycle
+          .tmp/native-tests/source-lifecycle

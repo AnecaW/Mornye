@@ -8385,5 +8385,6 @@
   "playlistImportNoTracks": "Tidak ada lagu di file ini",
   "playlistImportFailed": "File playlist ini tidak dapat dibaca",
   "liveBroadcastPaused": "Paused",
-  "liveBroadcastConnecting": "Connecting…"
+  "liveBroadcastConnecting": "Connecting…",
+  "playbackServerSlow": "The music server is taking too long. Try again?"
 }

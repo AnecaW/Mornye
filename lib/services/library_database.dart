@@ -668,9 +668,23 @@ class LibraryDatabase {
   /// of issuing up to three SQLite calls for every track.
   Future<List<Map<String, dynamic>?>> findExistingBatch(
     List<LocalLibraryBatchLookupRequest> requests,
-  ) async {
+  ) => _findExistingBatch(requests);
+
+  Future<List<Map<String, dynamic>?>> findExistingBatchScoped(
+    List<LocalLibraryBatchLookupRequest> requests,
+    QueueLibraryDbQuery scope,
+  ) => _findExistingBatch(requests, scope: scope, strictIds: true);
+
+  Future<List<Map<String, dynamic>?>> _findExistingBatch(
+    List<LocalLibraryBatchLookupRequest> requests, {
+    QueueLibraryDbQuery? scope,
+    bool strictIds = false,
+  }) async {
     if (requests.isEmpty) return const [];
     final db = await database;
+    final where = <String>[];
+    final args = <Object?>[];
+    appendLibrarySourceScope(where, args, scope, 'file_path', indexed: true);
     final byId = <String, Map<String, dynamic>>{};
     final byIsrc = <String, Map<String, dynamic>>{};
     final byMatchKey = <String, Map<String, dynamic>>{};
@@ -687,6 +701,8 @@ class LibraryDatabase {
         rawValues: rawValues,
         destination: destination,
         mapRow: LibraryRowMapper.decode,
+        extraWhere: where.isEmpty ? null : where.join(' AND '),
+        extraWhereArgs: args,
       );
     }
 
@@ -705,7 +721,7 @@ class LibraryDatabase {
     return requests
         .map((request) {
           final id = request.id?.trim() ?? '';
-          if (id.isNotEmpty && byId[id] != null) return byId[id];
+          if (id.isNotEmpty && (strictIds || byId[id] != null)) return byId[id];
           final isrc = request.isrc?.trim() ?? '';
           if (isrc.isNotEmpty && byIsrc[isrc] != null) return byIsrc[isrc];
           return byMatchKey[matchKeyFor(request.trackName, request.artistName)];

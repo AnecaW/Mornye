@@ -1,3 +1,5 @@
+import 'package:mornye/services/library_database.dart';
+import 'package:mornye/providers/library_source_provider.dart';
 import 'dart:io';
 import 'dart:math';
 
@@ -1451,15 +1453,17 @@ Future<void> _openCollectionTrack(
     return;
   }
 
-  final localItem = ref.read(settingsProvider).localLibraryEnabled
-      ? await ref
-            .read(localLibraryProvider.notifier)
-            .findExistingAsync(
-              isrc: track.isrc,
-              trackName: track.name,
-              artistName: track.artistName,
-            )
-      : null;
+  final matches = await LibraryDatabase.instance.findExistingBatchScoped([
+    LocalLibraryBatchLookupRequest(
+      id: track.source == 'local' ? track.id : null,
+      isrc: track.isrc,
+      trackName: track.name,
+      artistName: track.artistName,
+    ),
+  ], ref.read(musicLibraryScopeProvider).apply(const QueueLibraryDbQuery()));
+  final localItem = matches.single == null
+      ? null
+      : LocalLibraryItem.fromJson(matches.single!);
   if (!context.mounted) return;
 
   if (localItem != null) {

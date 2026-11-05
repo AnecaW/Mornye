@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:mornye/utils/logger.dart';
 import 'package:mornye/services/playback_load.dart';
+import 'package:mornye/services/playback_buffer_policy.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -308,6 +309,8 @@ class NetworkStorageService {
     metadataCache: SubsonicResponseCache(),
   );
   final _playbackPrefixes = <String, _PlaybackPrefix>{};
+  final _playbackPreparations = <String, _SharedPlaybackPreparation>{};
+  final _playbackProfiles = <String, PlaybackNetworkProfile>{};
   final SubsonicResponseCache? metadataCache;
   final NetworkAudioCache? audioCache;
   static const _storage = FlutterSecureStorage(
@@ -891,7 +894,10 @@ class NetworkStorageService {
       certificate: connection.trustedCertificateSha256,
     );
     final client =
-        _readClients.remove(key) ?? (_client()..maxConnectionsPerHost = 6);
+        _readClients.remove(key) ??
+        (_client()
+          ..maxConnectionsPerHost = 6
+          ..idleTimeout = const Duration(minutes: 2));
     while (_readClients.length >= 8) {
       _readClients.remove(_readClients.keys.first)!.close();
     }
@@ -922,6 +928,7 @@ class NetworkStorageService {
     int redirects = 0,
     Map<String, String> headers = const {},
     File? upload,
+    void Function(HttpClientRequest)? onRequest,
     String? formBody,
     void Function()? checkpoint,
     void Function(int)? progress,
@@ -961,6 +968,7 @@ class NetworkStorageService {
       if (rejectedCertificate != null) throw rejectedCertificate!;
       rethrow;
     }
+    onRequest?.call(request);
     request.followRedirects = false;
     request.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
     if (c.protocol != NetworkProtocol.subsonic &&
@@ -1055,6 +1063,8 @@ class NetworkStorageService {
         davDepth: davDepth,
         directoryListing: directoryListing,
         redirects: redirects + 1,
+        headers: headers,
+        onRequest: onRequest,
       );
     }
     return response;
@@ -1738,6 +1748,11 @@ class NetworkStorageService {
     _server = null;
     _routes.clear();
     _playbackPrefixes.clear();
+    for (final work in _playbackPreparations.values) {
+      work.load.cancel();
+    }
+    _playbackPreparations.clear();
+    _playbackProfiles.clear();
     for (final client in _readClients.values) {
       client.close(force: true);
     }

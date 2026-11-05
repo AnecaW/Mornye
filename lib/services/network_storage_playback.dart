@@ -11,6 +11,29 @@ class _PlaybackPrefix {
   final DateTime expires;
 }
 
+class _SharedPlaybackPreparation {
+  _SharedPlaybackPreparation(this.load);
+  final PlaybackLoad load;
+  late final Future<String> result;
+  int subscribers = 0;
+  bool completed = false;
+}
+
+Duration? _retryAfter(String? header) {
+  if (header == null) return null;
+  var seconds = int.tryParse(header);
+  if (seconds == null) {
+    try {
+      seconds = HttpDate.parse(
+        header,
+      ).difference(DateTime.now().toUtc()).inSeconds;
+    } on FormatException {
+      return null;
+    }
+  }
+  return Duration(seconds: seconds.clamp(0, 15));
+}
+
 extension NetworkPlaybackPreparation on NetworkStorageService {
   Future<void> invalidatePlaybackPreparation(
     String source, {
@@ -19,12 +42,65 @@ extension NetworkPlaybackPreparation on NetworkStorageService {
     final (:host, :path) = NetworkStorageService._sourceParts(source);
     final c = await connection(host);
     _playbackPrefixes.remove(_audioCacheKey(c, path));
+    _playbackProfiles[_audioCacheKey(c, '')]?.stalled();
     if (corruptCache) await removeCachedAudio(source);
   }
 
   /// A small ranged read validates media before it reaches AVPlayer. This
-  /// owns its client: cancelling it cannot interrupt the audible stream.
+  /// shares the server pool; cancellation aborts only this request, never the audible stream.
   Future<String> preparePlayback(String source, PlaybackLoad load) async {
+    load.check();
+    load.mark(PlaybackPreparationStage.resolvingSource);
+    final (:host, :path) = NetworkStorageService._sourceParts(source);
+    if (virtualFor(host) != null)
+      return load.wait(resolve(source, forPlayback: true));
+    final connectionValue = await load.wait(connection(host));
+    final key = _audioCacheKey(connectionValue, path);
+    var shared = _playbackPreparations[key];
+    if (shared == null || shared.load.cancelled) {
+      shared = _SharedPlaybackPreparation(
+        PlaybackLoad(requestId: load.requestId, bitrate: load.bitrate),
+      );
+      _playbackPreparations[key] = shared;
+      final work = shared;
+      work.result = _preparePlayback(source, work.load);
+      void completed() {
+        work.completed = true;
+        if (identical(_playbackPreparations[key], work))
+          _playbackPreparations.remove(key);
+      }
+
+      unawaited(
+        work.result.then<void>(
+          (_) => completed(),
+          onError: (Object _, StackTrace __) => completed(),
+        ),
+      );
+    }
+    final work = shared;
+    work.subscribers++;
+    var detached = false;
+    void detach() {
+      if (detached) return;
+      detached = true;
+      work.subscribers--;
+      if (work.subscribers == 0 && !work.completed) work.load.cancel();
+    }
+
+    final unregister = load.onCancel(detach);
+    try {
+      final result = await load.wait(work.result);
+      load.bufferPolicy = work.load.bufferPolicy;
+      load.receivedBytes = work.load.receivedBytes;
+      load.requests += work.load.requests;
+      return result;
+    } finally {
+      unregister();
+      detach();
+    }
+  }
+
+  Future<String> _preparePlayback(String source, PlaybackLoad load) async {
     load.check();
     final (:host, :path) = NetworkStorageService._sourceParts(source);
     if (virtualFor(host) != null)
@@ -47,6 +123,16 @@ extension NetworkPlaybackPreparation on NetworkStorageService {
     if (c.protocol == NetworkProtocol.smb)
       return load.wait(resolve(source, forPlayback: true));
     final key = _audioCacheKey(c, path);
+    final profileKey = _audioCacheKey(c, '');
+    final profile = _playbackProfiles.putIfAbsent(
+      profileKey,
+      PlaybackNetworkProfile.new,
+    );
+    while (_playbackProfiles.length > 16) {
+      _playbackProfiles.remove(_playbackProfiles.keys.first);
+    }
+    load.bufferPolicy = profile.policy;
+    final probeBytes = profile.probeBytes(load.bitrate);
     final checked = _playbackPrefixes[key];
     if (checked != null && checked.expires.isAfter(DateTime.now())) {
       _playbackLog.d(
@@ -55,30 +141,54 @@ extension NetworkPlaybackPreparation on NetworkStorageService {
       return load.wait(resolve(source, forPlayback: true));
     }
     final clock = Stopwatch()..start();
-    final client = _client();
-    load.onCancel(() => client.close(force: true));
+    final transferClock = Stopwatch();
+    Duration? firstByte;
+    final client = _readClient(c);
+    HttpClientRequest? activeRequest;
+    final removeCancellation = load.onCancel(() => activeRequest?.abort());
     final deadline = Timer(
       const Duration(seconds: 15),
-      () => client.close(force: true),
+      () => activeRequest?.abort(
+        const SocketException('Playback preparation timed out'),
+      ),
     );
     StreamIterator<List<int>>? bytes;
     try {
       final target = c.protocol == NetworkProtocol.subsonic
           ? _subsonicMediaTarget(c, path)
           : networkTarget(c, path);
+      load.mark(PlaybackPreparationStage.connecting);
+      load.requests++;
       final response = await load.wait(
-        _request(client, c, 'GET', target, range: 'bytes=0-4095'),
+        _request(
+          client,
+          c,
+          'GET',
+          target,
+          range: 'bytes=0-${probeBytes - 1}',
+          onRequest: (request) {
+            activeRequest = request;
+            if (load.cancelled) request.abort();
+            load.check();
+          },
+        ),
       );
       load.check();
       final status = response.statusCode;
+      load.mark(PlaybackPreparationStage.validatingStream, status: status);
       if (status != 200 && status != 206) {
         throw PlaybackFailure(
           status == 401 || status == 403
               ? PlaybackFailureKind.authentication
               : status == 404 || status == 410
               ? PlaybackFailureKind.missing
+              : status == 408 || status == 504
+              ? PlaybackFailureKind.timeout
               : PlaybackFailureKind.network,
           status: status,
+          retryAfter: _retryAfter(
+            response.headers.value(HttpHeaders.retryAfterHeader),
+          ),
         );
       }
       final mime = response.headers.contentType?.mimeType ?? '';
@@ -96,10 +206,17 @@ extension NetworkPlaybackPreparation on NetworkStorageService {
       }
       bytes = StreamIterator(response.timeout(const Duration(seconds: 10)));
       final prefix = <int>[];
-      while (prefix.length < 4096 && await load.wait(bytes.moveNext())) {
-        prefix.addAll(bytes.current.take(4096 - prefix.length));
+      while (prefix.length < probeBytes && await load.wait(bytes.moveNext())) {
+        firstByte ??= clock.elapsed;
+        if (!transferClock.isRunning) transferClock.start();
+        prefix.addAll(bytes.current.take(probeBytes - prefix.length));
       }
       load.check();
+      // A completed bounded range returns its connection to the pool. Never
+      // drain an ignored range: that would download the rest of the file.
+      if (response.contentLength == prefix.length) {
+        await load.wait(bytes.moveNext());
+      }
       if (c.protocol == NetworkProtocol.subsonic && mime.contains('json')) {
         try {
           final document = _subsonicMap(jsonDecode(utf8.decode(prefix)));
@@ -150,6 +267,13 @@ extension NetworkPlaybackPreparation on NetworkStorageService {
       _playbackLog.d(
         'Playback request=${load.requestId} stream status=$status bytes=${prefix.length} elapsedMs=${clock.elapsedMilliseconds} trackHash=${source.hashCode}',
       );
+      profile.observe(
+        firstByte: firstByte ?? clock.elapsed,
+        bytes: prefix.length,
+        transfer: transferClock.elapsed,
+      );
+      load.bufferPolicy = profile.policy;
+      load.receivedBytes = prefix.length;
       setReachable(host, reachable: true);
       return await load.wait(resolve(source, forPlayback: true));
     } on PlaybackSuperseded {
@@ -159,7 +283,7 @@ extension NetworkPlaybackPreparation on NetworkStorageService {
       throw PlaybackFailure.classify(error);
     } finally {
       deadline.cancel();
-      client.close(force: true);
+      removeCancellation();
       await bytes?.cancel();
     }
   }

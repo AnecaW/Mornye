@@ -1,3 +1,4 @@
+import 'package:mornye/services/library_source_scope.dart';
 import 'package:mornye/models/track.dart';
 import 'package:mornye/services/history_database.dart';
 import 'package:mornye/services/download_file_recovery.dart';
@@ -15,23 +16,25 @@ resolveTrackFiles(
   required LibraryDatabase library,
   required HistoryDatabase history,
   required bool includeLocal,
+  QueueLibraryDbQuery? scope,
   Future<String?> Function(String source, String? historyId)? recoverDownload,
 }) async {
   if (tracks.isEmpty) {
     return (paths: const <String?>[], missingHistoryIds: const <String>{});
   }
-  final localFuture = includeLocal
-      ? library.findExistingBatch([
-          for (final track in tracks)
-            LocalLibraryBatchLookupRequest(
-              id: (track.source ?? '').toLowerCase() == 'local'
-                  ? track.id
-                  : null,
-              isrc: track.isrc,
-              trackName: track.name,
-              artistName: track.artistName,
-            ),
-        ])
+  final requests = [
+    for (final track in tracks)
+      LocalLibraryBatchLookupRequest(
+        id: (track.source ?? '').toLowerCase() == 'local' ? track.id : null,
+        isrc: track.isrc,
+        trackName: track.name,
+        artistName: track.artistName,
+      ),
+  ];
+  final localFuture = (scope?.includeLocal ?? includeLocal)
+      ? scope == null
+            ? library.findExistingBatch(requests)
+            : library.findExistingBatchScoped(requests, scope)
       : Future.value(List<Map<String, dynamic>?>.filled(tracks.length, null));
   final historyFuture = history.findExistingTracks([
     for (final track in tracks)
@@ -43,7 +46,15 @@ resolveTrackFiles(
       ),
   ]);
   final localMatches = await localFuture;
-  final historyMatches = await historyFuture;
+  final historyMatches = (await historyFuture)
+      .map(
+        (row) =>
+            row != null &&
+                libraryScopeAllowsPath(scope, row['filePath']?.toString() ?? '')
+            ? row
+            : null,
+      )
+      .toList(growable: false);
 
   final results = List<String?>.filled(tracks.length, null);
   final existsChecks = <String, Future<bool>>{};

@@ -355,6 +355,8 @@ Future<void> loadRowsByColumn(
   required Map<String, Map<String, dynamic>> destination,
   required Map<String, dynamic> Function(Map<String, Object?> row) mapRow,
   String? orderBy,
+  String? extraWhere,
+  List<Object?> extraWhereArgs = const [],
 }) async {
   final values = rawValues.where((value) => value.isNotEmpty).toSet().toList();
   const chunkSize = 450;
@@ -364,8 +366,9 @@ Future<void> loadRowsByColumn(
     final placeholders = List.filled(chunk.length, '?').join(',');
     final rows = await db.rawQuery(
       'SELECT * FROM $table WHERE $column IN ($placeholders)'
+      '${extraWhere == null ? '' : ' AND ($extraWhere)'}'
       '${orderBy == null ? '' : ' ORDER BY $orderBy'}',
-      chunk,
+      [...chunk, ...extraWhereArgs],
     );
     for (final row in rows) {
       final key = row[column] as String?;

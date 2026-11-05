@@ -8030,5 +8030,6 @@
   "playbackCacheUnavailable": "De opgeslagen audio kan niet worden gelezen. Probeer opnieuw te streamen.",
   "playbackTryAgain": "Opnieuw proberen",
   "liveBroadcastPaused": "Gepauzeerd",
-  "liveBroadcastConnecting": "Verbinden…"
+  "liveBroadcastConnecting": "Verbinden…",
+  "playbackServerSlow": "De muziekserver reageert te traag. Opnieuw proberen?"
 }
