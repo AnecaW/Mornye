@@ -8028,5 +8028,7 @@
   "playbackInvalidAudio": "Dit audiobestand kan niet worden afgespeeld.",
   "playbackTrackMissing": "Dit nummer is niet meer beschikbaar.",
   "playbackCacheUnavailable": "De opgeslagen audio kan niet worden gelezen. Probeer opnieuw te streamen.",
-  "playbackTryAgain": "Opnieuw proberen"
+  "playbackTryAgain": "Opnieuw proberen",
+  "liveBroadcastPaused": "Gepauzeerd",
+  "liveBroadcastConnecting": "Verbinden…"
 }

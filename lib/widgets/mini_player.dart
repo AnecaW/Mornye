@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/gestures.dart' show DragStartBehavior;
 import 'package:flutter/semantics.dart' show SemanticsRole;
 import 'package:flutter/material.dart';
+import 'package:mornye/widgets/live_broadcast_controls.dart';
 import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_3_expressive/components/progress_indicators/components/m3e_linear_progress_painter.dart';
@@ -195,6 +196,7 @@ class _MiniPlayerBodyState extends ConsumerState<_MiniPlayerBody> {
       if (!ref.read(playbackLoadingProvider)) unawaited(controller.dismiss());
       return;
     }
+    if (ref.read(liveBroadcastSelectedProvider)) return;
     if (direction < 0) {
       controller.next();
     } else {
@@ -262,7 +264,16 @@ class _MiniPlayerBodyState extends ConsumerState<_MiniPlayerBody> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (!mornye)
+              if (isLiveBroadcastId(mediaItem.id))
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: LiveBroadcastTimeline(
+                    playing: isPlaying,
+                    loading: isLoading,
+                    compact: true,
+                  ),
+                )
+              else if (!mornye)
                 _MiniPlayerProgress(
                   duration: mediaItem.duration ?? Duration.zero,
                   backgroundColor: colorScheme.surfaceContainerHighest,
@@ -403,7 +414,7 @@ class _MiniPlayerBodyState extends ConsumerState<_MiniPlayerBody> {
                             ? null
                             : () => controller.togglePlayPause(isPlaying),
                       ),
-                    if (!compact)
+                    if (!compact && !isLiveBroadcastId(mediaItem.id))
                       AppIconButton(
                         color: mornye ? colorScheme.onSurface : null,
                         tooltip: context.l10n.nowPlayingNextTrack,

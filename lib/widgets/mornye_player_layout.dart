@@ -1,6 +1,7 @@
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
+import 'package:mornye/widgets/live_broadcast_controls.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:mornye/controllers/player_metadata_controller.dart';
@@ -378,6 +379,7 @@ class MornyePlayerLayout extends ConsumerWidget {
         if (landscape) {
           return RepaintBoundary(
             child: MornyeLandscapePlayer(
+              live: isLiveBroadcastId(mediaItem.id),
               page: page,
               isPlaying: ref.watch(playbackPlayingProvider),
               controlsHeldOpen: lyricsOptionsOpen,
@@ -539,29 +541,31 @@ class MornyePlayerLayout extends ConsumerWidget {
               ),
             ),
           ),
-          MornyePlayerFavoriteButton(
-            key: ValueKey(mediaItem.id),
-            mediaItem: mediaItem,
-            compact: page != 0,
-            iconSize: actionSize,
-            color: colorScheme.onSurface,
-          ),
-          Builder(
-            builder: (buttonContext) => SizedBox.square(
-              dimension: _mornyeHeaderButtonSize,
-              child: IconButton(
-                tooltip: MaterialLocalizations.of(context).moreButtonTooltip,
-                color: colorScheme.onSurface,
-                iconSize: actionSize,
-                icon: const Icon(CupertinoIcons.ellipsis),
-                onPressed: () => onMoreActions(
-                  buttonContext,
-                  mediaItem,
-                  mornyeMenuAnchor(buttonContext),
+          if (!isLiveBroadcastId(mediaItem.id))
+            MornyePlayerFavoriteButton(
+              key: ValueKey(mediaItem.id),
+              mediaItem: mediaItem,
+              compact: page != 0,
+              iconSize: actionSize,
+              color: colorScheme.onSurface,
+            ),
+          if (!isLiveBroadcastId(mediaItem.id))
+            Builder(
+              builder: (buttonContext) => SizedBox.square(
+                dimension: _mornyeHeaderButtonSize,
+                child: IconButton(
+                  tooltip: MaterialLocalizations.of(context).moreButtonTooltip,
+                  color: colorScheme.onSurface,
+                  iconSize: actionSize,
+                  icon: const Icon(CupertinoIcons.ellipsis),
+                  onPressed: () => onMoreActions(
+                    buttonContext,
+                    mediaItem,
+                    mornyeMenuAnchor(buttonContext),
+                  ),
                 ),
               ),
             ),
-          ),
         ],
       ),
     );

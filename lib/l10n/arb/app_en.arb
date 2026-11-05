@@ -10089,5 +10089,7 @@
   "playbackInvalidAudio": "This audio file cannot be played.",
   "playbackTrackMissing": "This track is no longer available.",
   "playbackCacheUnavailable": "The saved audio could not be read. Try streaming it again.",
-  "playbackTryAgain": "Try again"
+  "playbackTryAgain": "Try again",
+  "liveBroadcastPaused": "Paused",
+  "liveBroadcastConnecting": "Connecting…"
 }

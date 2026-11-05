@@ -15,6 +15,7 @@ import 'package:mornye/services/network_library_scanner.dart';
 import 'package:mornye/widgets/library_source_selector.dart';
 import 'package:mornye/widgets/library_server_radio.dart';
 import 'package:mornye/widgets/library_scan_status.dart';
+import 'package:mornye/widgets/app_progress_indicator.dart';
 import 'support/subsonic_fixture.dart';
 
 class _Settings extends SettingsNotifier {
@@ -219,13 +220,19 @@ void main() {
         ),
       );
       await tester.pumpWidget(app(c, const LibraryScanStatus()));
+      await tester.tap(find.byType(LibraryScanStatus));
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(find.byType(LibraryScanProgress), findsOneWidget);
       expect(find.textContaining('50 / 100'), findsOneWidget);
       expect(find.textContaining('50%'), findsOneWidget);
       expect(find.textContaining('≈ 10s'), findsOneWidget);
       expect(
         tester
-            .widget<LinearProgressIndicator>(
-              find.byType(LinearProgressIndicator),
+            .widget<AppProgressIndicator>(
+              find.descendant(
+                of: find.byType(LibraryScanProgress),
+                matching: find.byType(AppProgressIndicator),
+              ),
             )
             .value,
         .5,

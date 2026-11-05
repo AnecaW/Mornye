@@ -602,95 +602,12 @@ class _ScanProgressTile extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    // A paused bar stays still at its last position instead of animating.
-    final showIndeterminateProgress =
-        !isPaused &&
-        (isFinalizing ||
-            totalFiles <= 0 ||
-            (scannedFiles <= 0 && progress <= 0));
-    final progressValue = totalFiles > 0 ? progress / 100 : 0.0;
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              AppIcon(
-                isPaused ? Icons.pause_circle_outline : Icons.scanner,
-                color: colorScheme.primary,
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      isPaused
-                          ? context.l10n.libraryScanPaused
-                          : context.l10n.libraryScanning,
-                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    Text(
-                      isFinalizing
-                          ? context.l10n.libraryScanFinalizing
-                          : totalFiles > 0
-                          ? context.l10n.libraryScanProgress(
-                              progress.toStringAsFixed(0),
-                              totalFiles,
-                            )
-                          : context.l10n.libraryScanning,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              if (!isFinalizing)
-                ExpressiveButton(
-                  text: true,
-                  onPressed: isPaused ? onResume : onPause,
-                  child: Text(
-                    isPaused
-                        ? context.l10n.actionResume
-                        : context.l10n.actionPause,
-                  ),
-                ),
-              ExpressiveButton(
-                text: true,
-                onPressed: onCancel,
-                child: Text(context.l10n.actionCancel),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          AppProgressIndicator.linear(
-            value: showIndeterminateProgress ? null : progressValue,
-            trackColor: colorScheme.surfaceContainerHighest,
-            color: colorScheme.primary,
-            borderRadius: BorderRadius.circular(4),
-          ),
-          if (!isFinalizing &&
-              currentFile != null &&
-              currentFile!.trim().isNotEmpty) ...[
-            const SizedBox(height: 4),
-            Text(
-              currentFile!,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: colorScheme.onSurfaceVariant,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ],
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+    child: LibraryScanProgress(
+      onPause: onPause,
+      onResume: onResume,
+      onCancel: onCancel,
+    ),
+  );
 }

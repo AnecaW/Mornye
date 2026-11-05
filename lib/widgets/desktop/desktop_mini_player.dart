@@ -227,22 +227,23 @@ class _DesktopMiniPlayerState extends ConsumerState<DesktopMiniPlayer> {
                     ),
                     onPressed: () => setDesktopMiniPlayer(open: false),
                   ),
-                  AppIconButton(
-                    key: const ValueKey('desktop-mini-player-lyrics'),
-                    tooltip: l10n.nowPlayingTabLyrics,
-                    iconSize: 20,
-                    style: buttonStyle,
-                    isSelected: lyrics,
-                    color: lyrics
-                        ? colorScheme.primary
-                        : colorScheme.onSurfaceVariant,
-                    icon: AppIcon(
-                      mornye
-                          ? CupertinoIcons.quote_bubble
-                          : Icons.lyrics_outlined,
+                  if (!isLiveBroadcastId(mediaItem?.id))
+                    AppIconButton(
+                      key: const ValueKey('desktop-mini-player-lyrics'),
+                      tooltip: l10n.nowPlayingTabLyrics,
+                      iconSize: 20,
+                      style: buttonStyle,
+                      isSelected: lyrics,
+                      color: lyrics
+                          ? colorScheme.primary
+                          : colorScheme.onSurfaceVariant,
+                      icon: AppIcon(
+                        mornye
+                            ? CupertinoIcons.quote_bubble
+                            : Icons.lyrics_outlined,
+                      ),
+                      onPressed: _toggleMiniPlayerLyrics,
                     ),
-                    onPressed: _toggleMiniPlayerLyrics,
-                  ),
                 ],
               ),
             ],
@@ -252,14 +253,19 @@ class _DesktopMiniPlayerState extends ConsumerState<DesktopMiniPlayer> {
         // The Material slider keeps its full height for dragging, centered
         // on a thin row.
         SizedBox(
-          height: 16,
+          height: isLiveBroadcastId(mediaItem?.id) ? 24 : 16,
           child: OverflowBox(
             minHeight: 0,
-            maxHeight: mornye ? 10 : 48,
+            maxHeight: isLiveBroadcastId(mediaItem?.id)
+                ? 24
+                : mornye
+                ? 10
+                : 48,
             child: _SeekRow(mediaItem: mediaItem, dense: true),
           ),
         ),
-        if (lyrics) Expanded(child: _MiniPlayerLyrics(metadata: _metadata)),
+        if (lyrics && !isLiveBroadcastId(mediaItem?.id))
+          Expanded(child: _MiniPlayerLyrics(metadata: _metadata)),
       ],
     );
   }

@@ -1,5 +1,6 @@
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
+import 'package:mornye/widgets/live_broadcast_controls.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mornye/l10n/l10n.dart';
 import 'package:mornye/providers/music_player_provider.dart';
@@ -38,6 +39,9 @@ class PlayerCompactBar extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    if (isLiveBroadcastId(mediaItem.id)) {
+      return LiveBroadcastControls(colorScheme: colorScheme, compact: true);
+    }
     final controller = ref.read(musicPlayerControllerProvider);
     final playing = ref.watch(playbackPlayingProvider);
     final loading = ref.watch(playbackLoadingProvider);

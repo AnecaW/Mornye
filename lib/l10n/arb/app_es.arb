@@ -4149,5 +4149,7 @@
   "settingsSearchHint": "Buscar en los ajustes",
   "settingsSearchNoResults": "Ningún ajuste coincide con \"{query}\"",
   "nowPlayingPreviousTrack": "Pista anterior",
-  "nowPlayingNextTrack": "Pista siguiente"
+  "nowPlayingNextTrack": "Pista siguiente",
+  "liveBroadcastPaused": "Paused",
+  "liveBroadcastConnecting": "Connecting…"
 }

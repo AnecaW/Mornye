@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/material.dart';
+import 'package:mornye/widgets/live_broadcast_controls.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mornye/controllers/player_metadata_controller.dart';
 import 'package:mornye/l10n/l10n.dart';
@@ -210,6 +211,9 @@ class _MornyeModeButton extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    if (ref.watch(liveBroadcastSelectedProvider)) {
+      return const SizedBox.shrink();
+    }
     final controller = ref.read(musicPlayerControllerProvider);
     final l10n = context.l10n;
     final colorScheme = Theme.of(context).colorScheme;
@@ -396,6 +400,9 @@ class _Transport extends ConsumerWidget {
   );
 
   Widget _buildControls(BuildContext context, WidgetRef ref) {
+    if (ref.watch(liveBroadcastSelectedProvider)) {
+      return const LiveBroadcastPlayButton(compact: true);
+    }
     final controller = ref.read(musicPlayerControllerProvider);
     final isPlaying = ref.watch(playbackPlayingProvider);
     final isLoading = ref.watch(playbackLoadingProvider);
@@ -508,6 +515,13 @@ class _SeekRow extends ConsumerWidget {
 
   Widget _buildRow(BuildContext context, WidgetRef ref) {
     final item = mediaItem;
+    if (isLiveBroadcastId(item?.id)) {
+      return LiveBroadcastTimeline(
+        playing: ref.watch(playbackPlayingProvider),
+        loading: ref.watch(playbackLoadingProvider),
+        compact: true,
+      );
+    }
     final colorScheme = Theme.of(context).colorScheme;
     final mornye = context.isMornye;
     final duration = item?.duration ?? Duration.zero;
@@ -694,7 +708,7 @@ class _MornyeLcdLines extends ConsumerWidget {
 /// phones and downloads and ends with a volume button whose slider opens in
 /// a popover, as Music does. The phones button shows only while a phone is
 /// connected over Mornye Link.
-class _TrailingControls extends StatelessWidget {
+class _TrailingControls extends ConsumerWidget {
   const _TrailingControls({required this.enabled, this.appTheme});
 
   /// Narrowest room in which the Material bar keeps its volume slider.
@@ -706,7 +720,7 @@ class _TrailingControls extends StatelessWidget {
   final ThemeData? appTheme;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final mornye = context.isMornye;
     final colorScheme = Theme.of(context).colorScheme;
     final l10n = context.l10n;
@@ -718,40 +732,41 @@ class _TrailingControls extends StatelessWidget {
           const DesktopLinkDevicesButton(),
           const DesktopDownloadsButton(),
         ],
-        ValueListenableBuilder<DesktopInspectorPanel?>(
-          valueListenable: desktopInspectorPanel,
-          builder: (context, panel, _) => Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _InspectorToggle(
-                key: const ValueKey('desktop-player-lyrics'),
-                panel: DesktopInspectorPanel.lyrics,
-                selected: panel == DesktopInspectorPanel.lyrics,
-                enabled: enabled,
-                tooltip: desktopTooltip(
-                  context,
-                  l10n.nowPlayingTabLyrics,
-                  DesktopCommand.lyrics,
+        if (!ref.watch(liveBroadcastSelectedProvider))
+          ValueListenableBuilder<DesktopInspectorPanel?>(
+            valueListenable: desktopInspectorPanel,
+            builder: (context, panel, _) => Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _InspectorToggle(
+                  key: const ValueKey('desktop-player-lyrics'),
+                  panel: DesktopInspectorPanel.lyrics,
+                  selected: panel == DesktopInspectorPanel.lyrics,
+                  enabled: enabled,
+                  tooltip: desktopTooltip(
+                    context,
+                    l10n.nowPlayingTabLyrics,
+                    DesktopCommand.lyrics,
+                  ),
+                  icon: mornye
+                      ? CupertinoIcons.quote_bubble
+                      : Icons.lyrics_outlined,
                 ),
-                icon: mornye
-                    ? CupertinoIcons.quote_bubble
-                    : Icons.lyrics_outlined,
-              ),
-              _InspectorToggle(
-                key: const ValueKey('desktop-player-up-next'),
-                panel: DesktopInspectorPanel.upNext,
-                selected: panel == DesktopInspectorPanel.upNext,
-                enabled: enabled,
-                tooltip: desktopTooltip(
-                  context,
-                  l10n.nowPlayingUpNext,
-                  DesktopCommand.upNext,
+                _InspectorToggle(
+                  key: const ValueKey('desktop-player-up-next'),
+                  panel: DesktopInspectorPanel.upNext,
+                  selected: panel == DesktopInspectorPanel.upNext,
+                  enabled: enabled,
+                  tooltip: desktopTooltip(
+                    context,
+                    l10n.nowPlayingUpNext,
+                    DesktopCommand.upNext,
+                  ),
+                  icon: mornye ? CupertinoIcons.list_bullet : Icons.queue_music,
                 ),
-                icon: mornye ? CupertinoIcons.list_bullet : Icons.queue_music,
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
         if (desktopMiniPlayerSupported)
           AppIconButton(
             key: const ValueKey('desktop-player-mini'),

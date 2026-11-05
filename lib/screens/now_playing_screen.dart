@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
+import 'package:mornye/widgets/live_broadcast_controls.dart';
 import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/services.dart' show SystemUiOverlayStyle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -294,6 +295,7 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
     MediaItem? mediaItem, {
     required bool fullScreenCover,
   }) {
+    final live = isLiveBroadcastId(mediaItem?.id);
     final mornye = context.isMornye;
     final colorScheme = mornye
         ? MornyeTheme.fromContext(
@@ -500,7 +502,7 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
                   icon: const AppIcon(Icons.keyboard_arrow_down),
                   onPressed: _minimize,
                 ),
-          actions: mornye
+          actions: mornye || live
               ? null
               : [
                   LinkDevicesButton(color: overCover ? Colors.white : null),
@@ -541,7 +543,7 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
                           metadata: _trackMetadata,
                           seekPreview: _seekPreview,
                           colorScheme: colorScheme,
-                          page: _currentPage,
+                          page: live ? 0 : _currentPage,
                           motionArtwork: artwork(),
                           artworkAspectRatio: artworkRatio,
                           insetArtwork: !fullBleed,
@@ -582,8 +584,8 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
                         metadata: _trackMetadata,
                         seekPreview: _seekPreview,
                         colorScheme: colorScheme,
-                        showLyrics: _currentPage == 1,
-                        immersive: _lyricsImmersive,
+                        showLyrics: !live && _currentPage == 1,
+                        immersive: !live && _lyricsImmersive,
                         compactPlayer: ref.watch(
                           settingsProvider.select((s) => s.compactPlayer),
                         ),
@@ -603,11 +605,20 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
               ),
               _autoHidingLyricsControls(
                 PlayerQueueSwipeRegion(
-                  onOpenQueue: () => _showQueueSheet(context, colorScheme),
+                  onOpenQueue: () {
+                    if (!live) _showQueueSheet(context, colorScheme);
+                  },
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      if (mornye && !_landscape)
+                      if (live)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          child: AudioOutputButton(
+                            color: colorScheme.onSurfaceVariant,
+                          ),
+                        )
+                      else if (mornye && !_landscape)
                         FractionallySizedBox(
                           widthFactor: 0.72,
                           child: Row(

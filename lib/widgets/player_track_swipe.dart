@@ -2,6 +2,7 @@ import 'package:audio_service/audio_service.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:mornye/widgets/live_broadcast_controls.dart';
 
 /// Shares one horizontal gesture between artwork and metadata. Only the
 /// titles translate; artwork, menus and the rest of the player stay anchored.
@@ -35,7 +36,10 @@ class _PlayerTrackSwipeState extends State<PlayerTrackSwipe>
   int _generation = 0;
 
   MediaItem? _neighbor(double direction) {
-    if (widget.currentIndex < 0) return null;
+    if (widget.currentIndex < 0 ||
+        widget.currentIndex >= widget.queue.length ||
+        isLiveBroadcastId(widget.queue[widget.currentIndex].id))
+      return null;
     final at = widget.currentIndex + (direction < 0 ? 1 : -1);
     return at >= 0 && at < widget.queue.length ? widget.queue[at] : null;
   }

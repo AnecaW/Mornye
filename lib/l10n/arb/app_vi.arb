@@ -8011,5 +8011,7 @@
   "desktopShortcutToggleSidebar": "Show or hide sidebar",
   "@desktopShortcutToggleSidebar": {
     "description": "Keyboard Shortcuts row for the shortcut that collapses or expands the desktop sidebar"
-  }
+  },
+  "liveBroadcastPaused": "Paused",
+  "liveBroadcastConnecting": "Connecting…"
 }

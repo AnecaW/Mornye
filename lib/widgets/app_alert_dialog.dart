@@ -65,6 +65,9 @@ Future<T?> showAppDialog<T>({
     builder: builder,
     barrierDismissible: barrierDismissible,
     useRootNavigator: useRootNavigator,
+    animationStyle: MediaQuery.disableAnimationsOf(context)
+        ? AnimationStyle.noAnimation
+        : null,
   );
 }
 

@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:mornye/widgets/app_loading_indicator.dart';
+import 'package:mornye/widgets/error_card.dart' show EmptyState;
 import 'package:mornye/widgets/app_sliver_header.dart';
 import 'package:mornye/widgets/library_source_selector.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -51,15 +53,17 @@ class LibraryServerRadio extends ConsumerWidget {
     }
     return Column(
       children: [
-        if (loading) const LinearProgressIndicator(),
+        if (loading)
+          const Padding(
+            padding: EdgeInsets.all(24),
+            child: Center(child: AppLoadingIndicator()),
+          ),
         if (stations.isEmpty && !loading)
-          Padding(
-            padding: const EdgeInsets.all(24),
-            child: Text(
-              unavailable
-                  ? context.l10n.libraryRadioUnavailable
-                  : context.l10n.libraryRadioEmpty,
-            ),
+          EmptyState(
+            icon: unavailable ? Icons.cloud_off_outlined : Icons.radio_outlined,
+            title: unavailable
+                ? context.l10n.libraryRadioUnavailable
+                : context.l10n.libraryRadioEmpty,
           ),
         if (unavailable && stations.isNotEmpty)
           Padding(

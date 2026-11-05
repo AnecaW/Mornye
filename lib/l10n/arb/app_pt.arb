@@ -4149,5 +4149,7 @@
   "settingsSearchHint": "Pesquisar configurações",
   "settingsSearchNoResults": "Nenhuma configuração corresponde a \"{query}\"",
   "nowPlayingPreviousTrack": "Faixa anterior",
-  "nowPlayingNextTrack": "Próxima faixa"
+  "nowPlayingNextTrack": "Próxima faixa",
+  "liveBroadcastPaused": "Paused",
+  "liveBroadcastConnecting": "Connecting…"
 }

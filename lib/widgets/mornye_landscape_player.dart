@@ -23,6 +23,7 @@ class MornyeLandscapePlayer extends StatefulWidget {
     required this.onPageChanged,
     this.lyricsOptions,
     this.controlsHeldOpen = false,
+    this.live = false,
   });
 
   final Widget artwork;
@@ -36,6 +37,7 @@ class MornyeLandscapePlayer extends StatefulWidget {
   final int page;
   final bool isPlaying;
   final bool controlsHeldOpen;
+  final bool live;
   final ValueChanged<int> onPageChanged;
   final Widget? lyricsOptions;
 
@@ -233,28 +235,32 @@ class _MornyeLandscapePlayerState extends State<MornyeLandscapePlayer> {
                                       mainAxisAlignment:
                                           MainAxisAlignment.spaceBetween,
                                       children: [
-                                        IconButton(
-                                          tooltip: widget.page == 1
-                                              ? context.l10n.nowPlayingTabPlayer
-                                              : context
-                                                    .l10n
-                                                    .nowPlayingTabLyrics,
-                                          isSelected: widget.page == 1,
-                                          color: Colors.white,
-                                          style: IconButton.styleFrom(
-                                            backgroundColor: widget.page == 1
-                                                ? Colors.white.withValues(
-                                                    alpha: 0.16,
-                                                  )
-                                                : Colors.transparent,
+                                        if (!widget.live)
+                                          IconButton(
+                                            tooltip: widget.page == 1
+                                                ? context
+                                                      .l10n
+                                                      .nowPlayingTabPlayer
+                                                : context
+                                                      .l10n
+                                                      .nowPlayingTabLyrics,
+                                            isSelected: widget.page == 1,
+                                            color: Colors.white,
+                                            style: IconButton.styleFrom(
+                                              backgroundColor: widget.page == 1
+                                                  ? Colors.white.withValues(
+                                                      alpha: 0.16,
+                                                    )
+                                                  : Colors.transparent,
+                                            ),
+                                            icon: const Icon(
+                                              CupertinoIcons.quote_bubble,
+                                            ),
+                                            onPressed: () =>
+                                                widget.onPageChanged(
+                                                  widget.page == 1 ? 0 : 1,
+                                                ),
                                           ),
-                                          icon: const Icon(
-                                            CupertinoIcons.quote_bubble,
-                                          ),
-                                          onPressed: () => widget.onPageChanged(
-                                            widget.page == 1 ? 0 : 1,
-                                          ),
-                                        ),
                                         AudioOutputButton(
                                           color: Colors.white,
                                           onPickerChanged: (open) {
@@ -265,25 +271,27 @@ class _MornyeLandscapePlayerState extends State<MornyeLandscapePlayer> {
                                             _scheduleHide();
                                           },
                                         ),
-                                        IconButton(
-                                          tooltip:
-                                              context.l10n.nowPlayingUpNext,
-                                          icon: const Icon(
-                                            CupertinoIcons.list_bullet,
+                                        if (!widget.live)
+                                          IconButton(
+                                            tooltip:
+                                                context.l10n.nowPlayingUpNext,
+                                            icon: const Icon(
+                                              CupertinoIcons.list_bullet,
+                                            ),
+                                            isSelected: widget.page == 2,
+                                            color: Colors.white,
+                                            style: IconButton.styleFrom(
+                                              backgroundColor: widget.page == 2
+                                                  ? Colors.white.withValues(
+                                                      alpha: 0.16,
+                                                    )
+                                                  : Colors.transparent,
+                                            ),
+                                            onPressed: () =>
+                                                widget.onPageChanged(
+                                                  widget.page == 2 ? 0 : 2,
+                                                ),
                                           ),
-                                          isSelected: widget.page == 2,
-                                          color: Colors.white,
-                                          style: IconButton.styleFrom(
-                                            backgroundColor: widget.page == 2
-                                                ? Colors.white.withValues(
-                                                    alpha: 0.16,
-                                                  )
-                                                : Colors.transparent,
-                                          ),
-                                          onPressed: () => widget.onPageChanged(
-                                            widget.page == 2 ? 0 : 2,
-                                          ),
-                                        ),
                                       ],
                                     ),
                                   ),

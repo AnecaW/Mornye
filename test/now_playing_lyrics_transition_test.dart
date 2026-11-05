@@ -59,6 +59,7 @@ import 'package:mornye/widgets/player_lyrics_controls.dart';
 import 'package:mornye/widgets/player_metadata_title.dart';
 import 'package:mornye/widgets/player_playback_controls.dart';
 import 'package:mornye/widgets/playback_seek_slider.dart';
+import 'package:mornye/widgets/live_broadcast_controls.dart';
 import 'package:mornye/widgets/player_artwork.dart';
 
 import 'support/app_icon_finder.dart';
@@ -271,6 +272,58 @@ void main() {
       frames++;
     } while (tester.binding.hasScheduledFrame || lyricsRequests.isNotEmpty);
     return frames;
+  }
+
+  for (final mornye in [true, false]) {
+    for (final landscape in [true, false]) {
+      testWidgets(
+        'radio has live-only controls and ordinary tracks recover their transport ($mornye / $landscape)',
+        (tester) async {
+          await pumpNowPlaying(
+            tester,
+            theme: mornye
+                ? MornyeTheme.build(Brightness.dark)
+                : AppTheme.light(),
+            size: landscape ? const Size(844, 390) : const Size(390, 844),
+            playback: PlaybackState(
+              processingState: AudioProcessingState.ready,
+              playing: true,
+            ),
+          );
+          mediaItems.add(
+            const MediaItem(
+              id: 'subsonic-radio://nas/station',
+              title: 'Live radio',
+              artist: 'Navidrome',
+              extras: {'source': 'content://library/radio.flac'},
+            ),
+          );
+          await tester.pump();
+          await completeLyrics(tester);
+          await tester.pump(const Duration(seconds: 1));
+          expect(find.byType(LiveBroadcastTimeline), findsOneWidget);
+          expect(find.byType(PlaybackSeekSlider), findsNothing);
+          final l = AppLocalizations.of(
+            tester.element(find.byType(LiveBroadcastTimeline)),
+          );
+          expect(find.byTooltip(l.nowPlayingNextTrack), findsNothing);
+          expect(find.byTooltip(l.nowPlayingPreviousTrack), findsNothing);
+          expect(find.byTooltip(l.nowPlayingUpNext), findsNothing);
+          expect(find.byIcon(CupertinoIcons.quote_bubble), findsNothing);
+          expect(find.byIcon(Icons.lyrics_outlined), findsNothing);
+          expect(tester.takeException(), isNull);
+          mediaItems.add(item('first'));
+          await tester.pump();
+          await completeLyrics(tester);
+          await tester.pump(const Duration(seconds: 1));
+          expect(find.byType(LiveBroadcastTimeline), findsNothing);
+          expect(find.byType(PlaybackSeekSlider), findsOneWidget);
+          expect(find.byTooltip(l.nowPlayingNextTrack), findsOneWidget);
+          expect(tester.takeException(), isNull);
+          await tester.pumpWidget(const SizedBox.shrink());
+        },
+      );
+    }
   }
 
   testWidgets('Mornye timestamps advance between native position reports', (

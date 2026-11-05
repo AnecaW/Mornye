@@ -4,8 +4,8 @@ import 'package:mornye/theme/material_expressive.dart';
 
 /// Task progress (downloads, scans, updates), determinate or not.
 ///
-/// The Material theme draws the expressive wavy indicators. Mornye and
-/// reduced motion keep Flutter's flat indicators with the same parameters.
+/// Unknown work uses the shared expressive waves in both themes. Mornye's
+/// known totals retain their flat track; reduced motion freezes activity.
 class AppProgressIndicator extends StatelessWidget {
   const AppProgressIndicator.linear({
     super.key,
@@ -60,8 +60,9 @@ class AppProgressIndicator extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final value = this.value?.clamp(0.0, 1.0);
-    if (!materialExpressiveEnabled(context)) {
-      return _circular
+    if (!materialExpressiveEnabled(context) &&
+        (value != null || MediaQuery.disableAnimationsOf(context))) {
+      final indicator = _circular
           ? CircularProgressIndicator(
               value: value,
               color: color,
@@ -80,6 +81,10 @@ class AppProgressIndicator extends StatelessWidget {
               semanticsLabel: semanticsLabel,
               semanticsValue: semanticsValue,
             );
+      return TickerMode(
+        enabled: !MediaQuery.disableAnimationsOf(context),
+        child: indicator,
+      );
     }
     final scheme = Theme.of(context).colorScheme;
     final wavy = this.wavy || value == null;

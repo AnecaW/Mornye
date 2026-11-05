@@ -8383,5 +8383,7 @@
   "playlistCreatedWithTracks": "{name} dibuat dengan {count, plural, =1{1 lagu} other{{count} lagu}}",
   "playlistImportResult": "{count, plural, =1{1 lagu} other{{count} lagu}} diimpor ke {name}, {matched} cocok dengan file di perangkat ini",
   "playlistImportNoTracks": "Tidak ada lagu di file ini",
-  "playlistImportFailed": "File playlist ini tidak dapat dibaca"
+  "playlistImportFailed": "File playlist ini tidak dapat dibaca",
+  "liveBroadcastPaused": "Paused",
+  "liveBroadcastConnecting": "Connecting…"
 }

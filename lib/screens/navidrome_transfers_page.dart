@@ -1,6 +1,9 @@
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:mornye/widgets/app_alert_dialog.dart';
+import 'package:mornye/widgets/app_progress_indicator.dart';
+import 'package:mornye/widgets/app_snack_bar.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mornye/providers/settings_provider.dart';
 import 'package:path/path.dart' as p;
@@ -62,9 +65,7 @@ class _NavidromeTransfersPageState
 
   void _error(String message) {
     if (mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(message)));
+      showAppSnackBar(context, content: Text(message));
     }
   }
 
@@ -73,10 +74,10 @@ class _NavidromeTransfersPageState
     List<({String path, String relativeDir})> files,
   ) {
     final chosen = {for (var i = 0; i < files.length; i++) i};
-    return showDialog<List<({String path, String relativeDir})>>(
+    return showAppDialog<List<({String path, String relativeDir})>>(
       context: context,
       builder: (context) => StatefulBuilder(
-        builder: (context, update) => AlertDialog(
+        builder: (context, update) => AppAlertDialog(
           title: const Text('Select original tracks'),
           content: SizedBox(
             width: 500,
@@ -98,7 +99,7 @@ class _NavidromeTransfersPageState
             ),
           ),
           actions: [
-            TextButton(
+            AppDialogAction(
               onPressed: () => update(() {
                 if (chosen.length == files.length) {
                   chosen.clear();
@@ -112,11 +113,12 @@ class _NavidromeTransfersPageState
                     : 'Select all',
               ),
             ),
-            TextButton(
+            AppDialogAction(
               onPressed: () => Navigator.pop(context),
               child: const Text('Cancel'),
             ),
-            FilledButton(
+            AppDialogAction(
+              filled: true,
               onPressed: chosen.isEmpty
                   ? null
                   : () => Navigator.pop(context, [
@@ -181,23 +183,31 @@ class _NavidromeTransfersPageState
           }
         }
         if (playlists.isNotEmpty && mounted) {
-          final choice = await showDialog<int>(
+          final choice = await showAppDialog<int>(
             context: context,
-            builder: (context) => SimpleDialog(
+            builder: (context) => AppAlertDialog(
               title: const Text('Choose music to upload'),
-              children: [
-                SimpleDialogOption(
-                  onPressed: () => Navigator.pop(context, -1),
-                  child: const Text('All audio in this folder'),
-                ),
-                for (var i = 0; i < playlists.length; i++)
-                  SimpleDialogOption(
-                    onPressed: () => Navigator.pop(context, i),
-                    child: Text(
-                      'Playlist: ${p.relative(playlists[i], from: root)}',
-                    ),
+              content: SizedBox(
+                width: 440,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      ListTile(
+                        onTap: () => Navigator.pop(context, -1),
+                        title: const Text('All audio in this folder'),
+                      ),
+                      for (var i = 0; i < playlists.length; i++)
+                        ListTile(
+                          onTap: () => Navigator.pop(context, i),
+                          title: Text(
+                            'Playlist: ${p.relative(playlists[i], from: root)}',
+                          ),
+                        ),
+                    ],
                   ),
-              ],
+                ),
+              ),
             ),
           );
           if (choice == null) return;
@@ -249,9 +259,9 @@ class _NavidromeTransfersPageState
       final canRemoveOriginals =
           bookmark != null ||
           (!Platform.isIOS && (!Platform.isAndroid || folder));
-      final remove = await showDialog<bool>(
+      final remove = await showAppDialog<bool>(
         context: context,
-        builder: (context) => AlertDialog(
+        builder: (context) => AppAlertDialog(
           title: Text('Upload ${files.length} tracks?'),
           content: Text(
             !canRemoveOriginals
@@ -259,16 +269,17 @@ class _NavidromeTransfersPageState
                 : 'Files are uploaded unchanged. You can keep the originals, or permanently remove them only after the server files pass content verification.',
           ),
           actions: [
-            TextButton(
+            AppDialogAction(
               onPressed: () => Navigator.pop(context),
               child: const Text('Cancel'),
             ),
             if (canRemoveOriginals)
-              TextButton(
+              AppDialogAction(
                 onPressed: () => Navigator.pop(context, true),
                 child: const Text('Upload and remove originals'),
               ),
-            FilledButton(
+            AppDialogAction(
+              filled: true,
               onPressed: () => Navigator.pop(context, false),
               child: const Text('Upload and keep originals'),
             ),
@@ -349,7 +360,7 @@ class _NavidromeTransfersPageState
                     ),
                     const SizedBox(height: 16),
                     if (loading)
-                      const LinearProgressIndicator()
+                      const AppProgressIndicator.linear()
                     else if (shares.isEmpty)
                       const Text(
                         'Add an SMB connection in Network storage first. Include the share name in its address, for example smb://host/Music.',
@@ -399,7 +410,7 @@ class _NavidromeTransfersPageState
                           'Use this server folder for downloads',
                         ),
                       ),
-                      if (selecting) const LinearProgressIndicator(),
+                      if (selecting) const AppProgressIndicator.linear(),
                     ],
                     TextButton(
                       onPressed: _scan,
@@ -442,7 +453,7 @@ class _NavidromeTransfersPageState
                               : job.status,
                         ),
                         if (active)
-                          LinearProgressIndicator(
+                          AppProgressIndicator.linear(
                             value: job.total > 0 ? job.sent / job.total : null,
                           ),
                         if (job.total > 0)

@@ -1,5 +1,6 @@
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
+import 'package:mornye/widgets/live_broadcast_controls.dart';
 import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_3_expressive/material_3_expressive.dart' show M3ETheme;
@@ -62,6 +63,9 @@ class PlayerPlaybackControls extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    if (isLiveBroadcastId(mediaId)) {
+      return LiveBroadcastControls(colorScheme: colorScheme, compact: compact);
+    }
     final controller = ref.read(musicPlayerControllerProvider);
     final mornye = context.isMornye;
     final isPlaying = ref.watch(playbackPlayingProvider);
@@ -403,6 +407,9 @@ class PlayerPlaybackModeButton extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    if (ref.watch(liveBroadcastSelectedProvider)) {
+      return const SizedBox.shrink();
+    }
     final (:selected, :icon, :tooltip, :onPressed) = _watchPlaybackMode(
       context,
       ref,
@@ -434,7 +441,7 @@ class PlayerPlaybackModeButton extends ConsumerWidget {
 /// player's footer: round outer ends, small inner corners and a hairline
 /// gap, like the Library toolbar. A selected segment fills its own shape
 /// instead of morphing, and a pressed one widens while the other yields.
-class PlayerPlaybackModeToolbar extends StatefulWidget {
+class PlayerPlaybackModeToolbar extends ConsumerStatefulWidget {
   const PlayerPlaybackModeToolbar({super.key, required this.colorScheme});
 
   /// Width of each segment at rest; the footer's lone buttons match it.
@@ -443,16 +450,20 @@ class PlayerPlaybackModeToolbar extends StatefulWidget {
   final ColorScheme colorScheme;
 
   @override
-  State<PlayerPlaybackModeToolbar> createState() =>
+  ConsumerState<PlayerPlaybackModeToolbar> createState() =>
       _PlayerPlaybackModeToolbarState();
 }
 
-class _PlayerPlaybackModeToolbarState extends State<PlayerPlaybackModeToolbar>
+class _PlayerPlaybackModeToolbarState
+    extends ConsumerState<PlayerPlaybackModeToolbar>
     with ExpressivePressSquish {
   static const _segmentWidth = PlayerPlaybackModeToolbar.segmentWidth;
 
   @override
   Widget build(BuildContext context) {
+    if (ref.watch(liveBroadcastSelectedProvider)) {
+      return const SizedBox.shrink();
+    }
     final tokens = context.tokens;
     final height = tokens.minTouchTarget;
     final outer = Radius.circular(height / 2);
@@ -513,6 +524,9 @@ class _PlaybackModeSegment extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    if (ref.watch(liveBroadcastSelectedProvider)) {
+      return const SizedBox.shrink();
+    }
     final (:selected, :icon, :tooltip, :onPressed) = _watchPlaybackMode(
       context,
       ref,

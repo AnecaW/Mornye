@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:mornye/widgets/app_loading_indicator.dart';
+import 'package:mornye/widgets/app_alert_dialog.dart';
 import 'package:mornye/providers/settings_provider.dart';
 import 'package:mornye/providers/local_library_provider.dart';
 import 'package:mornye/widgets/library_scan_status.dart';
@@ -106,7 +108,7 @@ class LibrarySourceSelector extends ConsumerWidget {
                 const SizedBox(
                   width: 16,
                   height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
+                  child: AppLoadingIndicator(size: 16, strokeWidth: 2),
                 ),
               if (synchronization.hasError)
                 Tooltip(
@@ -159,7 +161,7 @@ class LibrarySourceSelector extends ConsumerWidget {
       savedLibrarySourceConnectionsProvider.future,
     );
     if (!context.mounted) return;
-    await showDialog<void>(
+    await showAppDialog<void>(
       context: context,
       builder: (context) => Consumer(
         builder: (context, ref, _) {
@@ -169,7 +171,7 @@ class LibrarySourceSelector extends ConsumerWidget {
           final sources = ref.watch(
             localLibraryProvider.select((s) => s.sources),
           );
-          return AlertDialog(
+          return AppAlertDialog(
             title: Text(context.l10n.libraryManageSources),
             content: SizedBox(
               width: 360,
@@ -230,7 +232,7 @@ class LibrarySourceSelector extends ConsumerWidget {
               ),
             ),
             actions: [
-              TextButton(
+              AppDialogAction(
                 onPressed: () => Navigator.pop(context),
                 child: Text(MaterialLocalizations.of(context).closeButtonLabel),
               ),
