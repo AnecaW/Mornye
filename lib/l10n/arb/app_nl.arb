@@ -7998,5 +7998,11 @@
   "desktopShortcutToggleSidebar": "Show or hide sidebar",
   "@desktopShortcutToggleSidebar": {
     "description": "Keyboard Shortcuts row for the shortcut that collapses or expands the desktop sidebar"
-  }
+  },
+  "libraryAllSources": "Alle bibliotheken",
+  "libraryDeviceSource": "Lokale bibliotheek",
+  "libraryChooseSource": "Muziekbron",
+  "librarySourceUnavailable": "Server niet bereikbaar. Eerder opgehaalde muziek blijft beschikbaar.",
+  "libraryUploadMusic": "Muziek toevoegen aan server",
+  "libraryServerRadio": "Radio"
 }

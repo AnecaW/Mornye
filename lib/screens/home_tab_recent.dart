@@ -182,7 +182,8 @@ extension _HomeTabRecentUI on _HomeTabState {
 
   void _removeRecentAccessItem(RecentAccessItem item) {
     final notifier = ref.read(recentAccessProvider.notifier);
-    if (item.providerId == 'download') {
+    if (item.providerId == 'download' ||
+        item.providerId?.startsWith('subsonic:') == true) {
       notifier.hideDownloadFromRecents(item.id);
     } else {
       notifier.removeItem(item);
@@ -450,7 +451,41 @@ extension _HomeTabRecentUI on _HomeTabState {
 
   Future<void> _navigateToRecentItem(RecentAccessItem item) async {
     _searchFocusNode.unfocus();
-
+    if (item.providerId?.startsWith('subsonic:') == true) {
+      try {
+        final connection = item.providerId!.substring('subsonic:'.length);
+        final storage = ref.read(librarySourceStorageProvider);
+        final library = NavidromeLibrary(
+          await storage.connection(connection),
+          storage: storage,
+        );
+        final uri = Uri.parse(item.id);
+        final songs = item.type == RecentAccessType.album
+            ? subsonicRows(
+                subsonicObject(
+                  (await library.read('getAlbum', {
+                    'id': uri.pathSegments.single,
+                  }, true))['album'],
+                )['song'],
+              )
+            : [
+                subsonicObject(
+                  (await library.read('getSong', {
+                    'id':
+                        subsonicSongIdFromPath(uri.pathSegments.join('/')) ??
+                        (throw const FormatException('Invalid server song')),
+                  }, true))['song'],
+                ),
+              ];
+        if (!mounted) return;
+        await ref
+            .read(playbackProvider.notifier)
+            .playTrackList(songs.map(library.track).toList());
+      } catch (error) {
+        if (mounted) showCannotOpenFileSnackBar(context, error);
+      }
+      return;
+    }
     switch (item.type) {
       case RecentAccessType.artist:
         if (_isEnabledMetadataExtension(item.providerId)) {

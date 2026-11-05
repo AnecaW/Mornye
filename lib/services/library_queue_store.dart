@@ -1,4 +1,5 @@
 import 'package:sqflite/sqflite.dart';
+import 'package:mornye/services/library_source_scope.dart';
 import 'package:mornye/models/library_database_models.dart';
 import 'package:mornye/services/album_completeness.dart';
 import 'package:mornye/services/library_schema.dart';
@@ -106,7 +107,22 @@ class LibraryQueueStore {
   /// files no download shadows, the set the Songs page lists.
   Future<List<Map<String, Object?>>> directoryEntries({
     required bool includeLocal,
-  }) => _db.rawQuery('''
+    QueueLibraryDbQuery? scope,
+  }) {
+    final args = <Object?>[];
+    final historyWhere = <String>[];
+    final localWhere = <String>[];
+    appendLibrarySourceScope(historyWhere, args, scope, 'h.file_path');
+    if (includeLocal) {
+      appendLibrarySourceScope(
+        localWhere,
+        args,
+        scope,
+        'l.file_path',
+        indexed: true,
+      );
+    }
+    return _db.rawQuery('''
     SELECT
       'downloaded' AS source,
       h.id,
@@ -118,7 +134,7 @@ class LibraryQueueStore {
       h.saf_relative_dir,
       h.saf_file_name
     FROM history_db.history h
-    WHERE COALESCE(h.file_path, '') != ''
+    WHERE COALESCE(h.file_path, '') != '' ${historyWhere.isEmpty ? '' : 'AND ${historyWhere.join(' AND ')}'}
     ${includeLocal ? '''
     UNION ALL
     SELECT
@@ -132,9 +148,10 @@ class LibraryQueueStore {
       NULL AS saf_relative_dir,
       NULL AS saf_file_name
     FROM ${LibrarySchema.visibleView} l
-    WHERE COALESCE(l.file_path, '') != '' AND ${_notShadowedByHistory('l')}
+    WHERE COALESCE(l.file_path, '') != '' AND ${_notShadowedByHistory('l')} ${localWhere.isEmpty ? '' : 'AND ${localWhere.join(' AND ')}'}
     ''' : ''}
-  ''');
+  ''', args);
+  }
 
   /// The path and duration in seconds of every Library song, the same set
   /// as [directoryEntries], for analyzing how each sounds.
@@ -208,15 +225,15 @@ class LibraryQueueStore {
       parts.add('''
         SELECT
           COUNT(*) AS all_count,
-          COUNT(DISTINCT CASE WHEN grouped.track_count > ${isAlbumCompletenessFilter(request.metadata) ? 0 : 1} THEN l.album_key END) AS album_count,
+          COUNT(DISTINCT CASE WHEN grouped.track_count > ${isAlbumCompletenessFilter(request.metadata) ? 0 : 1} THEN ${sourceAlbumKeySql('l')} END) AS album_count,
           COALESCE(SUM(CASE WHEN grouped.track_count = 1 THEN 1 ELSE 0 END), 0) AS single_count
         FROM ${LibrarySchema.visibleView} l
         JOIN (
-          SELECT album_key, COUNT(*) AS track_count
+          SELECT ${sourceAlbumKeySql('candidate')} AS album_key, COUNT(*) AS track_count
           FROM ${LibrarySchema.visibleView} candidate
           WHERE ${_notShadowedByHistory('candidate')}
-          GROUP BY album_key
-        ) grouped ON grouped.album_key = l.album_key
+          GROUP BY ${sourceAlbumKeySql('candidate')}
+        ) grouped ON grouped.album_key = ${sourceAlbumKeySql('l')}
         WHERE ${where.join(' AND ')}
       ''');
     }
@@ -259,7 +276,8 @@ class LibraryQueueStore {
   Future<QueueLibraryCounts?> _getUnfilteredQueueCounts(
     QueueLibraryDbQuery request,
   ) async {
-    if (request.deviceOnly ||
+    if (!request.includeIndexedDevice ||
+        request.deviceOnly ||
         request.networkScope != null ||
         sqlite.normalizeLookupText(request.searchQuery).isNotEmpty ||
         request.albumArtist != null ||
@@ -294,10 +312,10 @@ class LibraryQueueStore {
           COALESCE(SUM(CASE WHEN track_count > 1 THEN 1 ELSE 0 END), 0) AS album_count,
           COALESCE(SUM(CASE WHEN track_count = 1 THEN 1 ELSE 0 END), 0) AS single_count
         FROM (
-          SELECT l.album_key, COUNT(*) AS track_count
+          SELECT ${sourceAlbumKeySql('l')} AS album_key, COUNT(*) AS track_count
           FROM ${LibrarySchema.visibleView} l
           WHERE ${_notShadowedByHistory('l')}
-          GROUP BY l.album_key
+          GROUP BY ${sourceAlbumKeySql('l')}
         )
       ''');
     }
@@ -313,22 +331,29 @@ class LibraryQueueStore {
   Future<List<Map<String, dynamic>>> artistPage(
     QueueLibraryDbQuery request,
   ) async {
-    final parts = <String>[
-      '''
-        SELECT sort_album_artist AS artist_key,
-          COALESCE(NULLIF(album_artist, ''), artist_name) AS artist_name,
-          cover_url, NULL AS cover_path, file_path AS sample_file_path
-        FROM history_db.history
-      ''',
-      if (request.includeLocal)
-        '''
-          SELECT album_artist_norm AS artist_key,
-            COALESCE(NULLIF(album_artist, ''), artist_name) AS artist_name,
-            NULL AS cover_url, cover_path, file_path AS sample_file_path
-          FROM ${LibrarySchema.visibleView} l
-          WHERE ${_notShadowedByHistory('l')}
-        ''',
-    ];
+    final args = <Object?>[];
+    final historyWhere = <String>['1'];
+    final localWhere = <String>[_notShadowedByHistory('l')];
+    final parts = <String>[];
+    if (request.source != 'local') {
+      _appendQueueHistoryFilters(historyWhere, args, request);
+      parts.add('''
+        SELECT h.sort_album_artist AS artist_key,
+          COALESCE(NULLIF(h.album_artist, ''), h.artist_name) AS artist_name,
+          h.cover_url, NULL AS cover_path, h.file_path AS sample_file_path
+        FROM history_db.history h WHERE ${historyWhere.join(' AND ')}
+      ''');
+    }
+    if (request.includeLocal && request.source != 'downloaded') {
+      _appendQueueLocalFilters(localWhere, args, request);
+      parts.add('''
+        SELECT l.album_artist_norm AS artist_key,
+          COALESCE(NULLIF(l.album_artist, ''), l.artist_name) AS artist_name,
+          NULL AS cover_url, l.cover_path, l.file_path AS sample_file_path
+        FROM ${LibrarySchema.visibleView} l WHERE ${localWhere.join(' AND ')}
+      ''');
+    }
+    if (parts.isEmpty) return const [];
     final search = sqlite.normalizeLookupText(request.searchQuery);
     return _db.rawQuery(
       '''
@@ -344,6 +369,7 @@ class LibraryQueueStore {
       LIMIT ? OFFSET ?
     ''',
       [
+        ...args,
         if (search.isNotEmpty) '%${_escapeLikePattern(search)}%',
         request.limit,
         request.offset,
@@ -446,11 +472,11 @@ class LibraryQueueStore {
       _appendQueueLocalFilters(where, args, request);
       if (request.filterMode == 'singles') {
         where.add('''
-          l.album_key IN (
-            SELECT album_key
+          ${sourceAlbumKeySql('l')} IN (
+            SELECT ${sourceAlbumKeySql('candidate')}
             FROM ${LibrarySchema.visibleView} candidate
             WHERE ${_notShadowedByHistory('candidate')}
-            GROUP BY album_key
+            GROUP BY ${sourceAlbumKeySql('candidate')}
             HAVING COUNT(*) = 1
           )
           ''');
@@ -656,7 +682,7 @@ class LibraryQueueStore {
     }
 
     if (request.includeLocal && request.source != 'downloaded') {
-      final albumKey = unfiltered ? 'l.album_key' : 'c.album_key';
+      final albumKey = sourceAlbumKeySql('l');
       final where = <String>[_notShadowedByHistory('l')];
       _appendQueueLocalFilters(
         where,
@@ -686,14 +712,14 @@ class LibraryQueueStore {
         ${_sizeJoin(request.sortMode, 'main', 'l')}
         ${unfiltered ? '' : '''JOIN (
           SELECT
-            album_key,
+            ${sourceAlbumKeySql('candidate')} AS album_key,
             COUNT(*) AS track_count,
             MAX(COALESCE(sort_added, 0)) AS latest_added
           FROM ${LibrarySchema.visibleView} candidate
           WHERE ${_notShadowedByHistory('candidate')}
-          GROUP BY album_key
+          GROUP BY ${sourceAlbumKeySql('candidate')}
           HAVING COUNT(*) > $minimumTracks
-        ) c ON c.album_key = l.album_key'''}
+        ) c ON c.album_key = ${sourceAlbumKeySql('l')}'''}
         ${assessesCompleteness ? 'JOIN ($completenessSql) ac ON ac.album_key = l.album_key' : ''}
         ${where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}'}
         GROUP BY $albumKey
@@ -798,6 +824,9 @@ class LibraryQueueStore {
     QueueLibraryDbQuery request, {
     bool hasCompletenessJoin = false,
   }) {
+    if (!request.includeIndexedDevice) {
+      where.add("l.file_path LIKE 'network://%'");
+    }
     _appendAlbumCompletenessFilter(
       where,
       request,

@@ -286,15 +286,30 @@ extension _QueueTabNavigation on _QueueTabState {
     var rows = album.albumKey.isNotEmpty
         ? await LibraryDatabase.instance.getQueueLocalAlbumTracksByKey(
             album.albumKey,
+            sourcePath: album.sampleFilePath,
+            scope: queryForMusicSource(
+              const QueueLibraryDbQuery(),
+              ref.read(effectiveLibrarySourceProvider),
+            ),
           )
         : await LibraryDatabase.instance.getQueueLocalAlbumTracks(
             album.albumName,
             album.artistName,
+            sourcePath: album.sampleFilePath,
+            scope: queryForMusicSource(
+              const QueueLibraryDbQuery(),
+              ref.read(effectiveLibrarySourceProvider),
+            ),
           );
     if (rows.isEmpty && album.albumKey.isNotEmpty) {
       rows = await LibraryDatabase.instance.getQueueLocalAlbumTracks(
         album.albumName,
         album.artistName,
+        sourcePath: album.sampleFilePath,
+        scope: queryForMusicSource(
+          const QueueLibraryDbQuery(),
+          ref.read(effectiveLibrarySourceProvider),
+        ),
       );
     }
     return rows.map(LocalLibraryItem.fromJson).toList(growable: false);

@@ -1,3 +1,4 @@
+import 'package:mornye/providers/library_source_provider.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mornye/models/unified_library_item.dart';
 import 'package:mornye/providers/download_history_provider.dart';
@@ -45,7 +46,7 @@ final librarySearchProvider = FutureProvider.autoDispose
       if (query.terms.isEmpty) return const [];
       if (request.kind == LibrarySearchKind.playlists) {
         final playlists = ref.watch(
-          libraryCollectionsProvider.select((state) => state.playlists),
+          scopedLibraryCollectionsProvider.select((state) => state.playlists),
         );
         return searchLibraryPlaylists(
           playlists: playlists,
@@ -58,13 +59,19 @@ final librarySearchProvider = FutureProvider.autoDispose
         settingsProvider.select((s) => s.localLibraryEnabled),
       );
       ref.watch(downloadHistoryProvider.select((s) => s.loadedIndexVersion));
-      if (includeLocal) {
+      final selected = ref.watch(effectiveLibrarySourceProvider);
+      final scope = queryForMusicSource(
+        QueueLibraryDbQuery(includeLocal: includeLocal),
+        selected,
+      );
+      if (scope.includeLocal) {
         ref.watch(localLibraryProvider.select((s) => s.loadedIndexVersion));
       }
       return LibraryDatabase.instance.searchLibrary(
         query: request.query,
         kind: request.kind,
-        includeLocal: includeLocal,
+        includeLocal: scope.includeLocal,
+        scope: scope,
         limit: request.limit,
         offset: request.offset,
       );

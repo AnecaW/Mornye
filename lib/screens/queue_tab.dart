@@ -1,3 +1,6 @@
+import 'package:mornye/widgets/library_server_radio.dart';
+import 'package:mornye/providers/library_source_provider.dart';
+import 'package:mornye/widgets/library_source_selector.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart'
@@ -524,6 +527,14 @@ class _QueueTabState extends ConsumerState<QueueTab> {
         ),
       );
     }
+    final musicSource = ref.watch(effectiveLibrarySourceProvider);
+    ref.listen(effectiveLibrarySourceProvider, (previous, next) {
+      if (previous != null && previous != next) {
+        _pager.resetPaging();
+        _selectedIds.clear();
+        if (mounted) setState(() {});
+      }
+    });
     _initializePageController();
     _applyDefaultLibraryViewOnTabVisible();
     final localLibraryEnabled = ref.watch(
@@ -554,7 +565,7 @@ class _QueueTabState extends ConsumerState<QueueTab> {
         if (mounted) setState(() {});
       },
     );
-    if (localLibraryEnabled) {
+    if (localLibraryEnabled || musicSource != deviceMusicSource) {
       ref.listen<int>(
         localLibraryProvider.select((state) => state.loadedIndexVersion),
         (previous, next) {
@@ -620,7 +631,7 @@ class _QueueTabState extends ConsumerState<QueueTab> {
     // LibraryCollectionsState doesn't implement == so watching without
     // selector rebuilds on every provider notification.
     ref.watch(
-      libraryCollectionsProvider.select(
+      scopedLibraryCollectionsProvider.select(
         (s) => (
           s.wishlistCount,
           s.lovedCount,
@@ -631,7 +642,7 @@ class _QueueTabState extends ConsumerState<QueueTab> {
         ),
       ),
     );
-    final collectionState = ref.read(libraryCollectionsProvider);
+    final collectionState = ref.read(scopedLibraryCollectionsProvider);
     final historyViewMode = ref.watch(
       settingsProvider.select((s) => s.historyViewMode),
     );
@@ -651,6 +662,7 @@ class _QueueTabState extends ConsumerState<QueueTab> {
       filterFormat: _filterFormat,
       filterMetadata: _filterMetadata,
       localLibraryEnabled: localLibraryEnabled,
+      librarySource: musicSource,
     );
     final searchingLibrary =
         _searchQuery.isNotEmpty &&
@@ -703,6 +715,7 @@ class _QueueTabState extends ConsumerState<QueueTab> {
         filterMetadata: _filterMetadata,
         sortMode: _sortMode,
         localLibraryEnabled: localLibraryEnabled,
+        librarySource: musicSource,
       );
       if (offset == 0) return baseRequest;
       final previousPage = _pager.cachedPageAt(
@@ -720,6 +733,7 @@ class _QueueTabState extends ConsumerState<QueueTab> {
         filterMetadata: baseRequest.filterMetadata,
         sortMode: baseRequest.sortMode,
         localLibraryEnabled: baseRequest.localLibraryEnabled,
+        librarySource: baseRequest.librarySource,
         cursor: previousPage?.nextCursor,
       );
     }
@@ -888,6 +902,13 @@ class _QueueTabState extends ConsumerState<QueueTab> {
                         ? context.l10n.searchPlaylists
                         : context.l10n.searchSongs,
                   ),
+
+                if (widget.librarySection != 'downloads')
+                  const SliverToBoxAdapter(child: LibrarySourceSelector()),
+                if (widget.librarySection == 'playlists' ||
+                    (widget.librarySection == null &&
+                        historyFilterMode == 'playlists'))
+                  const SliverToBoxAdapter(child: LibraryServerRadio()),
 
                 if (shouldShowLibraryControls || hasQueueItems)
                   SliverToBoxAdapter(

@@ -1,3 +1,7 @@
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mornye/providers/library_source_provider.dart';
+import 'package:mornye/providers/library_collections_provider.dart';
+import 'package:mornye/services/library_collections_database.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:crypto/crypto.dart';
@@ -6,6 +10,35 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:mornye/services/server_scrobbling.dart';
 import 'package:mornye/services/navidrome_library.dart';
 import 'package:mornye/services/network_storage_service.dart';
+
+class _DeviceCollections implements LibraryCollectionsDatabase {
+  int writes = 0;
+  @override
+  Future<bool> migrateFromSharedPreferences() async => false;
+  @override
+  Future<LibraryCollectionsSnapshot> loadSnapshot() async =>
+      const LibraryCollectionsSnapshot(
+        wishlistRows: [],
+        lovedRows: [],
+        playlistRows: [],
+        playlistTrackRows: [],
+        favoriteArtistRows: [],
+      );
+  @override
+  dynamic noSuchMethod(Invocation invocation) {
+    writes++;
+    throw StateError(
+      'Server data must never be written into the local collections DB',
+    );
+  }
+}
+
+Future<void> _until(bool Function() ready) async {
+  for (var i = 0; i < 200 && !ready(); i++) {
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+  }
+  expect(ready(), isTrue);
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -58,6 +91,31 @@ void main() {
         };
       } else {
         switch (method) {
+          case 'getAlbumList2':
+            result['albumList2'] = {
+              'album': [
+                {'id': 'recent-album', 'played': '2026-11-05T10:00:00Z'},
+              ],
+            };
+          case 'getAlbum':
+            result['album'] = {
+              'id': 'recent-album',
+              'song': [
+                {'id': 'unplayed', 'title': 'Never played', 'suffix': 'flac'},
+                {
+                  'id': 'played',
+                  'title': 'Actually played',
+                  'suffix': 'flac',
+                  'played': '2026-11-05T10:00:00Z',
+                },
+                {
+                  'id': 'played',
+                  'title': 'Actually played',
+                  'suffix': 'flac',
+                  'played': '2026-11-05T11:00:00Z',
+                },
+              ],
+            };
           case 'getPlaylist':
             result['playlist'] = playlist;
           case 'getPlaylists':
@@ -302,6 +360,130 @@ void main() {
       );
       final song = {'id': 'same', 'title': 'Song', 'suffix': 'flac'};
       expect(library.playable(song).source, isNot(other.playable(song).source));
+    },
+  );
+
+  test(
+    'recent history uses real song timestamps, deduplicates by ID and bypasses cached reads',
+    () async {
+      final recent = await library.recentPlayed();
+      expect(recent.songs, hasLength(1));
+      expect(recent.songs.single['id'], 'played');
+      expect(
+        subsonicPlayedAt(recent.songs.single['played']),
+        DateTime.utc(2026, 11, 5, 11),
+      );
+      expect(calls.where((c) => c.method == 'scrobble'), isEmpty);
+      expect(subsonicPlayedAt(null), isNull);
+      expect(subsonicPlayedAt('invalid'), isNull);
+      expect(subsonicPlayedAt(0), isNull);
+    },
+  );
+
+  test(
+    'original collections actions create, load, add, remove and rename actual server playlists without local clones',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      await storage.save(library.connection);
+      final db = _DeviceCollections();
+      final container = ProviderContainer(
+        overrides: [
+          librarySourceStorageProvider.overrideWithValue(storage),
+          libraryCollectionsProvider.overrideWith(
+            () => LibraryCollectionsNotifier(database: db),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+      final notifier = container.read(libraryCollectionsProvider.notifier);
+      await _until(
+        () => container.read(libraryCollectionsProvider).playlists.isNotEmpty,
+      );
+      final id = serverPlaylistKey(
+        library.connection.id,
+        playlist['id'] as String,
+      );
+      await notifier.ensurePlaylistLoaded(id);
+      expect(
+        container.read(libraryCollectionsProvider).playlistById(id)!.tracks,
+        hasLength(3),
+      );
+      final added = await notifier.addTracksToPlaylist(id, [
+        library.track({'id': 'c', 'title': 'C', 'suffix': 'flac'}),
+      ]);
+      expect(added.addedCount, 1);
+      expect(
+        (await library.playlist(playlist['id'] as String, fresh: true)).songIds,
+        ['a', 'a', 'b', 'c'],
+      );
+      final beforeRemove = container
+          .read(libraryCollectionsProvider)
+          .playlistById(id)!;
+      await notifier.removeTracksFromPlaylist(id, [beforeRemove.tracks[1].key]);
+      expect(
+        (await library.playlist(playlist['id'] as String, fresh: true)).songIds,
+        ['a', 'b', 'c'],
+      );
+      await notifier.renamePlaylist(id, 'From original UI');
+      expect(playlist['name'], 'From original UI');
+      await container
+          .read(selectedLibrarySourceProvider.notifier)
+          .select(serverMusicSource(library.connection.id));
+      expect(await notifier.createPlaylist('Created on server'), id);
+      expect(playlist['name'], 'Created on server');
+      expect(
+        container.read(scopedLibraryCollectionsProvider).playlists,
+        hasLength(1),
+      );
+      await container
+          .read(selectedLibrarySourceProvider.notifier)
+          .select(deviceMusicSource);
+      expect(
+        container.read(scopedLibraryCollectionsProvider).playlists,
+        isEmpty,
+      );
+      await container
+          .read(selectedLibrarySourceProvider.notifier)
+          .select(allMusicSources);
+      expect(
+        container.read(scopedLibraryCollectionsProvider).playlists,
+        hasLength(1),
+      );
+      final export = jsonDecode(await notifier.exportCollectionsJson()) as Map;
+      expect(export['playlists'], isEmpty);
+      expect(db.writes, 0);
+    },
+  );
+  test(
+    'source choices track real saved connections and removal never selects device music',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final container = ProviderContainer(
+        overrides: [librarySourceStorageProvider.overrideWithValue(storage)],
+      );
+      addTearDown(container.dispose);
+      expect(
+        await container.read(librarySourceConnectionsProvider.future),
+        isEmpty,
+      );
+      await storage.save(library.connection);
+      await _until(
+        () =>
+            container.read(librarySourceConnectionsProvider).value?.length == 1,
+      );
+      await container
+          .read(selectedLibrarySourceProvider.notifier)
+          .select(serverMusicSource(library.connection.id));
+      await storage.remove(library.connection.id);
+      await _until(
+        () =>
+            container.read(librarySourceConnectionsProvider).value?.isEmpty ==
+            true,
+      );
+      expect(
+        container.read(effectiveLibrarySourceProvider),
+        serverMusicSource(library.connection.id),
+      );
     },
   );
 }

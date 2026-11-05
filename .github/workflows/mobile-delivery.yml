@@ -191,8 +191,9 @@ jobs:
           mkdir -p .tmp/audio
           ffmpeg -v error -f lavfi -i sine=frequency=440:duration=2 -ar 44100 -ac 1 .tmp/audio/tone.flac
           ffmpeg -v error -f lavfi -i sine=frequency=440:duration=2 -ar 44100 -ac 1 .tmp/audio/tone.mp3
-          device=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; print(next(d["udid"] for group in json.load(sys.stdin)["devices"].values() for d in group if "iPhone" in d["name"]))')
+          device=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; groups=json.load(sys.stdin)["devices"]; print(next(d["udid"] for runtime in sorted(groups, reverse=True) for d in groups[runtime] if "iPhone" in d["name"]))')
           xcrun simctl boot "$device" || true
+          open -a Simulator --args -CurrentDeviceUDID "$device"
           xcrun simctl bootstatus "$device" -b
           flutter test integration_test/subsonic_playback_test.dart --no-pub --verbose --timeout=2m -d "$device" --dart-define="TEST_FLAC=$(base64 < .tmp/audio/tone.flac | tr -d '\n')" --dart-define="TEST_MP3=$(base64 < .tmp/audio/tone.mp3 | tr -d '\n')" 2>&1 | tee .tmp/ios-simulator.log
       - name: Collect simulator diagnostics

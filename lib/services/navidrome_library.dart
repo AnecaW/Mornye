@@ -1,3 +1,4 @@
+import 'package:mornye/models/track.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
@@ -12,6 +13,16 @@ List<Map<String, dynamic>> subsonicRows(Object? value) => value is List
     : const [];
 Map<String, dynamic> subsonicObject(Object? value) =>
     value is Map ? Map<String, dynamic>.from(value) : <String, dynamic>{};
+
+DateTime? subsonicPlayedAt(Object? value) {
+  if (value is String) return DateTime.tryParse(value);
+  if (value is num && value > 0) {
+    return DateTime.fromMillisecondsSinceEpoch(
+      value < 100000000000 ? value.toInt() * 1000 : value.toInt(),
+    );
+  }
+  return null;
+}
 
 class ServerPlaylist {
   ServerPlaylist(Map<String, dynamic> data) : data = Map.unmodifiable(data);
@@ -119,6 +130,73 @@ class NavidromeLibrary {
       }, fresh))['albumList2'],
     )['album'],
   );
+
+  /// Last-played songs reconstructed only from real per-song timestamps in recent albums.
+  Future<
+    ({List<Map<String, dynamic>> songs, List<Map<String, dynamic>> albums})
+  >
+  recentPlayed({int limit = 20}) async {
+    final albums = subsonicRows(
+      subsonicObject(
+        (await read('getAlbumList2', {
+          'type': 'recent',
+          'size': '$limit',
+          'offset': '0',
+        }, true))['albumList2'],
+      )['album'],
+    );
+    final songs = <String, Map<String, dynamic>>{};
+    for (var start = 0; start < albums.length; start += 4) {
+      final end = start + 4 < albums.length ? start + 4 : albums.length;
+      final pages = await Future.wait(
+        albums.sublist(start, end).map((album) async {
+          final data = subsonicObject(
+            (await read('getAlbum', {
+              'id': album['id'].toString(),
+            }, true))['album'],
+          );
+          return subsonicRows(data['song']);
+        }),
+      );
+      for (final song in pages.expand((p) => p)) {
+        final time = subsonicPlayedAt(song['played']);
+        if (time == null) continue;
+        final id = song['id'].toString();
+        final previous = songs[id];
+        if (previous == null ||
+            time.isAfter(subsonicPlayedAt(previous['played'])!)) {
+          songs[id] = song;
+        }
+      }
+    }
+    final sorted = songs.values.toList()
+      ..sort(
+        (a, b) => subsonicPlayedAt(
+          b['played'],
+        )!.compareTo(subsonicPlayedAt(a['played'])!),
+      );
+    return (songs: sorted.take(limit).toList(growable: false), albums: albums);
+  }
+
+  Track track(Map<String, dynamic> data) {
+    final media = playable(data);
+    return Track(
+      id: media.id,
+      name: media.title,
+      artistName: media.artist,
+      albumName: media.album,
+      duration: media.duration?.inMilliseconds ?? 0,
+      source: media.source,
+      coverUrl: media.networkArtworkSource,
+      artistId: data['artistId']?.toString(),
+      albumId: data['albumId']?.toString(),
+      genre: data['genre']?.toString(),
+      trackNumber: (data['track'] as num?)?.toInt(),
+      discNumber: (data['discNumber'] as num?)?.toInt(),
+      isrc: data['isrc'] is String ? data['isrc'] as String : null,
+    );
+  }
+
   Future<List<Map<String, dynamic>>> playlists({bool fresh = false}) async =>
       subsonicRows(
         subsonicObject(
@@ -258,6 +336,7 @@ class NavidromeLibrary {
       'submission': '$submission',
       'time': '${time.millisecondsSinceEpoch}',
     });
+    if (submission) _changes.add(connection.id);
   }
 
   PlayableMedia playable(Map<String, dynamic> data) {

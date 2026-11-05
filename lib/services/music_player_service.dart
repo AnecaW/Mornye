@@ -1,3 +1,4 @@
+import 'package:mornye/services/server_scrobbling.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:math';
@@ -842,6 +843,19 @@ class MusicPlayerHandler extends BaseAudioHandler
     final state = playerState ?? _player.state;
     final failed = _playbackError != null;
     final playing = !failed && state == PlaybackDeckState.playing;
+    if (playing && _sourceReady && _index >= 0 && _index < _media.length) {
+      final source = _media[_index].source;
+      if (source.startsWith('network://') &&
+          (_serverListeningGeneration != _serverTrackGeneration ||
+              !_serverListening.isForSource(source))) {
+        _serverListeningGeneration = _serverTrackGeneration;
+        _serverListening.begin(source);
+        _serverListeningAccount = ServerScrobbleOutbox.instance
+            .accountFor(source)
+            .catchError((Object _) => null);
+        unawaited(ServerScrobbleOutbox.instance.nowPlaying(source));
+      }
+    }
 
     playbackState.add(
       playbackState.value.copyWith(
@@ -999,12 +1013,44 @@ class MusicPlayerHandler extends BaseAudioHandler
     return true;
   }
 
+  int _serverTrackGeneration = 0;
+  int _serverListeningGeneration = -1;
+  Future<String?>? _serverListeningAccount;
+  late final ServerListeningSession _serverListening = ServerListeningSession(
+    submit: (source, time) async {
+      final pendingAccount = _serverListeningAccount;
+      final account = await pendingAccount;
+      if (account != null) {
+        await ServerScrobbleOutbox.instance.enqueue(
+          source,
+          time,
+          expectedAccount: account,
+        );
+      }
+    },
+  );
+
   void _handlePositionChanged(Duration position) {
     if (!_sourceReady || _switchingGeneration != 0) return;
     final readAt = _positionQueriedAt;
     _positionQueriedAt = null;
     _positionCheckDue = false;
     _broadcastPosition(position, readAt: readAt);
+    if (_index >= 0 &&
+        _index < _media.length &&
+        _serverListening.isForSource(_media[_index].source)) {
+      unawaited(
+        _serverListening
+            .tick(
+              position,
+              playing: _player.state == PlaybackDeckState.playing,
+              duration: mediaItem.value?.duration ?? _media[_index].duration,
+            )
+            .catchError((Object error) {
+              _log.w('Server playback report remains pending');
+            }),
+      );
+    }
     _autoMix.onPosition(position);
     _gapless.onPosition(position);
     unawaited(_autoplay.fill());
@@ -1537,6 +1583,7 @@ class MusicPlayerHandler extends BaseAudioHandler
       _pendingRestorePosition = null;
     }
     final generation = ++_playRequestGeneration;
+    _serverTrackGeneration++;
     _sourceReady = false;
     _playbackError = null;
     // Advance the requested index synchronously so consecutive Next taps do

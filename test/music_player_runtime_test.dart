@@ -479,14 +479,17 @@ class _BrowsedLibrary implements LibraryDatabase {
 
   @override
   Future<List<Map<String, dynamic>>> getQueueLocalAlbumTracksByKey(
-    String albumKey,
-  ) async => albumKey == 'album' ? album : const [];
+    String albumKey, {
+    String? sourcePath,
+    QueueLibraryDbQuery? scope,
+  }) async => albumKey == 'album' ? album : const [];
 
   @override
   Future<List<LibrarySearchHit>> searchLibrary({
     required String query,
     required LibrarySearchKind kind,
     required bool includeLocal,
+    QueueLibraryDbQuery? scope,
     int limit = 40,
     int offset = 0,
   }) async => kind == LibrarySearchKind.songs && query == 'song b'

@@ -1002,6 +1002,29 @@ extension _QueueTabItemWidgets on _QueueTabState {
           TrackTableRow(
             id: item.id,
             title: item.trackName,
+            titleTrailing: Tooltip(
+              message: musicSourceLabel(
+                item.filePath,
+                ref.read(librarySourceConnectionsProvider).value ?? const [],
+                localLabel: context.l10n.libraryDeviceSource,
+              ),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 110),
+                child: Text(
+                  musicSourceLabel(
+                    item.filePath,
+                    ref.read(librarySourceConnectionsProvider).value ??
+                        const [],
+                    localLabel: context.l10n.libraryDeviceSource,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ),
             artist: item.artistName,
             album: item.albumName,
             quality: item.qualityForMode(qualityMode),
@@ -1046,7 +1069,13 @@ extension _QueueTabItemWidgets on _QueueTabState {
 
     final isDownloaded = item.source == LibraryItemSource.downloaded;
     final quality = item.qualityForMode(_libraryQualityLabelMode);
-    final sourceLabel = isDownloaded
+    final sourceLabel = item.filePath.startsWith('network://')
+        ? musicSourceLabel(
+            item.filePath,
+            ref.read(librarySourceConnectionsProvider).value ?? const [],
+            localLabel: context.l10n.libraryDeviceSource,
+          )
+        : isDownloaded
         ? context.l10n.librarySourceDownloaded
         : context.l10n.librarySourceLocal;
     // The label text tells the sources apart; rows keep one neutral role.

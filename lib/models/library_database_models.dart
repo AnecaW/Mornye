@@ -1,3 +1,4 @@
+import 'package:mornye/services/library_source_scope.dart';
 import 'package:mornye/services/sqlite_helpers.dart' as sqlite;
 import 'package:mornye/utils/audio_format_utils.dart';
 
@@ -191,8 +192,10 @@ class LocalLibraryItem {
     );
   }
 
-  String get albumKey =>
-      '${sqlite.normalizeLookupText(albumName)}|${sqlite.normalizeLookupText(albumArtist ?? artistName)}';
+  String get albumKey => sourceAlbumKey(
+    '${sqlite.normalizeLookupText(albumName)}|${sqlite.normalizeLookupText(albumArtist ?? artistName)}',
+    filePath,
+  );
 }
 
 class LocalLibrarySource {
@@ -327,6 +330,7 @@ class QueueLibraryDbQuery {
   final bool deviceOnly;
   final Set<String>? networkScope;
   final bool includeDevice;
+  final bool includeIndexedDevice;
   final QueueLibraryDbCursor? cursor;
 
   const QueueLibraryDbQuery({
@@ -345,6 +349,7 @@ class QueueLibraryDbQuery {
     this.deviceOnly = false,
     this.networkScope,
     this.includeDevice = true,
+    this.includeIndexedDevice = true,
     this.cursor,
   });
 }

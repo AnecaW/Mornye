@@ -425,7 +425,10 @@ extension _QueueTabSections on _QueueTabState {
     return Consumer(
       builder: (context, ref, _) {
         final state = ref.watch(libraryBrowseProvider(request));
-        final entries = state.value?.entries ?? const <LibraryBrowseEntry>[];
+        final entries =
+            state.value?.source == ref.watch(effectiveLibrarySourceProvider)
+            ? state.value!.entries
+            : const <LibraryBrowseEntry>[];
         final sections = <_LibrarySection>[];
         for (var i = 0; i < entries.length; i++) {
           final label = _sectionInitial(entries[i].artist);

@@ -1,3 +1,4 @@
+import 'package:mornye/providers/library_source_provider.dart';
 import 'dart:isolate';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -24,13 +25,18 @@ final libraryDirectoryIndexProvider =
       final includeLocal = ref.watch(
         settingsProvider.select((s) => s.localLibraryEnabled),
       );
-      if (includeLocal) {
+      final scope = queryForMusicSource(
+        QueueLibraryDbQuery(includeLocal: includeLocal),
+        ref.watch(effectiveLibrarySourceProvider),
+      );
+      if (scope.includeLocal) {
         ref.watch(
           localLibraryProvider.select((state) => state.loadedIndexVersion),
         );
       }
       final rows = await LibraryDatabase.instance.getDirectoryEntries(
-        includeLocal: includeLocal,
+        includeLocal: scope.includeLocal,
+        scope: scope,
       );
       final entries = rows
           .map(LibraryDirectoryEntry.fromRow)

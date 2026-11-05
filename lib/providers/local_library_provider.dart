@@ -526,6 +526,7 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
   Future<void> startSourceScan(
     String sourceId, {
     bool forceFullScan = false,
+    bool waitForCurrentScan = false,
   }) async {
     final reconnect = _pendingReconnectScans.contains(sourceId);
     while (ref.mounted) {
@@ -535,7 +536,7 @@ class LocalLibraryNotifier extends Notifier<LocalLibraryState> {
         return;
       }
       if (_scanInProgress) {
-        if (!reconnect) return;
+        if (!reconnect && !waitForCurrentScan) return;
         final active = _scanCompletion;
         if (active != null) await active;
         continue;

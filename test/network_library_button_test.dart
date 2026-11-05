@@ -54,6 +54,7 @@ class _Library extends LocalLibraryNotifier {
   Future<void> startSourceScan(
     String sourceId, {
     bool forceFullScan = false,
+    bool waitForCurrentScan = false,
   }) async {
     _events.add('scan:$sourceId');
   }

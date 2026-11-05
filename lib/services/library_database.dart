@@ -1,3 +1,4 @@
+import 'package:mornye/services/library_source_scope.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
@@ -135,6 +136,7 @@ class LibraryDatabase {
     required String query,
     required LibrarySearchKind kind,
     required bool includeLocal,
+    QueueLibraryDbQuery? scope,
     int limit = 40,
     int offset = 0,
   }) async {
@@ -153,6 +155,7 @@ class LibraryDatabase {
             shadowSnapshot: snapshot,
           ).search(
             query: query,
+            scope: scope,
             kind: kind,
             includeLocal: includeLocal,
             limit: limit,
@@ -463,8 +466,9 @@ class LibraryDatabase {
   /// Ids, paths and covers of every Library song, for the Folders index.
   Future<List<Map<String, Object?>>> getDirectoryEntries({
     required bool includeLocal,
+    QueueLibraryDbQuery? scope,
   }) => _queueRead(
-    (store) => store.directoryEntries(includeLocal: includeLocal),
+    (store) => store.directoryEntries(includeLocal: includeLocal, scope: scope),
     includeLocal: includeLocal,
   );
 
@@ -512,28 +516,43 @@ class LibraryDatabase {
 
   Future<List<Map<String, dynamic>>> getQueueLocalAlbumTracks(
     String albumName,
-    String artistName,
-  ) async {
-    final db = await database;
-    final rows = await db.query(
-      visibleLibraryView,
-      where:
-          "LOWER(album_name) = ? AND LOWER(COALESCE(NULLIF(album_artist, ''), artist_name)) = ?",
-      whereArgs: [albumName.toLowerCase(), artistName.toLowerCase()],
-      orderBy:
-          'COALESCE(disc_number, 0), COALESCE(track_number, 0), track_name',
-    );
-    return rows.map(LibraryRowMapper.decode).toList(growable: false);
-  }
+    String artistName, {
+    String? sourcePath,
+    QueueLibraryDbQuery? scope,
+  }) => getQueueLocalAlbumTracksByKey(
+    '${sqlite.normalizeLookupText(albumName)}|${sqlite.normalizeLookupText(artistName)}',
+    sourcePath: sourcePath,
+    scope: scope,
+  );
 
   Future<List<Map<String, dynamic>>> getQueueLocalAlbumTracksByKey(
-    String albumKey,
-  ) async {
+    String albumKey, {
+    String? sourcePath,
+    QueueLibraryDbQuery? scope,
+  }) async {
     final db = await database;
+    final keyUri = Uri.tryParse(albumKey);
+    if (keyUri?.scheme == 'network') {
+      sourcePath = 'network://${keyUri!.host}/';
+      albumKey = albumKey.substring('network://${keyUri.host}/'.length);
+    }
+    final where = <String>['album_key = ?'];
+    final args = <Object?>[albumKey];
+    appendLibrarySourceScope(where, args, scope, 'file_path', indexed: true);
+    if (sourcePath != null) {
+      final uri = Uri.tryParse(sourcePath);
+      if (uri?.scheme == 'network') {
+        where.add("substr(file_path, 1, ?) = ?");
+        final prefix = 'network://${uri!.host}/';
+        args.addAll([prefix.length, prefix]);
+      } else {
+        where.add("file_path NOT LIKE 'network://%'");
+      }
+    }
     final rows = await db.query(
       visibleLibraryView,
-      where: 'album_key = ?',
-      whereArgs: [albumKey],
+      where: where.join(' AND '),
+      whereArgs: args,
       orderBy:
           'COALESCE(disc_number, 0), COALESCE(track_number, 0), track_name',
     );

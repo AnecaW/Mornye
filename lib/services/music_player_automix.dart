@@ -380,6 +380,7 @@ class _MusicAutoMix {
       final nextIndex = _nextIndex > handler._index
           ? _nextIndex
           : handler._beginRepeatPass(_nextIndex);
+      handler._serverTrackGeneration++;
       handler._index = nextIndex;
       handler._playRequestGeneration++;
       handler._recordPlayHistory(nextIndex);

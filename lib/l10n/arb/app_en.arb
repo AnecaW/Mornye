@@ -10059,5 +10059,11 @@
   "collectionSuggestionsAddHere": "Add to this playlist",
   "@collectionSuggestionsAddHere": {
     "description": "Tooltip of the button that adds a suggested song to the user's playlist shown above"
-  }
+  },
+  "libraryAllSources": "All libraries",
+  "libraryDeviceSource": "Local library",
+  "libraryChooseSource": "Music source",
+  "librarySourceUnavailable": "Server unavailable. Cached music remains available.",
+  "libraryUploadMusic": "Add music to server",
+  "libraryServerRadio": "Radio"
 }

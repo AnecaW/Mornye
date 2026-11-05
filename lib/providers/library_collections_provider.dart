@@ -1,3 +1,7 @@
+import 'dart:async';
+import 'package:flutter/widgets.dart' show WidgetsBinding, AppLifecycleState;
+import 'package:mornye/providers/library_source_provider.dart';
+import 'package:mornye/services/network_storage_service.dart';
 import 'dart:convert';
 import 'package:mornye/services/navidrome_library.dart';
 
@@ -17,6 +21,8 @@ import 'package:mornye/utils/logger.dart';
 
 export 'package:mornye/models/library_collections.dart';
 
+part 'library_collections_provider_subsonic.dart';
+
 final _log = AppLogger('LibraryCollections');
 
 class LibraryCollectionsNotifier extends Notifier<LibraryCollectionsState> {
@@ -25,6 +31,13 @@ class LibraryCollectionsNotifier extends Notifier<LibraryCollectionsState> {
 
   final LibraryCollectionsDatabase _db;
   final PlaylistCoverStore _coverStore = const PlaylistCoverStore();
+  final _serverRows = <String, List<UserPlaylistCollection>>{};
+  final _serverSnapshots = <String, ServerPlaylist>{};
+  final _serverOwners = <String, String>{};
+  final _serverConnectionOwners = <String, String>{};
+  Future<void>? _serverRefresh;
+  Timer? _serverTimer;
+  StreamSubscription<String>? _serverChanges;
   Future<void>? _loadFuture;
   final Map<String, Future<void>> _playlistLoadFutures = {};
   Future<void> _mutationTail = Future<void>.value();
@@ -54,6 +67,24 @@ class LibraryCollectionsNotifier extends Notifier<LibraryCollectionsState> {
   @override
   LibraryCollectionsState build() {
     _loadFuture = _load();
+    ref.listen(librarySourceConnectionsProvider, (_, next) {
+      if (next.hasValue) {
+        unawaited(_refreshServerPlaylists().catchError((Object _) {}));
+      }
+    });
+    _serverChanges = NavidromeLibrary.changes.listen((_) {
+      unawaited(_refreshServerPlaylists().catchError((Object _) {}));
+    });
+    _serverTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (_serverConnectionOwners.isNotEmpty &&
+          WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
+        unawaited(_refreshServerPlaylists().catchError((Object _) {}));
+      }
+    });
+    ref.onDispose(() {
+      _serverTimer?.cancel();
+      _serverChanges?.cancel();
+    });
     return LibraryCollectionsState();
   }
 
@@ -65,7 +96,14 @@ class LibraryCollectionsNotifier extends Notifier<LibraryCollectionsState> {
       try {
         if (!ref.mounted) return;
         final loaded = await hydrateLibraryCollectionsSnapshot(snapshot);
-        if (ref.mounted) state = loaded;
+        if (ref.mounted) {
+          state = loaded.copyWith(
+            playlists: [
+              ...loaded.playlists,
+              ..._serverRows.values.expand((p) => p),
+            ],
+          );
+        }
       } finally {
         await cleanupCollectionRows(
           nativeRowsPath: snapshot.nativeRowsPath,
@@ -85,6 +123,13 @@ class LibraryCollectionsNotifier extends Notifier<LibraryCollectionsState> {
   }
 
   Future<void> ensurePlaylistLoaded(String playlistId) async {
+    if (serverPlaylistIdentity(playlistId) != null) {
+      await _ensureLoaded();
+      return _playlistLoadFutures[playlistId] ??=
+          _loadServerPlaylist(playlistId).whenComplete(() {
+            _playlistLoadFutures.remove(playlistId);
+          });
+    }
     await _ensureLoaded();
     if (!ref.mounted) return;
     final playlist = state.playlistById(playlistId);
@@ -456,6 +501,10 @@ class LibraryCollectionsNotifier extends Notifier<LibraryCollectionsState> {
       );
 
   Future<String> createPlaylist(String name) => _mutate(() async {
+    final server = musicSourceConnectionId(
+      ref.read(effectiveLibrarySourceProvider),
+    );
+    if (server != null) return _createServerPlaylist(server, name);
     final now = DateTime.now();
     final id = 'pl_${now.microsecondsSinceEpoch}';
     final trimmedName = name.trim();
@@ -483,6 +532,12 @@ class LibraryCollectionsNotifier extends Notifier<LibraryCollectionsState> {
 
   Future<void> renamePlaylist(String playlistId, String newName) =>
       _mutate(() async {
+        if (serverPlaylistIdentity(playlistId) != null) {
+          final target = await _serverEdit(playlistId);
+          await target.library.editPlaylist(target.snapshot, name: newName);
+          await _loadServerPlaylist(playlistId);
+          return;
+        }
         final trimmed = newName.trim();
         if (trimmed.isEmpty) return;
         final playlist = state.playlistById(playlistId);
@@ -503,10 +558,24 @@ class LibraryCollectionsNotifier extends Notifier<LibraryCollectionsState> {
   Future<int> deletePlaylists(Iterable<String> playlistIds) {
     final selected = playlistIds.toSet();
     return _mutate(() async {
+      var serverDeleted = 0;
+      for (final id in selected.where(
+        (id) => serverPlaylistIdentity(id) != null,
+      )) {
+        final target = await _serverEdit(id);
+        await target.library.editPlaylist(target.snapshot, delete: true);
+        final connection = serverPlaylistIdentity(id)!.connection;
+        _serverRows[connection]?.removeWhere((p) => p.id == id);
+        _serverSnapshots.remove(id);
+        _serverOwners.remove(id);
+        serverDeleted++;
+      }
+      if (serverDeleted > 0) _publishServerPlaylists();
       final ids = selected
+          .where((id) => serverPlaylistIdentity(id) == null)
           .where((id) => state.playlistById(id) != null)
           .toSet();
-      if (ids.isEmpty) return 0;
+      if (ids.isEmpty) return serverDeleted;
       await _db.deletePlaylists(ids.toList(growable: false));
       if (ref.mounted) {
         state = state.copyWith(
@@ -516,12 +585,15 @@ class LibraryCollectionsNotifier extends Notifier<LibraryCollectionsState> {
         );
         _invalidatePlaylistPickerSummaries();
       }
-      return ids.length;
+      return ids.length + serverDeleted;
     });
   }
 
   Future<bool> addTrackToPlaylist(String playlistId, Track track) => _mutate(
     () async {
+      if (serverPlaylistIdentity(playlistId) != null) {
+        return (await _addServerTracks(playlistId, [track])).addedCount > 0;
+      }
       var playlist = state.playlistById(playlistId);
       if (playlist == null) return false;
 
@@ -560,6 +632,13 @@ class LibraryCollectionsNotifier extends Notifier<LibraryCollectionsState> {
     Iterable<Track> tracks, {
     bool preserveOccurrences = false,
   }) => _mutate(() async {
+    if (serverPlaylistIdentity(playlistId) != null) {
+      return _addServerTracks(
+        playlistId,
+        tracks,
+        preserveOccurrences: preserveOccurrences,
+      );
+    }
     await ensurePlaylistLoaded(playlistId);
     if (!ref.mounted) {
       return const PlaylistAddBatchResult(
@@ -632,6 +711,9 @@ class LibraryCollectionsNotifier extends Notifier<LibraryCollectionsState> {
   ) {
     final selected = trackKeys.toSet();
     return _mutate(() async {
+      if (serverPlaylistIdentity(playlistId) != null) {
+        return _removeServerTracks(playlistId, selected);
+      }
       var playlist = state.playlistById(playlistId);
       if (playlist == null || !selected.any(playlist.containsTrackKey)) {
         return 0;
@@ -670,6 +752,9 @@ class LibraryCollectionsNotifier extends Notifier<LibraryCollectionsState> {
     String playlistId,
     List<String> orderedKeys,
   ) => _mutate(() async {
+    if (serverPlaylistIdentity(playlistId) != null) {
+      return _reorderServerTracks(playlistId, orderedKeys);
+    }
     await ensurePlaylistLoaded(playlistId);
     if (!ref.mounted) return false;
     final playlist = state.playlistById(playlistId);
@@ -771,6 +856,11 @@ class LibraryCollectionsNotifier extends Notifier<LibraryCollectionsState> {
     String playlistId,
     String sourceFilePath,
   ) => _mutate(() async {
+    if (serverPlaylistIdentity(playlistId) != null) {
+      throw StateError(
+        'Changing a server playlist cover is not supported by this API.',
+      );
+    }
     final playlist = state.playlistById(playlistId);
     if (playlist == null) return;
 
@@ -817,8 +907,17 @@ class LibraryCollectionsNotifier extends Notifier<LibraryCollectionsState> {
 
   Future<String> exportCollectionsJson() async {
     await _ensureLoaded();
-    await ensurePlaylistsLoaded(state.playlists.map((playlist) => playlist.id));
-    return exportLibraryCollectionsJson(state);
+    final local = state.playlists
+        .where((p) => serverPlaylistIdentity(p.id) == null)
+        .toList();
+    await ensurePlaylistsLoaded(local.map((p) => p.id));
+    return exportLibraryCollectionsJson(
+      state.copyWith(
+        playlists: state.playlists
+            .where((p) => serverPlaylistIdentity(p.id) == null)
+            .toList(),
+      ),
+    );
   }
 
   /// Returns cover file references for the streaming ZIP backup format. The
@@ -921,7 +1020,36 @@ final libraryPlaylistPickerSummariesProvider = FutureProvider.autoDispose
       ref,
       request,
     ) async {
-      final db = LibraryCollectionsDatabase.instance;
-      await db.migrateFromSharedPreferences();
-      return db.loadPlaylistPickerSummaries(request.trackKeys);
+      final source = ref.watch(effectiveLibrarySourceProvider);
+      final remote = ref.watch(
+        scopedLibraryCollectionsProvider.select(
+          (state) => state.playlists
+              .where((p) => serverPlaylistIdentity(p.id) != null)
+              .toList(growable: false),
+        ),
+      );
+      final summaries = <PlaylistPickerSummary>[];
+      if (musicSourceConnectionId(source) == null) {
+        final db = LibraryCollectionsDatabase.instance;
+        await db.migrateFromSharedPreferences();
+        summaries.addAll(
+          await db.loadPlaylistPickerSummaries(request.trackKeys),
+        );
+      }
+      for (final playlist in remote) {
+        final keys = playlistImportKeys(
+          playlist.tracks.map((e) => e.track),
+        ).toSet();
+        summaries.add(
+          PlaylistPickerSummary(
+            id: playlist.id,
+            name: playlist.name,
+            previewCover: playlist.previewCover,
+            trackCount: playlist.trackCount,
+            containsAllRequestedTracks:
+                playlist.tracksLoaded && request.trackKeys.every(keys.contains),
+          ),
+        );
+      }
+      return summaries;
     });

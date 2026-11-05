@@ -1,3 +1,5 @@
+import 'package:mornye/providers/library_source_provider.dart';
+import 'package:mornye/widgets/library_source_selector.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -148,6 +150,11 @@ class _MornyeLibraryScreenState extends ConsumerState<MornyeLibraryScreen> {
   ) async {
     final rows = await LibraryDatabase.instance.getQueueLocalAlbumTracksByKey(
       entry.key,
+      sourcePath: entry.samplePath,
+      scope: queryForMusicSource(
+        const QueueLibraryDbQuery(),
+        ref.read(effectiveLibrarySourceProvider),
+      ),
     );
     return rows.map(LocalLibraryItem.fromJson).toList(growable: false);
   }
@@ -307,6 +314,12 @@ class _MornyeLibraryScreenState extends ConsumerState<MornyeLibraryScreen> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(effectiveLibrarySourceProvider, (previous, next) {
+      if (previous != null && previous != next) {
+        _rows = const [];
+        if (_scroll.hasClients) _scroll.jumpTo(0);
+      }
+    });
     final colors = Theme.of(context).colorScheme;
     final searchingLibrary = _overview && _query.isNotEmpty;
     final listInset = wideListInset(context);
@@ -314,7 +327,11 @@ class _MornyeLibraryScreenState extends ConsumerState<MornyeLibraryScreen> {
         ? const AsyncData(LibraryBrowseState([], hasMore: false))
         : ref.watch(libraryBrowseProvider(_request));
     _loading = result.isLoading || (result.value?.isLoadingMore ?? false);
-    if (result.hasValue) _rows = result.requireValue.entries;
+    if (result.value?.source == ref.watch(effectiveLibrarySourceProvider)) {
+      _rows = result.requireValue.entries;
+    } else {
+      _rows = const [];
+    }
     final title =
         widget.artist ??
         (_overview
@@ -385,6 +402,7 @@ class _MornyeLibraryScreenState extends ConsumerState<MornyeLibraryScreen> {
             )
           else
             AppSliverHeader.page(title: title, actions: actions),
+          const SliverToBoxAdapter(child: LibrarySourceSelector()),
           if (_showSearch)
             SliverToBoxAdapter(
               child: Padding(

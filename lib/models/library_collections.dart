@@ -133,6 +133,7 @@ class UserPlaylistCollection {
   final List<CollectionTrackEntry> tracks;
   final String? previewCover;
   final bool tracksLoaded;
+  final int? remoteTrackCount;
   final Set<String> _trackKeys;
 
   UserPlaylistCollection({
@@ -144,6 +145,7 @@ class UserPlaylistCollection {
     required this.tracks,
     this.previewCover,
     this.tracksLoaded = true,
+    this.remoteTrackCount,
     Set<String>? trackKeys,
   }) : _trackKeys = trackKeys ?? tracks.map((entry) => entry.key).toSet();
 
@@ -169,6 +171,7 @@ class UserPlaylistCollection {
       updatedAt: updatedAt ?? this.updatedAt,
       tracks: nextTracks,
       previewCover: previewCover ?? this.previewCover,
+      remoteTrackCount: remoteTrackCount,
       tracksLoaded:
           tracksLoaded ??
           (identical(nextTracks, this.tracks) ? this.tracksLoaded : true),
@@ -199,11 +202,12 @@ class UserPlaylistCollection {
     tracks: tracks,
     previewCover: previewCover,
     tracksLoaded: true,
+    remoteTrackCount: remoteTrackCount == null ? null : tracks.length,
     trackKeys: membershipUnchanged ? _trackKeys : trackKeys,
   );
 
   Set<String> get trackKeys => UnmodifiableSetView(_trackKeys);
-  int get trackCount => _trackKeys.length;
+  int get trackCount => remoteTrackCount ?? _trackKeys.length;
 
   Map<String, dynamic> toJson() => {
     'id': id,

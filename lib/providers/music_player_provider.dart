@@ -429,7 +429,10 @@ class MusicPlayerController {
     final row = await database.getById(mediaId);
     if (row == null) return null;
     final item = LocalLibraryItem.fromJson(row);
-    final rows = await database.getQueueLocalAlbumTracksByKey(item.albumKey);
+    final rows = await database.getQueueLocalAlbumTracksByKey(
+      item.albumKey,
+      sourcePath: item.filePath,
+    );
     final tracks = rows.map(LocalLibraryItem.fromJson).toList(growable: false);
     return tracks.isEmpty ? null : (item: item, tracks: tracks);
   }

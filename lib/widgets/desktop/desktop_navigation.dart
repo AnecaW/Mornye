@@ -68,7 +68,7 @@ final desktopSidebarLink = ValueNotifier<String?>(null);
 
 /// The user's playlists listed in the Mornye sidebar.
 final desktopSidebarPlaylistsProvider = Provider<List<UserPlaylistCollection>>(
-  (ref) => ref.watch(libraryCollectionsProvider.select((s) => s.playlists)),
+  (ref) => ref.watch(scopedLibraryCollectionsProvider.select((s) => s.playlists)),
 );
 
 /// The profile in the Mornye sidebar's account row, once it has loaded.

@@ -1,3 +1,4 @@
+import 'package:mornye/providers/library_source_provider.dart';
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -70,6 +71,7 @@ void main() {
     failure = null;
     container = ProviderContainer(
       overrides: [
+        effectiveLibrarySourceProvider.overrideWithValue(deviceMusicSource),
         settingsProvider.overrideWith(_Settings.new),
         downloadHistoryProvider.overrideWith(_History.new),
         localLibraryProvider.overrideWith(_Local.new),

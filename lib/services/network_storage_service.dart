@@ -318,6 +318,9 @@ class NetworkStorageService {
 
   /// Owners stop scans before removing the connection finishes.
   final connectionRemovals = SourceDeletionEvents();
+
+  /// Saved connection changes, without publishing credentials.
+  final connectionRevision = ValueNotifier<int>(0);
   static const timeout = Duration(seconds: 20);
   static const _probeTimeout = Duration(seconds: 3);
   static const _probeReuse = Duration(seconds: 10);
@@ -392,6 +395,7 @@ class NetworkStorageService {
     await _write(jsonEncode(next.map((c) => c.toJson()).toList()));
     _connections = List.unmodifiable(next);
     _closeReadClients(connection.id);
+    connectionRevision.value++;
   });
 
   Future<void> remove(String id) => _mutate(() async {
@@ -401,6 +405,7 @@ class NetworkStorageService {
     _routes.removeWhere((_, route) => route.id == id);
     _closeReadClients(id, force: true);
     await connectionRemovals.publish(id);
+    connectionRevision.value++;
   });
 
   Future<NetworkConnection> connection(String id) async =>

@@ -204,6 +204,7 @@ class _MusicGapless {
     final index = _nextIndex > handler._index
         ? _nextIndex
         : handler._beginRepeatPass(_nextIndex);
+    handler._serverTrackGeneration++;
     handler._index = index;
     final current = ++handler._playRequestGeneration;
     handler._serverDiedReloads = 0;

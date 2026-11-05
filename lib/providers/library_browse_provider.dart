@@ -1,3 +1,4 @@
+import 'package:mornye/providers/library_source_provider.dart';
 import 'dart:math' as math;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -88,12 +89,14 @@ class LibraryBrowseState {
   final bool hasMore;
   final bool isLoadingMore;
   final Object? loadMoreError;
+  final String source;
 
   const LibraryBrowseState(
     this.entries, {
     required this.hasMore,
     this.isLoadingMore = false,
     this.loadMoreError,
+    this.source = allMusicSources,
   });
 }
 
@@ -114,7 +117,10 @@ QueueLibraryDbQuery libraryBrowseQuery(LibraryBrowsePageRequest request) =>
 final libraryBrowsePageLoaderProvider =
     Provider<Future<LibraryBrowsePage> Function(LibraryBrowsePageRequest)>(
       (ref) => (request) async {
-        final query = libraryBrowseQuery(request);
+        final query = queryForMusicSource(
+          libraryBrowseQuery(request),
+          ref.read(effectiveLibrarySourceProvider),
+        );
         if (request.browse.artists) {
           return LibraryBrowsePage.fromRows(
             await LibraryDatabase.instance.getQueueArtistPage(query),
@@ -147,6 +153,7 @@ class LibraryBrowseNotifier extends AsyncNotifier<LibraryBrowseState> {
   bool _loadingMore = false;
   bool _includeLocal = true;
   int _generation = 0;
+  String _source = allMusicSources;
 
   LibraryBrowsePageRequest _pageRequest(
     int offset,
@@ -165,9 +172,16 @@ class LibraryBrowseNotifier extends AsyncNotifier<LibraryBrowseState> {
       settingsProvider.select((s) => s.localLibraryEnabled),
     );
     ref.watch(downloadHistoryProvider.select((s) => s.loadedIndexVersion));
-    if (_includeLocal) {
+    if (_includeLocal ||
+        ref.read(effectiveLibrarySourceProvider) != deviceMusicSource) {
       ref.watch(localLibraryProvider.select((s) => s.loadedIndexVersion));
     }
+    final selected = ref.watch(effectiveLibrarySourceProvider);
+    if (_source != selected) {
+      _rows = const [];
+      _cursor = null;
+    }
+    _source = selected;
     final loadPage = ref.watch(libraryBrowsePageLoaderProvider);
     final generation = ++_generation;
     _loadingMore = false;
@@ -180,7 +194,7 @@ class LibraryBrowseNotifier extends AsyncNotifier<LibraryBrowseState> {
     do {
       page = await loadPage(_pageRequest(rows.length, cursor));
       if (!ref.mounted || generation != _generation) {
-        return LibraryBrowseState(rows, hasMore: false);
+        return LibraryBrowseState(rows, hasMore: false, source: selected);
       }
       rows.addAll(page.entries);
       cursor = page.nextCursor;
@@ -188,7 +202,7 @@ class LibraryBrowseNotifier extends AsyncNotifier<LibraryBrowseState> {
     _rows = List.unmodifiable(rows);
     _cursor = cursor;
     _hasMore = page.entries.length == request.limit;
-    return LibraryBrowseState(_rows, hasMore: _hasMore);
+    return LibraryBrowseState(_rows, hasMore: _hasMore, source: selected);
   }
 
   Future<void> loadMore() async {
@@ -199,7 +213,12 @@ class LibraryBrowseNotifier extends AsyncNotifier<LibraryBrowseState> {
     final generation = _generation;
     _loadingMore = true;
     state = AsyncData(
-      LibraryBrowseState(_rows, hasMore: _hasMore, isLoadingMore: true),
+      LibraryBrowseState(
+        _rows,
+        hasMore: _hasMore,
+        isLoadingMore: true,
+        source: _source,
+      ),
     );
     try {
       final page = await ref.read(libraryBrowsePageLoaderProvider)(
@@ -209,11 +228,18 @@ class LibraryBrowseNotifier extends AsyncNotifier<LibraryBrowseState> {
       _rows = List.unmodifiable([..._rows, ...page.entries]);
       _cursor = page.nextCursor;
       _hasMore = page.entries.length == request.limit;
-      state = AsyncData(LibraryBrowseState(_rows, hasMore: _hasMore));
+      state = AsyncData(
+        LibraryBrowseState(_rows, hasMore: _hasMore, source: _source),
+      );
     } catch (error) {
       if (!ref.mounted || generation != _generation) return;
       state = AsyncData(
-        LibraryBrowseState(_rows, hasMore: _hasMore, loadMoreError: error),
+        LibraryBrowseState(
+          _rows,
+          hasMore: _hasMore,
+          loadMoreError: error,
+          source: _source,
+        ),
       );
     } finally {
       if (ref.mounted && generation == _generation) _loadingMore = false;

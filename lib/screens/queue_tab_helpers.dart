@@ -96,6 +96,7 @@ class _QueueLibraryPageRequest
   final String? filterMetadata;
   final String sortMode;
   final bool localLibraryEnabled;
+  final String librarySource;
   final QueueLibraryDbCursor? cursor;
 
   const _QueueLibraryPageRequest({
@@ -109,24 +110,29 @@ class _QueueLibraryPageRequest
     required this.filterMetadata,
     required this.sortMode,
     required this.localLibraryEnabled,
+    this.librarySource = allMusicSources,
     this.cursor,
   });
 
-  QueueLibraryDbQuery toDbQuery() => QueueLibraryDbQuery(
-    limit: limit,
-    offset: offset,
-    filterMode: filterMode,
-    searchQuery: searchQuery,
-    source: filterSource,
-    quality: filterQuality,
-    format: filterFormat,
-    metadata: filterMetadata,
-    sortMode: sortMode,
-    includeLocal: localLibraryEnabled,
-    cursor: cursor,
+  QueueLibraryDbQuery toDbQuery() => queryForMusicSource(
+    QueueLibraryDbQuery(
+      limit: limit,
+      offset: offset,
+      filterMode: filterMode,
+      searchQuery: searchQuery,
+      source: filterSource,
+      quality: filterQuality,
+      format: filterFormat,
+      metadata: filterMetadata,
+      sortMode: sortMode,
+      includeLocal: localLibraryEnabled,
+      cursor: cursor,
+    ),
+    librarySource,
   );
 
   bool get allowsInMemoryHistoryFallback =>
+      librarySource == allMusicSources &&
       offset == 0 &&
       searchQuery.trim().isEmpty &&
       filterSource != 'local' &&
@@ -148,7 +154,8 @@ class _QueueLibraryPageRequest
       filterFormat == other.filterFormat &&
       filterMetadata == other.filterMetadata &&
       sortMode == other.sortMode &&
-      localLibraryEnabled == other.localLibraryEnabled;
+      localLibraryEnabled == other.localLibraryEnabled &&
+      librarySource == other.librarySource;
 
   @override
   bool operator ==(Object other) =>
@@ -164,6 +171,7 @@ class _QueueLibraryPageRequest
           filterMetadata == other.filterMetadata &&
           sortMode == other.sortMode &&
           localLibraryEnabled == other.localLibraryEnabled &&
+          librarySource == other.librarySource &&
           cursor == other.cursor;
 
   @override
@@ -178,6 +186,7 @@ class _QueueLibraryPageRequest
     filterMetadata,
     sortMode,
     localLibraryEnabled,
+    librarySource,
     cursor,
   );
 }
@@ -189,6 +198,7 @@ class _QueueLibraryCountsRequest {
   final String? filterFormat;
   final String? filterMetadata;
   final bool localLibraryEnabled;
+  final String librarySource;
 
   const _QueueLibraryCountsRequest({
     required this.searchQuery,
@@ -197,18 +207,23 @@ class _QueueLibraryCountsRequest {
     required this.filterFormat,
     required this.filterMetadata,
     required this.localLibraryEnabled,
+    this.librarySource = allMusicSources,
   });
 
-  QueueLibraryDbQuery toDbQuery() => QueueLibraryDbQuery(
-    searchQuery: searchQuery,
-    source: filterSource,
-    quality: filterQuality,
-    format: filterFormat,
-    metadata: filterMetadata,
-    includeLocal: localLibraryEnabled,
+  QueueLibraryDbQuery toDbQuery() => queryForMusicSource(
+    QueueLibraryDbQuery(
+      searchQuery: searchQuery,
+      source: filterSource,
+      quality: filterQuality,
+      format: filterFormat,
+      metadata: filterMetadata,
+      includeLocal: localLibraryEnabled,
+    ),
+    librarySource,
   );
 
   bool get allowsInMemoryHistoryFallback =>
+      librarySource == allMusicSources &&
       searchQuery.trim().isEmpty &&
       filterSource != 'local' &&
       filterQuality == null &&
@@ -224,7 +239,8 @@ class _QueueLibraryCountsRequest {
           filterQuality == other.filterQuality &&
           filterFormat == other.filterFormat &&
           filterMetadata == other.filterMetadata &&
-          localLibraryEnabled == other.localLibraryEnabled;
+          localLibraryEnabled == other.localLibraryEnabled &&
+          librarySource == other.librarySource;
 
   @override
   int get hashCode => Object.hash(
@@ -234,6 +250,7 @@ class _QueueLibraryCountsRequest {
     filterFormat,
     filterMetadata,
     localLibraryEnabled,
+    librarySource,
   );
 }
 
@@ -412,7 +429,8 @@ final _queueLibraryPageProvider = FutureProvider.autoDispose
       ref.watch(
         downloadHistoryProvider.select((state) => state.loadedIndexVersion),
       );
-      if (request.localLibraryEnabled) {
+      if (request.localLibraryEnabled ||
+          request.librarySource != deviceMusicSource) {
         ref.watch(
           localLibraryProvider.select((state) => state.loadedIndexVersion),
         );
@@ -505,7 +523,8 @@ final _queueLibraryCountsProvider = FutureProvider.autoDispose
       ref.watch(
         downloadHistoryProvider.select((state) => state.loadedIndexVersion),
       );
-      if (request.localLibraryEnabled) {
+      if (request.localLibraryEnabled ||
+          request.librarySource != deviceMusicSource) {
         ref.watch(
           localLibraryProvider.select((state) => state.loadedIndexVersion),
         );

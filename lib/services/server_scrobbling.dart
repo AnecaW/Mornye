@@ -102,13 +102,24 @@ class ServerScrobbleOutbox {
 
   Future<int> pendingCount() async =>
       _rows((await SharedPreferences.getInstance()).getString(_key)).length;
-  Future<void> enqueue(String source, DateTime started) {
+  Future<String?> accountFor(String source) async {
+    final target = await NavidromeLibrary.forSource(source, storage: _storage);
+    return target == null ? null : _account(target.library);
+  }
+
+  Future<void> enqueue(
+    String source,
+    DateTime started, {
+    String? expectedAccount,
+  }) {
     final operation = _tail.then((_) async {
       final target = await NavidromeLibrary.forSource(
         source,
         storage: _storage,
       );
-      if (target == null) {
+      if (target == null ||
+          (expectedAccount != null &&
+              _account(target.library) != expectedAccount)) {
         return;
       }
       final prefs = await SharedPreferences.getInstance();

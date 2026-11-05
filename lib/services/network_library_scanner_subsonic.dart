@@ -75,6 +75,12 @@ extension on NetworkLibraryScanner {
       await writer.close();
       output = null;
       await checkpoint();
+      final current = await _storage.connection(connection.id);
+      if (jsonEncode(current.toJson()) != jsonEncode(connection.toJson())) {
+        throw StateError(
+          'The server account changed during synchronization. Retry the scan.',
+        );
+      }
       complete = true;
       return LibraryScanNDJSONFile(
         file: file,

@@ -157,9 +157,24 @@ final recentAccessViewProvider = Provider<_RecentAccessView>((ref) {
   final recentAccessLoaded = ref.watch(
     recentAccessProvider.select((s) => s.isLoaded),
   );
+  final source = ref.watch(effectiveLibrarySourceProvider);
+  final connection = musicSourceConnectionId(source);
+  final serverItems = ref
+      .watch(selectedServerRecentItemsProvider)
+      .where(
+        (item) =>
+            !hiddenDownloadIds.contains(item.id) &&
+            isRecentDownloadAfterClear(item.accessedAt, downloadsClearedAt),
+      );
+  final visibleLocal = recentAccessItems.where((item) {
+    final server = item.providerId?.startsWith('subsonic:') == true;
+    if (source == allMusicSources) return true;
+    if (source == deviceMusicSource) return !server;
+    return item.providerId == 'subsonic:$connection';
+  });
   return _buildRecentAccessViewData(
-    recentAccessItems,
-    recentAccessLoaded ? historyItems : const [],
+    [...visibleLocal, ...serverItems],
+    recentAccessLoaded && connection == null ? historyItems : const [],
     hiddenDownloadIds,
     downloadsClearedAt,
   );

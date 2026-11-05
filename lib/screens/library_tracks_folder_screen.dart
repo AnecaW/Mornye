@@ -337,13 +337,13 @@ class _LibraryTracksFolderScreenState
       case LibraryTracksFolderMode.wishlist:
         playlist = null;
         entries = ref.watch(
-          libraryCollectionsProvider.select((state) => state.wishlist),
+          scopedLibraryCollectionsProvider.select((state) => state.wishlist),
         );
         break;
       case LibraryTracksFolderMode.loved:
         playlist = null;
         entries = ref.watch(
-          libraryCollectionsProvider.select((state) => state.loved),
+          scopedLibraryCollectionsProvider.select((state) => state.loved),
         );
         break;
       case LibraryTracksFolderMode.playlist:
@@ -351,7 +351,7 @@ class _LibraryTracksFolderScreenState
         playlist = playlistId == null
             ? null
             : ref.watch(
-                libraryCollectionsProvider.select(
+                scopedLibraryCollectionsProvider.select(
                   (state) => state.playlistById(playlistId),
                 ),
               );

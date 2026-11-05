@@ -1,4 +1,6 @@
 import 'package:sqflite/sqflite.dart';
+import 'package:mornye/models/library_database_models.dart';
+import 'package:mornye/services/library_source_scope.dart';
 import 'package:mornye/services/library_shadow_sql.dart';
 
 enum LibrarySearchKind { songs, albums, artists, playlists }
@@ -127,6 +129,7 @@ class LibrarySearchStore {
     required String query,
     required LibrarySearchKind kind,
     required bool includeLocal,
+    QueueLibraryDbQuery? scope,
     int limit = 40,
     int offset = 0,
   }) async {
@@ -144,6 +147,13 @@ class LibrarySearchStore {
       final where = <String>[
         if (local) libraryNotShadowedSql('l', snapshot: shadowSnapshot),
       ];
+      appendLibrarySourceScope(
+        where,
+        args,
+        scope,
+        '$alias.file_path',
+        indexed: local,
+      );
       final column = switch (kind) {
         LibrarySearchKind.songs => '$alias.search_text',
         LibrarySearchKind.albums => "$alias.$album || ' ' || $alias.$artist",
@@ -168,7 +178,7 @@ class LibrarySearchStore {
         SELECT '$source' AS source, $alias.id, $alias.track_name AS title,
           $alias.artist_name AS artist, $alias.album_name AS album,
           COALESCE(NULLIF($alias.album_artist, ''), $alias.artist_name) AS album_artist,
-          $alias.album_key, $alias.$title AS title_key,
+          ${local ? sourceAlbumKeySql(alias) : '$alias.album_key'} AS album_key, $alias.$title AS title_key,
           $alias.$album AS album_sort, $alias.$artist AS artist_key,
           ${local ? '$alias.cover_path' : '$alias.cover_url'} AS cover,
           $alias.file_path AS sample_path

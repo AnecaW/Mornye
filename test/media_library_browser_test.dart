@@ -98,14 +98,17 @@ class _Library implements LibraryDatabase {
 
   @override
   Future<List<Map<String, dynamic>>> getQueueLocalAlbumTracksByKey(
-    String albumKey,
-  ) async => albumKey == 'scanned-album' ? localAlbum : const [];
+    String albumKey, {
+    String? sourcePath,
+    QueueLibraryDbQuery? scope,
+  }) async => albumKey == 'scanned-album' ? localAlbum : const [];
 
   @override
   Future<List<LibrarySearchHit>> searchLibrary({
     required String query,
     required LibrarySearchKind kind,
     required bool includeLocal,
+    QueueLibraryDbQuery? scope,
     int limit = 40,
     int offset = 0,
   }) async => (hits[kind] ?? const []).take(limit).toList();
