@@ -1030,9 +1030,7 @@ class _LibraryTracksFolderScreenState
       await ref.read(playbackProvider.notifier).playTrackList(tracks);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(context.l10n.snackbarCannotOpenFile('$e'))),
-      );
+      showCannotOpenFileSnackBar(context, e);
     }
   }
 
@@ -1047,9 +1045,7 @@ class _LibraryTracksFolderScreenState
           .playTrackList(tracks, startIndex: Random().nextInt(tracks.length));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(context.l10n.snackbarCannotOpenFile('$e'))),
-      );
+      showCannotOpenFileSnackBar(context, e);
     }
   }
 

@@ -20,10 +20,7 @@ void main() {
             native.playing.isEmpty,
       );
       expect(handler.playbackState.value.playing, isFalse);
-      expect(
-        handler.playbackState.value.errorMessage,
-        contains('Audio output'),
-      );
+      expect(handler.playbackState.value.errorMessage, 'playback_player');
       expect(handler.mediaItem.value?.id, 'one');
 
       // Even a late completion from a failed output must not advance the queue.

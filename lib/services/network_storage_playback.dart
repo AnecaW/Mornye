@@ -27,7 +27,8 @@ extension NetworkPlaybackPreparation on NetworkStorageService {
   Future<String> preparePlayback(String source, PlaybackLoad load) async {
     load.check();
     final (:host, :path) = NetworkStorageService._sourceParts(source);
-    if (virtualFor(host) != null) return load.wait(resolve(source));
+    if (virtualFor(host) != null)
+      return load.wait(resolve(source, forPlayback: true));
     final c = await load.wait(connection(host));
     final cache = audioCache;
     if (cache != null && path.startsWith('subsonic/song/')) {
@@ -43,14 +44,15 @@ extension NetworkPlaybackPreparation on NetworkStorageService {
         return local.path;
       }
     }
-    if (c.protocol == NetworkProtocol.smb) return load.wait(resolve(source));
+    if (c.protocol == NetworkProtocol.smb)
+      return load.wait(resolve(source, forPlayback: true));
     final key = _audioCacheKey(c, path);
     final checked = _playbackPrefixes[key];
     if (checked != null && checked.expires.isAfter(DateTime.now())) {
       _playbackLog.d(
         'Playback request=${load.requestId} cache=prefix trackHash=${source.hashCode}',
       );
-      return load.wait(resolve(source));
+      return load.wait(resolve(source, forPlayback: true));
     }
     final clock = Stopwatch()..start();
     final client = _client();
@@ -149,7 +151,7 @@ extension NetworkPlaybackPreparation on NetworkStorageService {
         'Playback request=${load.requestId} stream status=$status bytes=${prefix.length} elapsedMs=${clock.elapsedMilliseconds} trackHash=${source.hashCode}',
       );
       setReachable(host, reachable: true);
-      return await load.wait(resolve(source));
+      return await load.wait(resolve(source, forPlayback: true));
     } on PlaybackSuperseded {
       rethrow;
     } catch (error) {

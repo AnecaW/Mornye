@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mornye/services/navidrome_transfers.dart';
 import 'package:mornye/services/network_storage_service.dart';
@@ -57,8 +58,19 @@ void main() {
       if (DateTime.now().isAfter(deadline)) fail('Transfer did not finish');
       await Future<void>.delayed(const Duration(milliseconds: 10));
     }
-    // Let the journal and optional scan finish before removing the directory.
-    await Future<void>.delayed(const Duration(milliseconds: 50));
+    // Restart only after the terminal state is durably published. A fixed
+    // sleep races fsync/rename on a loaded CI worker.
+    final journal = File('${directory.path}/navidrome_transfers.json');
+    final expected = jsonEncode(
+      manager.jobs.map((job) => job.toJson()).toList(),
+    );
+    while (!await journal.exists() ||
+        await journal.readAsString() != expected) {
+      if (DateTime.now().isAfter(deadline))
+        fail('Terminal transfer state was not persisted');
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    await Future<void>.delayed(Duration.zero);
   }
 
   test(

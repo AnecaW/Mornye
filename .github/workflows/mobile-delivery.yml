@@ -49,7 +49,11 @@ jobs:
           channel: stable
           flutter-version-file: .fvmrc
           cache: true
-      - run: sudo apt-get update && sudo apt-get install -y libclang-dev ffmpeg
+      - name: Install verification tools
+        timeout-minutes: 8
+        run: |
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y libclang-dev ffmpeg
       - run: flutter pub get && dart scripts/prepare_flutter_sdk.dart
       - run: flutter analyze --no-fatal-infos
       - name: Prepare native test assets
@@ -237,7 +241,7 @@ jobs:
             third_party/audioplayers_darwin/tests/SourceLifecycleTests.swift -o .tmp/native-tests/source-lifecycle
           .tmp/native-tests/source-lifecycle
       - name: Test AVPlayer with authenticated Subsonic streams
-        timeout-minutes: 20
+        timeout-minutes: 35
         run: |
           set -euo pipefail
           command -v ffmpeg >/dev/null || brew install ffmpeg

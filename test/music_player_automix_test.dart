@@ -30,6 +30,23 @@ void main() {
   setUpMusicPlayerHarness();
 
   test(
+    'track changes issue only the stop belonging to a single source release',
+    () async {
+      await handler.setQueueAndPlay(_tracks);
+      native.positions['music-player'] = 5000;
+      final start = native.calls.length;
+      await handler.skipToNext();
+      final changes = native.calls
+          .skip(start)
+          .where((c) => c.$1 == 'music-player')
+          .toList();
+      expect(changes.where((c) => c.$2 == 'stop'), hasLength(1));
+      expect(changes.where((c) => c.$2 == 'release'), hasLength(1));
+      expect(native.resumedSources.last, '/two.flac');
+    },
+  );
+
+  test(
     'USB preference is opt-in and persists with existing DSP preferences',
     () {
       const defaults = AppSettings();

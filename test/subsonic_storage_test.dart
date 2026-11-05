@@ -459,7 +459,7 @@ void main() {
   });
 
   test(
-    'stream caching reuses one fill and plays a completed file offline',
+    'explicit caching reuses one fill and plays a completed file offline',
     () async {
       SharedPreferences.setMockInitialValues({'audio_cache_wifi': false});
       await storage.dispose();
@@ -475,17 +475,17 @@ void main() {
         'fixture',
         SubsonicSong(server.song).path,
       );
+      server.blockMethod = 'stream';
+      final filling = storage.cacheAudio(source, manual: true);
+      await server.held.future;
       final url = await storage.resolve(source);
+      server.release.complete();
       final http = HttpClient();
       addTearDown(() => http.close(force: true));
       final response = await (await http.getUrl(Uri.parse(url))).close();
       expect(await response.expand((c) => c).toList(), [0, 1, 2, 3]);
-      String local = url;
-      final deadline = DateTime.now().add(const Duration(seconds: 5));
-      while (local.startsWith('http') && DateTime.now().isBefore(deadline)) {
-        await Future<void>.delayed(const Duration(milliseconds: 10));
-        local = await storage.resolve(source);
-      }
+      await filling;
+      final local = await storage.resolve(source);
       expect(File(local).isAbsolute, isTrue);
       expect(
         server.requests.where((r) => r.path.endsWith('/stream.view')),
@@ -795,24 +795,45 @@ void main() {
       if (uri.pathSegments.last == '$method.view') uri.queryParameters,
   ];
 
-  test('album pagination respects server-capped short pages and ends on empty', () async {
-    server.albumPageSize = 2;
-    server.library = [for (var i = 0; i < 5; i++) {...server.song, 'id': 'song$i', 'albumId': 'album$i'}];
-    final client = storage.openSubsonic(server.connection());
-    addTearDown(client.close);
-    final songs = await client.catalog(checkpoint: () async {}).toList();
-    expect(songs, hasLength(5));
-    expect(requested('getAlbumList2').map((p) => p['offset']), ['0','2','4','5']);
-  });
+  test(
+    'album pagination respects server-capped short pages and ends on empty',
+    () async {
+      server.albumPageSize = 2;
+      server.library = [
+        for (var i = 0; i < 5; i++)
+          {...server.song, 'id': 'song$i', 'albumId': 'album$i'},
+      ];
+      final client = storage.openSubsonic(server.connection());
+      addTearDown(client.close);
+      final songs = await client.catalog(checkpoint: () async {}).toList();
+      expect(songs, hasLength(5));
+      expect(requested('getAlbumList2').map((p) => p['offset']), [
+        '0',
+        '2',
+        '4',
+        '5',
+      ]);
+    },
+  );
 
-  test('repeating short album pages fail instead of silently truncating the library', () async {
-    server.albumPageSize = 2; server.repeatPage = true;
-    server.library = [for (var i = 0; i < 5; i++) {...server.song, 'id': 'song$i', 'albumId': 'album$i'}];
-    final client = storage.openSubsonic(server.connection());
-    addTearDown(client.close);
-    await expectLater(client.catalog(checkpoint: () async {}).toList(), throwsA(isA<HttpException>()));
-    expect(requested('getAlbumList2'), hasLength(2));
-  });
+  test(
+    'repeating short album pages fail instead of silently truncating the library',
+    () async {
+      server.albumPageSize = 2;
+      server.repeatPage = true;
+      server.library = [
+        for (var i = 0; i < 5; i++)
+          {...server.song, 'id': 'song$i', 'albumId': 'album$i'},
+      ];
+      final client = storage.openSubsonic(server.connection());
+      addTearDown(client.close);
+      await expectLater(
+        client.catalog(checkpoint: () async {}).toList(),
+        throwsA(isA<HttpException>()),
+      );
+      expect(requested('getAlbumList2'), hasLength(2));
+    },
+  );
 
   test(
     'a Mornye desktop syncs through search3 pages with the same rows',

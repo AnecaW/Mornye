@@ -92,11 +92,15 @@ class AudioNative {
   final preparedContents = <String, String>{};
   final sourceGates = <String, Completer<void>>{};
   final releases = <String, int>{};
+  final releaseModes = <String, String>{};
+  final stopRewinds = <String>[];
   final sourceFailures = <String>{};
   final resumeFailures = <String>{};
   bool failResumeMethod = false;
   final resumedSources = <String>[];
   Completer<void>? resumeGate;
+  Completer<void>? pauseGate;
+  Completer<void>? positionGate;
   final resumeGates = <String, Completer<void>>{};
   final stalled = <String>{};
   final clocks = <String, Stopwatch>{};
@@ -178,6 +182,8 @@ class AudioNative {
             } else {
               nextPlayers[id] = next;
             }
+          case 'setReleaseMode':
+            releaseModes[id] = (args['releaseMode']! as String).split('.').last;
           case 'setPlaybackRate':
             positions[id] = currentPosition(id);
             clocks[id]?.reset();
@@ -198,6 +204,11 @@ class AudioNative {
               clocks[id] = newClock()..start();
             }
           case 'pause' || 'stop':
+            if (call.method == 'stop' &&
+                releaseModes[id] == 'stop' &&
+                currentPosition(id) > 0)
+              stopRewinds.add(id);
+            if (call.method == 'pause') await pauseGate?.future;
             playing.remove(id);
             clocks[id]?.stop();
           case 'release':
@@ -213,7 +224,11 @@ class AudioNative {
             return 60000;
           case 'getCurrentPosition':
             if (missingPositions.contains(id)) return null;
-            return currentPosition(id);
+            final position = currentPosition(id);
+            final gate = positionGate;
+            positionGate = null;
+            await gate?.future;
+            return position;
         }
         return null;
       },

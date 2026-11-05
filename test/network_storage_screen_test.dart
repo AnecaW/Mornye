@@ -414,7 +414,7 @@ class _CoverFolder extends NetworkStorageService {
   ];
 
   @override
-  Future<String> resolve(String source) async {
+  Future<String> resolve(String source, {bool forPlayback = false}) async {
     resolved.add(source);
     return 'http://127.0.0.1:1/${resolved.length}';
   }

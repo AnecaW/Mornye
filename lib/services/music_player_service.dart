@@ -1736,7 +1736,7 @@ class MusicPlayerHandler extends BaseAudioHandler
         await _cancelTransitions();
         if (!_isCurrentPlayRequest(generation, media)) return;
         // Retire the audible source before publishing another song's title.
-        await _player.stop();
+        await _player.pause();
         if (!_isCurrentPlayRequest(generation, media)) return;
         await _loadIndex(
           generation,
@@ -1808,8 +1808,9 @@ class MusicPlayerHandler extends BaseAudioHandler
             if (cache.wifiOnly) {
               final networks = await Connectivity().checkConnectivity();
               if (!networks.contains(ConnectivityResult.wifi) &&
-                  !networks.contains(ConnectivityResult.ethernet))
+                  !networks.contains(ConnectivityResult.ethernet)) {
                 return;
+              }
             }
             for (final next in _media.skip(_index + 1).take(cache.upcoming)) {
               if (!_isCurrentPlayRequest(generation, media)) return;
@@ -2029,7 +2030,7 @@ class MusicPlayerHandler extends BaseAudioHandler
         }
         return;
       }
-      await _player.stop();
+      await _player.pause();
       _sourceReady = false;
       if (!_isCurrentPlayRequest(generation, media)) return;
       await _player.setVolume(normalizationVolume);

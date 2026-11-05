@@ -169,14 +169,18 @@ void main() {
       await deck.configureOutput();
       await deck.setVolume(0);
       server.blockMethod = 'stream';
-      final initial = deck.setNetworkSource(await storage.resolve(source));
+      final initial = deck.setNetworkSource(
+        await storage.resolve(source, forPlayback: true),
+      );
       await server.held.future.timeout(const Duration(seconds: 10));
       await deck.cancelPreparation().timeout(const Duration(seconds: 2));
       await initial.timeout(const Duration(seconds: 2));
       server.blockMethod = null;
       server.release.complete();
       for (var i = 0; i < 20; i++) {
-        final preparing = deck.setNetworkSource(await storage.resolve(source));
+        final preparing = deck.setNetworkSource(
+          await storage.resolve(source, forPlayback: true),
+        );
         await Future<void>.delayed(const Duration(milliseconds: 20));
         await deck.cancelPreparation();
         await preparing.timeout(const Duration(seconds: 2));

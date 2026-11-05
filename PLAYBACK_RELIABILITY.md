@@ -4,7 +4,7 @@ Baseline investigated: Mornye 5.4.1 fork, audioplayers 6.8.1 with the local audi
 
 ## Concrete defects found
 
-1. NetworkStorageService.resolve produced an extensionless loopback URL. Bluefire's official troubleshooting explicitly documents decoder issues with extensionless Darwin URLs. The proxy now preserves a safe audio suffix and continues to send the actual media MIME type.
+1. NetworkStorageService.resolve produced an extensionless loopback URL. Bluefire's official troubleshooting explicitly documents decoder issues with extensionless Darwin URLs. Playback URLs now preserve a safe audio suffix and continue to send the actual media MIME type. Native metadata and upload-hash readers retain their strict extensionless 48-hex loopback contract; the playback hint is explicit.
 2. AudioplayersPlaybackDeck registered its cancellation completer after awaiting release. A skip during release could miss cancellation and then start an obsolete prepare. The cancellation boundary now covers release and source preparation.
 3. The handler serialized source changes but an obsolete network resolve could hold that queue until its network timeout. PlaybackLoad races the obsolete request against cancellation. A dedicated small HTTP probe closes only its own client, leaving the audible stream intact.
 4. Preparation launched an independent full audio-cache fill, and prefetch filled full upcoming files. These compete with AVPlayer on a slow NAS. Preparation now performs one bounded ranged prefix read, keeps up to 32 prefixes (at most 128 KiB), and reuses them for AVPlayer's small initial range probes for 30 seconds. The existing upcoming-track setting controls prefetch count. Explicit offline downloads/cache fills remain available separately.
@@ -12,6 +12,8 @@ Baseline investigated: Mornye 5.4.1 fork, audioplayers 6.8.1 with the local audi
 6. Completed cache lookup only checked for nonzero length. Published temporary cache files now carry an integrity proof. Lookup verifies size and SHA-256 after restart/change and memoizes verification while file size/mtime remain unchanged. Legacy/unverified or corrupt expendable entries are discarded; permanent downloads are outside this directory.
 7. The handler passed exception.toString into the playback state, and the global playback feedback displayed it. State now carries stable categories, feedback localizes them, and native diagnostics retain domain/code rather than credential-bearing NSError descriptions.
 8. ReplayGain lookup used a resolved HTTP proxy URL. For saved network sources it now reads server metadata through the existing network metadata service, with a bounded timeout, instead of inspecting audio bytes through the proxy.
+
+9. Ordinary stop in the Darwin fork seeks a retained AVPlayerItem back to zero. The source-change path called stop repeatedly, potentially waiting for a new range from an outgoing NAS stream. Track changes now pause the old stream and release it once at replacement. A deck generation guards the entire retirement/preparation interval, including cancellation before the preparation completer is installed. Because AudioPlayer.release itself calls stop, Darwin uses the supported release mode so that stop drops the item instead of seeking it. Completion in release mode also discards the ended item without seeking it. Pause/resume, Android direct output and explicit user Stop keep their intended behavior.
 
 ## Recovery boundaries
 

@@ -637,7 +637,7 @@ class NetworkStorageService {
     }
   }
 
-  Future<String> resolve(String source) async {
+  Future<String> resolve(String source, {bool forPlayback = false}) async {
     final (:host, :path) = _sourceParts(source);
     if (virtualFor(host) case final virtual?) {
       return virtual.resolve(host, path);
@@ -672,8 +672,10 @@ class NetworkStorageService {
     }
     // AVPlayer uses the path suffix as well as MIME to select its decoder.
     final suffix = path.split('.').last.toLowerCase();
-    final token =
-        '${newId()}.${RegExp(r'^[a-z0-9]{1,8}$').hasMatch(suffix) ? suffix : 'audio'}';
+    final opaque = newId();
+    final token = forPlayback
+        ? '$opaque.${RegExp(r'^[a-z0-9]{1,8}$').hasMatch(suffix) ? suffix : 'audio'}'
+        : opaque;
     while (_routes.length >= 256) {
       _routes.remove(_routes.keys.first);
     }

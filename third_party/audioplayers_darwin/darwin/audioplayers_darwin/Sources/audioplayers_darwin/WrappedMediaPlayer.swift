@@ -374,6 +374,11 @@ enum ReleaseMode: String {
     reference.controlAudioSession()
     eventHandler.onComplete()
 
+    if self.releaseMode == ReleaseMode.release {
+      // Do not request the beginning of an ended NAS stream to discard it.
+      await self.release()
+      return
+    }
     await seek(time: toCMTime(millis: 0))
     guard player.currentItem === playerItem else { return }
     if self.releaseMode == ReleaseMode.loop {

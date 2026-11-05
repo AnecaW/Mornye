@@ -132,7 +132,10 @@ class AudioplayersPlaybackDeck implements PlaybackDeck, PlaybackBufferingDeck {
     required String playerId,
     bool? nativeAvailable,
     bool? equalizerAvailable,
+    bool? darwinSourceReplacement,
   }) : _ordinary = AudioPlayer(playerId: playerId),
+       _darwinSourceReplacement =
+           darwinSourceReplacement ?? (Platform.isIOS || Platform.isMacOS),
        // The Darwin fork's tap is shared source, so macOS has it as well.
        // isDesktopPlatform keeps host-run tests on the mobile default.
        _equalizerAvailable =
@@ -252,6 +255,7 @@ class AudioplayersPlaybackDeck implements PlaybackDeck, PlaybackBufferingDeck {
   bool get isBuffering => _buffering;
   @override
   Stream<bool> get onBufferingChanged => _bufferingEvents.stream;
+  final bool _darwinSourceReplacement;
   final bool _nativeAvailable;
   final _states = StreamController<PlaybackDeckState>.broadcast();
   final _durations = StreamController<Duration>.broadcast();
@@ -268,6 +272,7 @@ class AudioplayersPlaybackDeck implements PlaybackDeck, PlaybackBufferingDeck {
   bool _direct = false;
   bool _preparing = false;
   Completer<void>? _ordinaryPreparation;
+  int _sourceGeneration = 0;
   bool _disposed = false;
   int _token = 0;
   Duration? _duration;
@@ -285,6 +290,7 @@ class AudioplayersPlaybackDeck implements PlaybackDeck, PlaybackBufferingDeck {
   bool get needsSourceReload => _direct && _routeLost;
   @override
   Future<void> cancelPreparation() async {
+    _sourceGeneration++;
     if (_preparing) await stop();
     final preparation = _ordinaryPreparation;
     if (preparation == null) return;
@@ -322,7 +328,11 @@ class AudioplayersPlaybackDeck implements PlaybackDeck, PlaybackBufferingDeck {
 
   @override
   Future<void> configureOutput() async {
-    await _ordinary.setReleaseMode(ReleaseMode.stop);
+    // AudioPlayer.release() itself calls stop(). On Darwin, stop mode seeks
+    // the outgoing remote item; release mode drops it without fetching bytes.
+    await _ordinary.setReleaseMode(
+      _darwinSourceReplacement ? ReleaseMode.release : ReleaseMode.stop,
+    );
     // audioplayers has no audio context outside Android and iOS.
     if (Platform.isAndroid || Platform.isIOS) {
       await _ordinary.setAudioContext(_musicAudioContext);
@@ -352,7 +362,9 @@ class AudioplayersPlaybackDeck implements PlaybackDeck, PlaybackBufferingDeck {
 
   @override
   Future<void> setNetworkSource(String url, {bool arriving = false}) async {
-    await stop();
+    final generation = ++_sourceGeneration;
+    await _retireForSourceChange();
+    if (_disposed || generation != _sourceGeneration) return;
     _source = null;
     _routeLost = false;
     _nativeStarted = false;
@@ -362,6 +374,7 @@ class AudioplayersPlaybackDeck implements PlaybackDeck, PlaybackBufferingDeck {
             ? darwinArrivingUrl(url)
             : url,
       ),
+      generation,
     );
   }
 
@@ -375,7 +388,9 @@ class AudioplayersPlaybackDeck implements PlaybackDeck, PlaybackBufferingDeck {
     bool allowFixedVolume = false,
     bool dapExclusive = false,
   }) async {
-    await stop();
+    final generation = ++_sourceGeneration;
+    await _retireForSourceChange();
+    if (_disposed || generation != _sourceGeneration) return;
     final source = DeviceFileSource(path);
     _source = source;
     _routeLost = false;
@@ -458,17 +473,29 @@ class AudioplayersPlaybackDeck implements PlaybackDeck, PlaybackBufferingDeck {
       usbAudioStatus.value = const UsbAudioStatus(reason: 'dsd_unsupported');
       throw UsbDsdUnavailable();
     }
-    await _setOrdinarySource(source);
+    await _setOrdinarySource(source, generation);
   }
 
-  Future<void> _setOrdinarySource(Source source) async {
+  /// AudioPlayer.stop seeks a retained item back to zero. Do not ask a slow
+  /// outgoing NAS stream for new bytes just to replace that stream.
+  Future<void> _retireForSourceChange() async {
+    if (_direct || _preparing) {
+      await stop();
+    } else {
+      await _ordinary.pause();
+    }
+  }
+
+  Future<void> _setOrdinarySource(Source source, int generation) async {
     // stop mode retains the native source. Android can reuse the same
     // /proc/self/fd number for a different SAF file, so URL equality must not
     // reuse the previous MediaPlayer or its pending preparation callbacks.
     final abandoned = _ordinaryPreparation = Completer<void>();
     try {
       await _ordinary.release();
-      if (abandoned.isCompleted || _disposed) return;
+      if (abandoned.isCompleted || _disposed || generation != _sourceGeneration) {
+        return;
+      }
       _ordinaryError = null;
       // A network source waits for its server, up to the plugin's prepare
       // timeout; a newer song abandons it instead of queueing behind it.
@@ -555,15 +582,20 @@ class AudioplayersPlaybackDeck implements PlaybackDeck, PlaybackBufferingDeck {
         _pauseLostRoute(const UsbAudioStatus(reason: 'dsd_unsupported'));
         throw UsbDsdUnavailable();
       }
+      final generation = _sourceGeneration;
       final source = _source;
       final position = await getCurrentPosition() ?? Duration.zero;
+      if (_disposed || generation != _sourceGeneration) return;
       await stop();
+      if (_disposed || generation != _sourceGeneration) return;
       usbAudioStatus.value = const UsbAudioStatus(reason: 'unsupported');
       if (source == null || _disposed) return;
       _gain = 1;
       await _ordinary.setVolume(playbackOutputVolume.value);
-      await _setOrdinarySource(source);
+      await _setOrdinarySource(source, generation);
+      if (_disposed || generation != _sourceGeneration) return;
       if (position > Duration.zero) await _ordinary.seek(position);
+      if (_disposed || generation != _sourceGeneration) return;
       return _ordinary.resume();
     }
     if (_disposed || token != _token || !_direct) return;
@@ -632,14 +664,26 @@ class AudioplayersPlaybackDeck implements PlaybackDeck, PlaybackBufferingDeck {
 
   @override
   Future<Duration?> getCurrentPosition() async {
-    if (!_direct) return _ordinary.getCurrentPosition();
-    final milliseconds = await _channel.invokeMethod<int>('position');
-    return milliseconds == null ? null : Duration(milliseconds: milliseconds);
+    final generation = _sourceGeneration;
+    final token = _token;
+    final position = !_direct
+        ? await _ordinary.getCurrentPosition()
+        : await _channel
+              .invokeMethod<int>('position')
+              .then(
+                (value) => value == null ? null : Duration(milliseconds: value),
+              );
+    return !_disposed && generation == _sourceGeneration && token == _token
+        ? position
+        : null;
   }
 
   @override
-  Future<Duration?> getDuration() =>
-      _direct ? Future.value(_duration) : _ordinary.getDuration();
+  Future<Duration?> getDuration() async {
+    final generation = _sourceGeneration;
+    final duration = _direct ? _duration : await _ordinary.getDuration();
+    return !_disposed && generation == _sourceGeneration ? duration : null;
+  }
 
   @override
   Future<void> stop() async {

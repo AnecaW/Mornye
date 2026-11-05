@@ -105,6 +105,66 @@ void main() {
       );
     });
 
+    test(
+      'cancellation during source retirement prevents an obsolete native prepare',
+      () async {
+        final gate = native.pauseGate = Completer<void>();
+        final old = deck.setNetworkSource('https://stream.test/old.flac');
+        await _until(() => native.calls.any((c) => c.$2 == 'pause'));
+        await deck.cancelPreparation();
+        gate.complete();
+        native.pauseGate = null;
+        await old;
+        expect(native.calls.where((c) => c.$2 == 'setSourceUrl'), isEmpty);
+        await deck.setNetworkSource('https://stream.test/new.flac');
+        expect(native.sources['usb-test'], 'https://stream.test/new.flac');
+      },
+    );
+
+    test(
+      'Darwin source release never rewinds an outgoing remote item',
+      () async {
+        final apple = AudioplayersPlaybackDeck(
+          playerId: 'apple-source-retirement',
+          nativeAvailable: false,
+          equalizerAvailable: false,
+          darwinSourceReplacement: true,
+        );
+        addTearDown(apple.dispose);
+        await apple.configureOutput();
+        await apple.setNetworkSource('https://stream.test/one.flac');
+        native.positions['apple-source-retirement'] = 5000;
+        await apple.setNetworkSource('https://stream.test/two.flac');
+        expect(native.releaseModes['apple-source-retirement'], 'release');
+        expect(native.stopRewinds, isNot(contains('apple-source-retirement')));
+        expect(
+          native.sources['apple-source-retirement'],
+          'https://stream.test/two.flac',
+        );
+      },
+    );
+
+    test(
+      'a delayed position reply cannot move the replacement track clock',
+      () async {
+        await deck.setNetworkSource('https://stream.test/one.flac');
+        native.positions['usb-test'] = 5000;
+        final gate = native.positionGate = Completer<void>();
+        final before = native.calls
+            .where((c) => c.$2 == 'getCurrentPosition')
+            .length;
+        final oldPosition = deck.getCurrentPosition();
+        await _until(
+          () =>
+              native.calls.where((c) => c.$2 == 'getCurrentPosition').length >
+              before,
+        );
+        await deck.setNetworkSource('https://stream.test/two.flac');
+        gate.complete();
+        expect(await oldPosition, isNull);
+      },
+    );
+
     test('direct driver and DoP are explicit and passed to native', () async {
       await deck.setFileSource(
         '/one.dsf',

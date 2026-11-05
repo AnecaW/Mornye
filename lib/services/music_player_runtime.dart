@@ -201,7 +201,7 @@ class PlaybackDependencies {
     PlaybackLoad load,
   ) => NetworkStorageService.instance.preparePlayback(source, load);
   static Future<String> _resolveNetworkSource(String source) =>
-      NetworkStorageService.instance.resolve(source);
+      NetworkStorageService.instance.resolve(source, forPlayback: true);
   static Future<bool> _networkSourceReachable(String source) =>
       NetworkStorageService.instance.reachable(source);
   static Future<String?> _recoverMissingFile(String path) async {
