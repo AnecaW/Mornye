@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/native-ios-audio-diagnostic.yml
       - third_party/audioplayers_darwin/tests/IOSRadioProbe.swift
+      - third_party/audioplayers_darwin/darwin/audioplayers_darwin/Sources/audioplayers_darwin/*.swift
 permissions:
   contents: read
 jobs:
@@ -40,7 +41,7 @@ jobs:
             "$native/WrappedMediaPlayer.swift" "$native/Utils.swift" "$native/AudioPlayerError.swift" \
             "$native/EqualizerAudioTap.swift" "$native/EqualizerDSP.swift" "$native/StreamMetadata.swift" \
             third_party/audioplayers_darwin/tests/IOSRadioProbe.swift -o "$app/RadioProbe"
-          device=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; a=[v for k,vs in d.items() if k.endswith("iOS-27-1") for v in vs if v["name"].startswith("iPhone")]; assert a, "No iOS 27.1 iPhone"; print(a[0]["udid"])')
+          device=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; a=[v for k,vs in d.items() if "iOS-27-2" in k for v in vs if v["name"].startswith("iPhone")]; assert a, "No iOS 27.2 iPhone"; print(a[0]["udid"])')
           xcrun simctl boot "$device" || true
           xcrun simctl bootstatus "$device" -b
           xcrun simctl install "$device" "$app"
