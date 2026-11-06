@@ -47,7 +47,7 @@ jobs:
           xcrun simctl install "$device" "$app"
           xcrun simctl launch "$device" com.mornye.radio-probe
           data=$(xcrun simctl get_app_container "$device" com.mornye.radio-probe data)
-          for attempt in $(seq 1 120); do
+          for attempt in $(seq 1 240); do
             if [ -f "$data/Documents/native-audio-results.json" ]; then
               cp "$data/Documents/native-audio-results.json" .tmp/probe/results.json
               break
