@@ -25,8 +25,15 @@ final class EqualizerAudioTap {
     } else { protected = item.asset.hasProtectedContent }
     guard !protected else { throw AudioPlayerError.error("Equalizer is unavailable for protected audio") }
     let input: AVMutableAudioMixInputParameters
-    if let explicitTrack {
-      input = AVMutableAudioMixInputParameters(track: explicitTrack)
+    // Prepared file/progressive sources expose a concrete audio track. Bind
+    // that track rather than the special mixed-stream ID: replacing the
+    // working file renderer with a mixed HLS renderer can fail on iOS outputs.
+    // HLS has no stable asset track across renditions and keeps the mix path.
+    let hls = (item.asset as? AVURLAsset)?.url.pathExtension.lowercased() == "m3u8"
+    let concreteTrack = explicitTrack ?? (hls ? nil : item.tracks.compactMap { $0.assetTrack }
+      .first(where: { $0.mediaType == .audio }))
+    if let concreteTrack {
+      input = AVMutableAudioMixInputParameters(track: concreteTrack)
     } else if #available(iOS 27.0, macOS 27.0, *) {
       // A stream's mix is not an AVAssetTrack. The mix ID supports live MP3,
       // AAC and HLS through the same decoded-PCM DSP as ordinary files.
@@ -70,7 +77,7 @@ final class EqualizerAudioTap {
       })
     var tap: MTAudioProcessingTap?
     let status: OSStatus
-    if #available(iOS 27.0, macOS 27.0, *), explicitTrack == nil {
+    if #available(iOS 27.0, macOS 27.0, *), concreteTrack == nil {
       // The mixed HLS renderer may negotiate an output-device format that does
       // not expose LPCM to the tap on iOS. Request decoded floating-point PCM
       // at the active route's rate/channels; this changes no audio-session or
