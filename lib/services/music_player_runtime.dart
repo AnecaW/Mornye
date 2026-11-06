@@ -12,17 +12,22 @@ import 'package:mornye/models/settings.dart';
 import 'package:mornye/services/alsa_output_devices.dart';
 import 'package:mornye/services/app_state_database.dart';
 import 'package:mornye/services/exclusive_output_deck.dart';
+import 'package:mornye/services/file_access_check.dart';
+import 'package:mornye/services/ffmpeg_support.dart' show FFmpegExecution;
 import 'package:mornye/services/autoplay_personalization.dart';
 import 'package:mornye/services/autoplay_ranker.dart';
 import 'package:mornye/services/autoplay_taste.dart';
 import 'package:mornye/services/background_favorites.dart';
 import 'package:mornye/services/cover_store.dart';
+import 'package:mornye/services/cast_output.dart';
+import 'package:mornye/services/cast_playback_deck.dart';
 import 'package:mornye/services/discord_presence_service.dart';
 import 'package:mornye/services/history_database.dart';
 import 'package:mornye/services/download_file_recovery.dart';
 import 'package:mornye/services/library_collections_database.dart';
 import 'package:mornye/services/library_database.dart';
 import 'package:mornye/services/listening_statistics.dart';
+import 'package:mornye/services/lastfm/lastfm_service.dart';
 import 'package:mornye/services/media_kit_playback_deck.dart';
 import 'package:mornye/services/media_library_browser.dart';
 import 'package:mornye/services/media_session_art_cache.dart';
@@ -31,6 +36,7 @@ import 'package:mornye/services/media_session_filter.dart';
 import 'package:mornye/services/music_playback_deck.dart';
 import 'package:mornye/services/music_player_service.dart';
 import 'package:mornye/services/network_metadata_service.dart';
+import 'package:mornye/services/network_playback_cache.dart';
 import 'package:mornye/services/network_storage_service.dart';
 import 'package:mornye/services/platform_bridge.dart';
 import 'package:mornye/services/playback_deck.dart';
@@ -45,6 +51,7 @@ import 'package:mornye/services/source_metadata_events.dart';
 import 'package:mornye/services/system_volume_service.dart';
 import 'package:mornye/utils/desktop_platform.dart';
 import 'package:mornye/utils/logger.dart';
+import 'package:mornye/utils/file_access.dart' show fileExists;
 
 final _log = AppLogger('MusicPlayerRuntime');
 
@@ -52,20 +59,28 @@ final _log = AppLogger('MusicPlayerRuntime');
 /// unless a remote device plays in its place.
 ({SwitchAudioHandler session, MusicPlayerHandler local})? _systemSession;
 
+/// A song the player could not play because of its [format]; [skipped]
+/// when the next song plays in its place.
+typedef UnplayableSong = ({String format, bool skipped});
+
 /// The process services used by a player. Tests can replace effects without
 /// changing the queue, transport, interruption or automation algorithms.
 class PlaybackDependencies {
   const PlaybackDependencies({
     this.createDeck = _createDeck,
+    this.createCastDeck = _createCastDeck,
     this.createPreviewDeck = _createPreviewDeck,
     this.audioSession = _getAudioSession,
     this.readMetadata = PlatformBridge.readFileMetadata,
     this.readNetworkMetadata = _readNetworkMetadata,
     Future<String> Function(String)? resolveNetworkSource,
     Future<String> Function(String, PlaybackLoad)? prepareNetworkSource,
+    this.offlineCopy = _offlineCopy,
+    this.networkCache = _networkCache,
     this.networkSourceReachable = _networkSourceReachable,
     this.onNetworkStall = _onNetworkStall,
     this.recoverMissingFile = _recoverMissingFile,
+    this.fileAccess = checkFileAccess,
     this.recoverMovedDownload = _recoverMovedDownload,
     this.initializeHandler = _initializeAudioHandler,
     this.synchronizePlaybackState = _synchronizePlaybackState,
@@ -73,6 +88,8 @@ class PlaybackDependencies {
     this.createTaste = AutoplayTaste.new,
     this.createRanker = AutoplayRanker.new,
     this.createSongAnalysis = _createSongAnalysis,
+    this.convertAudio = _convertAudio,
+    this.playbackCopies,
     AppStateDatabase? sessionDatabase,
     LibraryDatabase? libraryDatabase,
     HistoryDatabase? historyDatabase,
@@ -84,6 +101,7 @@ class PlaybackDependencies {
     Stream<double>? volumeChanges,
     bool? isIOS,
     bool? isAndroid,
+    bool? isMacOS,
     this.notificationChannel = const MethodChannel(
       'com.zarz.mornye/playback_notification',
     ),
@@ -101,9 +119,12 @@ class PlaybackDependencies {
        _sourceMetadataEvents = sourceMetadataEvents,
        _volumeChanges = volumeChanges,
        _isIOS = isIOS,
-       _isAndroid = isAndroid;
+       _isAndroid = isAndroid,
+       _isMacOS = isMacOS;
 
   final PlaybackDeck Function(String playerId) createDeck;
+  final PlaybackDeck Function(CastOutput output, MediaItem? Function() metadata)
+  createCastDeck;
 
   /// The search and catalog preview player.
   final PlaybackDeck Function(String playerId) createPreviewDeck;
@@ -113,6 +134,11 @@ class PlaybackDependencies {
   final Future<Map<String, dynamic>> Function(String) readNetworkMetadata;
   final Future<String> Function(String) resolveNetworkSource;
   final Future<String> Function(String, PlaybackLoad)? prepareNetworkSource;
+  final Future<String?> Function(String) offlineCopy;
+
+  /// The local copies of network songs around the one playing; null plays
+  /// every network song from its server.
+  final NetworkPlaybackCache? Function() networkCache;
 
   /// Whether a `network://` Library song can play now, as autoplay asks
   /// before queueing it.
@@ -124,6 +150,7 @@ class PlaybackDependencies {
   /// folder pruned: a path, or a URL streaming it as it arrives. Null for
   /// any other path; throws when it cannot be fetched.
   final Future<String?> Function(String) recoverMissingFile;
+  final Future<FileAccessCheck> Function(String) fileAccess;
   final Future<String?> Function(
     String source,
     String historyId,
@@ -140,6 +167,14 @@ class PlaybackDependencies {
 
   /// Analysis of how the Library's songs sound, reading songs from it.
   final SongAnalysis Function(LibraryDatabase library) createSongAnalysis;
+
+  /// Runs FFmpeg with these arguments; true when it succeeded. Makes the
+  /// FLAC copies AVPlayer plays in place of formats it cannot open.
+  final Future<bool> Function(List<String> arguments) convertAudio;
+
+  /// Where those copies go, emptied before the first; a folder in the
+  /// system temporary directory when null.
+  final Directory? playbackCopies;
   final AppStateDatabase? _sessionDatabase;
   final LibraryDatabase? _libraryDatabase;
   final HistoryDatabase? _historyDatabase;
@@ -149,7 +184,7 @@ class PlaybackDependencies {
   final SourceDeletionEvents? _sourceDeletionEvents;
   final SourceMetadataEvents? _sourceMetadataEvents;
   final Stream<double>? _volumeChanges;
-  final bool? _isIOS, _isAndroid;
+  final bool? _isIOS, _isAndroid, _isMacOS;
 
   AppStateDatabase get sessionDatabase =>
       _sessionDatabase ?? AppStateDatabase.instance;
@@ -170,6 +205,9 @@ class PlaybackDependencies {
   bool get isIOS => _isIOS ?? Platform.isIOS;
   bool get isAndroid => _isAndroid ?? Platform.isAndroid;
 
+  /// The macOS app, which plays through AVPlayer like iOS.
+  bool get isMacOS => _isMacOS ?? (isDesktopPlatform && Platform.isMacOS);
+
   // Windows and Linux play through libmpv. Without the library they fall
   // back to audioplayers, which has no equalizer there. macOS plays through
   // AVPlayer and moves to libmpv for exclusive output (hog mode).
@@ -189,12 +227,19 @@ class PlaybackDependencies {
     );
   }
 
+  static PlaybackDeck _createCastDeck(
+    CastOutput output,
+    MediaItem? Function() metadata,
+  ) => CastPlaybackDeck(output: output, metadata: metadata);
+
   // Previews follow the in-app volume on desktop. Mobile previews keep
   // playing without the equalizer.
   static PlaybackDeck _createPreviewDeck(String playerId) => isDesktopPlatform
       ? _createDeck(playerId)
       : AudioplayersPlaybackDeck(playerId: playerId, equalizerAvailable: false);
   static Future<AudioSession> _getAudioSession() => AudioSession.instance;
+  static Future<bool> _convertAudio(List<String> arguments) async =>
+      (await FFmpegExecution.arguments(arguments)).success;
   static SongAnalysis _createSongAnalysis(LibraryDatabase library) =>
       SongAnalysis(library: library);
   static Future<Map<String, dynamic>> _readNetworkMetadata(String source) =>
@@ -212,6 +257,14 @@ class PlaybackDependencies {
           .catchError((Object _) {}),
     );
   }
+
+  static Future<String?> _offlineCopy(String source) async {
+    final row = await HistoryDatabase.instance.findOfflineCopy(source);
+    final path = row?['filePath'] as String?;
+    return path != null && await fileExists(path) ? path : null;
+  }
+
+  static NetworkPlaybackCache? _networkCache() => NetworkPlaybackCache.instance;
 
   static Future<bool> _networkSourceReachable(String source) =>
       NetworkStorageService.instance.reachable(source);
@@ -252,9 +305,8 @@ class PlaybackDependencies {
       config: const AudioServiceConfig(
         androidNotificationChannelId: 'com.zarz.mornye.playback',
         androidNotificationChannelName: 'Playback',
-        // System UI draws only the small icon's alpha. The opaque launcher
-        // default became a blank dot in the status bar and output switcher.
-        androidNotificationIcon: 'drawable/ic_launcher_monochrome',
+        // The notification mark omits the adaptive launcher's safe-zone padding.
+        androidNotificationIcon: 'drawable/ic_notification_mornye',
         artDownscaleWidth: 512,
         artDownscaleHeight: 512,
         // Keep background resume eligible for audio focus. The Android fork
@@ -277,6 +329,8 @@ class MusicPlayerRuntime {
   }) : _settings = settings;
 
   final PlaybackDependencies dependencies;
+  LastfmService? _lastfm;
+  LastfmService get lastfm => _lastfm ??= LastfmService();
   AutoplayPersonalization? _personalization;
   // What learning observes also teaches [taste] what plays together and
   // [ranker] how much each part of a score counts.
@@ -303,6 +357,7 @@ class MusicPlayerRuntime {
   Future<void>? _restoreFuture;
   final _handlers = StreamController<MusicPlayerHandler?>.broadcast(sync: true);
   final _mutedPlaybackEvents = StreamController<void>.broadcast();
+  final _unplayableSongs = StreamController<UnplayableSong>.broadcast();
   bool _initializing = false;
   bool _disposed = false;
   Future<void>? _disposeFuture;
@@ -341,6 +396,13 @@ class MusicPlayerRuntime {
 
   void notifyMutedPlayback() {
     if (!_disposed) _mutedPlaybackEvents.add(null);
+  }
+
+  /// Songs whose format this device cannot play, as they fail.
+  Stream<UnplayableSong> get unplayableSongs => _unplayableSongs.stream;
+
+  void notifyUnplayableSong(String format, {required bool skipped}) {
+    if (!_disposed) _unplayableSongs.add((format: format, skipped: skipped));
   }
 
   /// Feeds the exclusive output setting to the decks.
@@ -505,6 +567,7 @@ class MusicPlayerRuntime {
     if (!identical(existing, handler)) {
       _unsubscribeSourceDeletion = dependencies.sourceDeletionEvents.subscribe(
         handler.onSourceDeleted,
+        beforeDelete: handler.prepareSourceDeletion,
       );
       _unsubscribeSourceMetadata = dependencies.sourceMetadataEvents.subscribe(
         handler.onSourceMetadataChanged,
@@ -515,6 +578,7 @@ class MusicPlayerRuntime {
 
   void detach(MusicPlayerHandler handler) {
     if (!identical(_handler, handler)) return;
+    _lastfm?.bind(null);
     _unsubscribeSourceDeletion?.call();
     _unsubscribeSourceDeletion = null;
     _unsubscribeSourceMetadata?.call();
@@ -560,6 +624,13 @@ class MusicPlayerRuntime {
       // Desktop presence goes through the Rust IPC client instead of the SDK.
       if (dependencies.isAndroid || dependencies.isIOS || isDesktopPlatform) {
         DiscordPresenceService.instance.bind(handler);
+      }
+      if (isDesktopPlatform) {
+        lastfm.bind(
+          handler,
+          unknownTitle: () => unknownTitle,
+          unknownArtist: () => unknownArtist,
+        );
       }
       return handler;
     } catch (error, stack) {
@@ -652,6 +723,7 @@ class MusicPlayerRuntime {
     _remoteSession?.dispose();
     _remoteSession = null;
     await _handler?.dispose();
+    await _lastfm?.close();
     try {
       await _initFuture;
     } catch (_) {
@@ -663,6 +735,7 @@ class MusicPlayerRuntime {
     await _songAnalysis?.dispose();
     await _handlers.close();
     await _mutedPlaybackEvents.close();
+    await _unplayableSongs.close();
   }
 
   Stream<T> _events<T>(

@@ -1,3 +1,4 @@
+import 'package:mornye/services/library_source_scope.dart';
 import 'package:mornye/providers/library_source_provider.dart';
 import 'package:mornye/providers/server_library_data_provider.dart';
 import 'package:mornye/providers/playback_provider.dart';
@@ -6,6 +7,7 @@ import 'package:mornye/services/network_storage_service.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'package:flutter/cupertino.dart' show CupertinoButton, CupertinoIcons;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:mornye/widgets/app_snack_bar.dart';
@@ -29,6 +31,7 @@ import 'package:mornye/widgets/tool_button_group.dart';
 import 'package:mornye/theme/mornye_icons.dart';
 import 'package:mornye/widgets/mornye_chrome.dart';
 import 'package:mornye/widgets/mornye_context_menu.dart';
+import 'package:mornye/widgets/mornye_mix_banner.dart';
 import 'package:mornye/widgets/app_icon.dart';
 import 'package:mornye/widgets/library_search_results.dart';
 import 'package:mornye/screens/mornye_library_screen.dart';
@@ -48,9 +51,11 @@ import 'package:mornye/providers/settings_provider.dart';
 import 'package:mornye/providers/extension_provider.dart';
 import 'package:mornye/providers/recent_access_provider.dart';
 import 'package:mornye/providers/explore_provider.dart';
+import 'package:mornye/providers/home_top_picks_provider.dart';
 import 'package:mornye/providers/user_profile_provider.dart';
 import 'package:mornye/widgets/desktop/desktop_scroll_arrows.dart';
 import 'package:mornye/widgets/explore_featured_section.dart';
+import 'package:mornye/providers/library_counts_provider.dart';
 import 'package:mornye/providers/library_mixes_provider.dart';
 import 'package:mornye/providers/local_library_provider.dart';
 import 'package:mornye/providers/music_player_provider.dart';
@@ -90,6 +95,7 @@ import 'package:mornye/widgets/desktop/context_menu.dart';
 import 'package:mornye/widgets/animation_utils.dart';
 import 'package:mornye/widgets/audio_quality_badges.dart';
 import 'package:mornye/widgets/cached_cover_image.dart';
+import 'package:mornye/widgets/extension_icon_image.dart';
 import 'package:mornye/widgets/library_mix_cover.dart';
 import 'package:mornye/widgets/player_artwork.dart';
 import 'package:mornye/widgets/error_card.dart';
@@ -145,8 +151,8 @@ class _HomeTabState extends ConsumerState<HomeTab>
   static const int _minLiveSearchChars = 3;
   static const Duration _liveSearchDelay = Duration(milliseconds: 800);
 
-  /// The Mornye desktop Search page can search the library instead of the
-  /// online provider, as the scope control in Music does.
+  /// The Mornye desktop Search page can switch between the library and the
+  /// selected online provider.
   bool get _offersLibraryScope =>
       widget.mode == HomeTabMode.search &&
       context.isMornye &&
@@ -155,6 +161,9 @@ class _HomeTabState extends ConsumerState<HomeTab>
   String _libraryQuery = '';
   Timer? _libraryQueryDebounce;
   bool get _searchingLibrary => _searchesLibrary && _offersLibraryScope;
+
+  /// Mornye's desktop field uses the compact toolbar size.
+  bool get _compactSearchField => context.isMornye && isDesktopPlatform;
 
   bool _embeddedCoverRefreshScheduled = false;
   List<Extension>? _thumbnailSizesExtensionsCache;
@@ -893,8 +902,7 @@ class _HomeTabState extends ConsumerState<HomeTab>
         !hasResults;
     final searchToolbar = _offersLibraryScope;
     final showLibraryResults = _searchingLibrary && hasSearchInput;
-    // As in Music, the library scope waits for words without recents or
-    // Browse.
+    // The library scope waits for input before showing local matches.
     final showLibraryPrompt = _searchingLibrary && !hasSearchInput;
     final sectionMotion = AppMotion.spatial(
       context,
@@ -985,7 +993,6 @@ class _HomeTabState extends ConsumerState<HomeTab>
                 ),
               if (hasActiveSearchSurface &&
                   !showRecentAccess &&
-                  !showEmptySearchResult &&
                   !showLibraryResults)
                 _buildSearchFilterSliver(
                   colorScheme: colorScheme,
@@ -1045,8 +1052,7 @@ class _HomeTabState extends ConsumerState<HomeTab>
     }
   }
 
-  /// Music on the Mac keeps its search field centered in the toolbar, with
-  /// the scope control at the trailing edge.
+  /// Centers the search field with the scope control at the trailing edge.
   Widget _buildDesktopSearchToolbarSliver() {
     final extensions = ref.watch(extensionProvider.select((s) => s.extensions));
     final providerId = HomeSearchProviderPolicy.resolveProvider(
@@ -1059,12 +1065,36 @@ class _HomeTabState extends ConsumerState<HomeTab>
             .firstOrNull
             ?.displayName ??
         context.l10n.librarySourceOnline;
-    const scopeWidth = 260.0;
+    // Equal segments, each hugging the longer label.
+    final labelStyle = Theme.of(
+      context,
+    ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600);
+    double labelWidth(String label) {
+      final painter = TextPainter(
+        text: TextSpan(text: label, style: labelStyle),
+        textDirection: Directionality.of(context),
+        textScaler: MediaQuery.textScalerOf(context),
+      )..layout();
+      final width = painter.width;
+      painter.dispose();
+      return width;
+    }
+
+    final scopeWidth =
+        (2 *
+                    (math.max(
+                          labelWidth(online),
+                          labelWidth(context.l10n.navLibrary),
+                        ) +
+                        24) +
+                6)
+            .clamp(150.0, 260.0);
     const gap = 16.0;
     final scope = SizedBox(
       width: scopeWidth,
       child: MornyeSegmentedControl(
         key: const ValueKey('search-scope'),
+        compact: true,
         labels: [online, context.l10n.navLibrary],
         selectedIndex: _searchesLibrary ? 1 : 0,
         onChanged: (index) => _setSearchScope(library: index == 1),
@@ -1073,7 +1103,7 @@ class _HomeTabState extends ConsumerState<HomeTab>
     return SliverAppBar(
       pinned: true,
       automaticallyImplyLeading: false,
-      toolbarHeight: 88,
+      toolbarHeight: 60,
       backgroundColor: Theme.of(context).colorScheme.surface,
       surfaceTintColor: Colors.transparent,
       titleSpacing: 0,
@@ -1249,30 +1279,44 @@ class _HomeTabState extends ConsumerState<HomeTab>
             currentSearchProvider,
             extensions,
           );
-          if (searchFilters.isEmpty && !showTools) {
+          final displayFilter = HomeSearchProviderPolicy.displayFilterSelection(
+            selectedSearchFilter,
+            defaultSearchTab,
+            currentSearchProvider,
+            extensions,
+          );
+          // Section headers are shortcuts; the compact filter menu keeps
+          // every extension-declared filter reachable, even without results.
+          final noChips = wide && isDesktopPlatform && context.isMornye;
+          final showBack = noChips && displayFilter != 'all';
+          if (!showTools && !showBack && searchFilters.isEmpty) {
             return const SliverToBoxAdapter(child: SizedBox.shrink());
           }
+          final tools = showTools
+              ? Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: _buildSearchResultTools(
+                    colorScheme,
+                    showSortButton: true,
+                    viewToggle: _buildSearchViewToggle(grid: grid),
+                  ),
+                )
+              : null;
           return SliverToBoxAdapter(
-            child: _buildSearchFilterBar(
-              searchFilters,
-              HomeSearchProviderPolicy.displayFilterSelection(
-                selectedSearchFilter,
-                defaultSearchTab,
-                currentSearchProvider,
-                extensions,
-              ),
-              colorScheme,
-              tools: showTools
-                  ? Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: _buildSearchResultTools(
-                        colorScheme,
-                        showSortButton: true,
-                        viewToggle: _buildSearchViewToggle(grid: grid),
-                      ),
-                    )
-                  : null,
-            ),
+            child: noChips
+                ? _buildSearchBackBar(
+                    colorScheme,
+                    showBack: showBack,
+                    filters: searchFilters,
+                    selectedFilter: displayFilter,
+                    tools: tools,
+                  )
+                : _buildSearchFilterBar(
+                    searchFilters,
+                    displayFilter,
+                    colorScheme,
+                    tools: tools,
+                  ),
           );
         },
       ),
@@ -1329,11 +1373,25 @@ class _HomeTabState extends ConsumerState<HomeTab>
           userProfileProvider.select((p) => p.value?.name ?? ''),
         );
         return SliverMainAxisGroup(
-          slivers: _buildExploreSections(
-            exploreSections,
-            showGreeting ? homeGreeting(context.l10n, name: profileName) : null,
-            colorScheme,
-          ),
+          slivers: [
+            // Mornye opens with Top Picks whether or not the feed follows.
+            if (context.isMornye && _HomeTopPicksSection.hasPicks(ref))
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 8, bottom: 12),
+                  child: _HomeTopPicksSection(
+                    inset: 16 + homeContentInset(context),
+                  ),
+                ),
+              ),
+            ..._buildExploreSections(
+              exploreSections,
+              showGreeting
+                  ? homeGreeting(context.l10n, name: profileName)
+                  : null,
+              colorScheme,
+            ),
+          ],
         );
       },
     );

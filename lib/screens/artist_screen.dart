@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart';
@@ -21,6 +22,7 @@ import 'package:mornye/l10n/l10n.dart';
 import 'package:mornye/models/track.dart';
 import 'package:mornye/models/artist_concert.dart';
 import 'package:mornye/widgets/artist_concerts_button.dart';
+import 'package:mornye/widgets/artist_featured_album_card.dart';
 import 'package:mornye/providers/extension_provider.dart';
 import 'package:mornye/providers/track_provider.dart';
 import 'package:mornye/providers/settings_provider.dart';
@@ -28,6 +30,7 @@ import 'package:mornye/providers/download_queue_provider.dart';
 import 'package:mornye/providers/library_collections_provider.dart';
 import 'package:mornye/providers/recent_access_provider.dart';
 import 'package:mornye/providers/local_library_provider.dart';
+import 'package:mornye/providers/music_player_provider.dart';
 import 'package:mornye/services/platform_bridge.dart';
 import 'package:mornye/utils/string_utils.dart';
 import 'package:mornye/utils/artist_album_sort.dart';
@@ -708,19 +711,41 @@ class _ArtistScreenState extends ConsumerState<ArtistScreen>
                             ),
                           ),
                         if (!_isLoadingDiscography && _error == null) ...[
-                          if (context.isMornye &&
-                              albums.isNotEmpty &&
-                              !isSelectionMode)
-                            SliverToBoxAdapter(
-                              child: _buildMornyeFeaturedAlbum(
-                                context,
-                                albums.first,
+                          if (isDesktopPlatform && context.isMornye)
+                            if (albums.isNotEmpty ||
+                                (_topTracks?.isNotEmpty ?? false))
+                              SliverToBoxAdapter(
+                                child: _buildMornyeDesktopHighlights(
+                                  context,
+                                  colorScheme,
+                                  isSelectionMode ? null : albums.firstOrNull,
+                                ),
+                              )
+                            else
+                              const SliverToBoxAdapter()
+                          else ...[
+                            if (context.isMornye &&
+                                albums.isNotEmpty &&
+                                !isSelectionMode)
+                              SliverToBoxAdapter(
+                                child: ArtistFeaturedAlbumCard(
+                                  album: albums.first,
+                                  onTap: () => _navigateToAlbum(albums.first),
+                                  onDownload: () =>
+                                      _downloadAlbums(context, [albums.first]),
+                                  loadMetadata: _albumMetadataLoader(
+                                    albums.first,
+                                  ),
+                                ),
                               ),
-                            ),
-                          if (_topTracks != null && _topTracks!.isNotEmpty)
-                            SliverToBoxAdapter(
-                              child: _buildPopularSection(context, colorScheme),
-                            ),
+                            if (_topTracks != null && _topTracks!.isNotEmpty)
+                              SliverToBoxAdapter(
+                                child: _buildPopularSection(
+                                  context,
+                                  colorScheme,
+                                ),
+                              ),
+                          ],
                           if (releases.isNotEmpty)
                             SliverToBoxAdapter(
                               key: const ValueKey('artist-releases'),

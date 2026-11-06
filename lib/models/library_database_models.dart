@@ -333,6 +333,7 @@ class QueueLibraryDbQuery {
   final Set<String>? networkScope;
   final bool includeDevice;
   final bool includeIndexedDevice;
+  final bool excludeNetwork;
   final QueueLibraryDbCursor? cursor;
 
   const QueueLibraryDbQuery({
@@ -352,6 +353,7 @@ class QueueLibraryDbQuery {
     this.networkScope,
     this.includeDevice = true,
     this.includeIndexedDevice = true,
+    this.excludeNetwork = false,
     this.cursor,
   });
 }

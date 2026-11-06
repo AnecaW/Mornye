@@ -27,12 +27,14 @@ import 'package:mornye/providers/player_artwork_video_provider.dart';
 import 'package:mornye/services/motion_artwork_store.dart';
 import 'package:mornye/services/network_metadata_service.dart';
 import 'package:mornye/services/network_storage_service.dart';
+import 'package:mornye/services/remote_playback.dart';
 import 'package:video_player/video_player.dart';
 import 'package:mornye/screens/now_playing_screen.dart';
 import 'package:mornye/screens/lyrics_share_screen.dart';
 import 'package:mornye/theme/mornye_theme.dart';
 import 'package:mornye/theme/app_theme.dart';
 import 'package:mornye/utils/lyrics_parser.dart';
+import 'package:mornye/widgets/audio_output_button.dart';
 import 'package:mornye/widgets/expressive_icon_button.dart';
 import 'package:mornye/widgets/expressive_playback_transport.dart';
 import 'package:mornye/widgets/expressive_seek_track.dart';
@@ -177,6 +179,7 @@ void main() {
     MotionArtwork? motionArtwork,
     MusicPlayerController? controller,
     List<MediaItem> queue = const [],
+    RemotePlayback? remote,
   }) async {
     tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1;
@@ -188,6 +191,8 @@ void main() {
         overrides: [
           if (controller != null)
             musicPlayerControllerProvider.overrideWithValue(controller),
+          if (remote != null)
+            activeRemotePlaybackProvider.overrideWithValue(remote),
           currentMediaItemProvider.overrideWithBuild(
             (ref, notifier) => mediaItems.stream,
           ),
@@ -568,6 +573,66 @@ void main() {
     });
   }
 
+  for (final (size, kept) in [
+    (const Size(430, 932), true),
+    (const Size(360, 700), false),
+  ]) {
+    testWidgets('Mornye portrait keeps an empty Playing on row ($size)', (
+      tester,
+    ) async {
+      await pumpNowPlaying(
+        tester,
+        theme: MornyeTheme.build(Brightness.dark),
+        size: size,
+      );
+      mediaItems.add(item('first'));
+      await settlePlayer(tester);
+      final row = find.byKey(const ValueKey('link-playing-on-row'));
+      if (kept) {
+        expect(tester.getSize(row).height, 36);
+      } else {
+        expect(row, findsNothing);
+      }
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  for (final mornye in [true, false]) {
+    testWidgets('portrait stays put while a computer takes over '
+        '(${mornye ? 'Mornye' : 'Material'})', (tester) async {
+      Future<({Rect title, Rect toolbar})> measure(
+        RemotePlayback? remote,
+      ) async {
+        await pumpNowPlaying(
+          tester,
+          theme: mornye ? MornyeTheme.build(Brightness.dark) : AppTheme.light(),
+          size: const Size(412, 915),
+          remote: remote,
+        );
+        mediaItems.add(item('first'));
+        await settlePlayer(tester);
+        return (
+          title: tester.getRect(find.byType(PlayerMetadataTitle).first),
+          toolbar: tester.getRect(find.byType(AudioOutputButton)),
+        );
+      }
+
+      final idle = await measure(null);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(seconds: 1));
+      final playing = await measure(_TestRemote());
+
+      expect(find.text('Playing on Studio PC'), findsOneWidget);
+      expect(playing.title, idle.title);
+      expect(playing.toolbar, idle.toolbar);
+      // The toolbar sits on the row in both styles, and the header stays
+      // level with Material's rather than dropping with the shorter row.
+      expect(915 - idle.toolbar.bottom, 36);
+      expect(idle.title.top, closeTo(mornye ? 510 : 509, 0.5));
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   testWidgets(
     'Material portrait Playing on row reaches into the home indicator inset',
     (tester) async {
@@ -853,6 +918,72 @@ void main() {
     },
   );
 
+  for (final ratio in [0.75, 16 / 9]) {
+    testWidgets('landscape motion cover stays square across tabs and rotation '
+        '(video ratio: $ratio)', (tester) async {
+      final queue = [item('first'), item('second')];
+      final controller = _QueueController(
+        (index) => mediaItems.add(queue[index]),
+      );
+      await pumpNowPlaying(
+        tester,
+        theme: MornyeTheme.build(Brightness.dark),
+        size: const Size(852, 393),
+        motionArtwork: MotionArtwork('file:///cover.mp4', aspectRatio: ratio),
+        queue: queue,
+        controller: controller,
+        playback: PlaybackState(queueIndex: 0),
+      );
+      mediaItems.add(queue.first);
+      await settlePlayer(tester);
+
+      final artwork = find.byKey(const ValueKey('full-player-artwork'));
+      void expectSquareCover() {
+        final size = tester.getSize(artwork);
+        expect(size.width, greaterThan(140));
+        expect(size.width, closeTo(size.height, 0.1));
+        final clip = find.descendant(
+          of: artwork,
+          matching: find.byType(ClipRRect),
+        );
+        expect(clip, findsOneWidget);
+        expect(tester.getSize(clip), size);
+      }
+
+      expectSquareCover();
+      await tester.tap(findAppIcon(CupertinoIcons.quote_bubble));
+      await settlePlayer(tester);
+      expectSquareCover();
+      await tester.tap(artwork);
+      await settlePlayer(tester);
+      final toggle = findAppIcon(CupertinoIcons.quote_bubble);
+      expect(toggle.hitTestable(), findsNothing);
+      await tester.tap(artwork);
+      await settlePlayer(tester);
+      expect(toggle.hitTestable(), findsOneWidget);
+
+      await tester.drag(artwork, const Offset(-110, 0));
+      await settlePlayer(tester);
+      expect(controller.selected, [1]);
+      expect(find.text('Second').hitTestable(), findsOneWidget);
+      expect(toggle.hitTestable(), findsOneWidget);
+      expectSquareCover();
+      await tester.drag(artwork, const Offset(110, 0));
+      await settlePlayer(tester);
+      expect(controller.selected, [1, 0]);
+
+      await tester.tap(findAppIcon(CupertinoIcons.list_bullet));
+      await settlePlayer(tester);
+      expectSquareCover();
+      tester.view.physicalSize = const Size(393, 852);
+      await settlePlayer(tester);
+      tester.view.physicalSize = const Size(852, 393);
+      await settlePlayer(tester);
+      expectSquareCover();
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   testWidgets('custom glass keeps live lyrics under the finger on reversal', (
     tester,
   ) async {
@@ -963,7 +1094,8 @@ void main() {
         final title = tester.getRect(titleFinder);
         final volume = tester.getRect(find.byType(PlayerVolumeControl));
         expect(playingCover.width, playingCover.height);
-        expect(playingCover.width, greaterThanOrEqualTo(393 * 0.84));
+        // Room for the Playing on row comes out of the cover on this phone.
+        expect(playingCover.width, greaterThanOrEqualTo(393 * 0.81));
         expect(playingCover.left, greaterThan(0));
         expect(playingCover.bottom, lessThan(title.top));
         expect(
@@ -998,6 +1130,7 @@ void main() {
         expect(tester.takeException(), isNull);
         await tester.pumpWidget(const SizedBox());
       },
+      variant: TargetPlatformVariant.only(TargetPlatform.iOS),
     );
   }
 
@@ -1708,6 +1841,61 @@ void main() {
     );
   }
 
+  for (final mornye in [false, true]) {
+    for (final landscape in [false, true]) {
+      testWidgets('automatic fullscreen lyrics follows the saved option '
+          '(Mornye: $mornye, landscape: $landscape)', (tester) async {
+        metadataOverrides['lyrics'] = List.generate(
+          20,
+          (index) => '[00:${index.toString().padLeft(2, '0')}.00]Line $index',
+        ).join('\n');
+        await pumpNowPlaying(
+          tester,
+          theme: mornye ? MornyeTheme.build(Brightness.dark) : AppTheme.light(),
+          size: landscape ? const Size(852, 393) : const Size(393, 852),
+          playback: PlaybackState(playing: true),
+        );
+        mediaItems.add(item('many'));
+        await settlePlayer(tester);
+        final settings = ProviderScope.containerOf(
+          tester.element(find.byType(NowPlayingScreen)),
+        ).read(settingsProvider.notifier);
+        settings.setAutoHideLyricsControls(false);
+        if (!mornye && landscape) settings.setLandscapeLyricsArtwork(true);
+        await settlePlayer(tester);
+        final toggle = mornye
+            ? findAppIcon(CupertinoIcons.quote_bubble)
+            : find.byKey(const ValueKey('material-lyrics-toggle'));
+        await tester.tap(toggle);
+        await settlePlayer(tester);
+        await tester.pump(const Duration(seconds: 6));
+        expect(toggle.hitTestable(), findsOneWidget);
+
+        // Manual scrolling must not hide controls when the option is off.
+        await tester.drag(find.byType(ListView), const Offset(0, -100));
+        await settlePlayer(tester);
+        expect(toggle.hitTestable(), findsOneWidget);
+
+        settings.setAutoHideLyricsControls(true);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 4900));
+        expect(toggle.hitTestable(), findsOneWidget);
+        await tester.pump(const Duration(milliseconds: 100));
+        await settlePlayer(tester);
+        expect(toggle.hitTestable(), findsNothing);
+
+        // A live change reveals already hidden controls immediately.
+        settings.setAutoHideLyricsControls(false);
+        await settlePlayer(tester);
+        expect(toggle.hitTestable(), findsOneWidget);
+        await tester.pump(const Duration(seconds: 6));
+        expect(toggle.hitTestable(), findsOneWidget);
+        await tester.pumpWidget(const SizedBox());
+        expect(tester.takeException(), isNull);
+      });
+    }
+  }
+
   for (final landscape in [false, true]) {
     testWidgets(
       'Material lyrics fill the player while idle (landscape: $landscape)',
@@ -1770,6 +1958,77 @@ void main() {
         expect(tester.takeException(), isNull);
       },
     );
+  }
+
+  for (final size in [const Size(852, 393), const Size(960, 432)]) {
+    for (final reducedMotion in [false, true]) {
+      testWidgets('immersive Material landscape centers within safe insets '
+          '($size, reduced motion: $reducedMotion)', (tester) async {
+        const insets = EdgeInsets.fromLTRB(20, 24, 0, 16);
+        metadataOverrides['lyrics'] =
+            '[00:00.00]First lyric\n[01:00.00]Second line';
+        await pumpNowPlaying(
+          tester,
+          theme: AppTheme.light(),
+          size: size,
+          playback: PlaybackState(playing: true),
+          wrapPlayer: (player) => Builder(
+            builder: (context) => MediaQuery(
+              data: MediaQuery.of(context).copyWith(
+                padding: insets,
+                viewPadding: insets,
+                disableAnimations: reducedMotion,
+              ),
+              child: player,
+            ),
+          ),
+        );
+        mediaItems.add(item('many'));
+        await settlePlayer(tester);
+        ProviderScope.containerOf(
+          tester.element(find.byType(NowPlayingScreen)),
+        ).read(settingsProvider.notifier).setLandscapeLyricsArtwork(true);
+        await settlePlayer(tester);
+        final toggle = find.byKey(const ValueKey('material-lyrics-toggle'));
+        await tester.tap(toggle);
+        await tester.pump();
+        await completeLyrics(tester);
+        final layout = find.byKey(
+          const ValueKey('material-landscape-artwork-lyrics'),
+        );
+        final spacer = find.byKey(
+          const ValueKey('material-landscape-toolbar-space'),
+        );
+        expect(
+          tester.getRect(layout).top,
+          closeTo(insets.top + kToolbarHeight, 1),
+        );
+        await tester.pump(const Duration(seconds: 5));
+        await settlePlayer(tester);
+        expect(toggle.hitTestable(), findsNothing);
+        expect(tester.getSize(spacer).height, closeTo(0, 0.01));
+        expect(tester.getRect(layout).top, closeTo(insets.top, 1));
+        final cover = find.descendant(
+          of: layout,
+          matching: find.byType(PlayerArtwork),
+        );
+        expect(
+          tester.getCenter(cover).dy,
+          closeTo((size.height + insets.top - insets.bottom) / 2, 1),
+        );
+        final lyrics = tester.getRect(find.byType(ListView));
+        expect(lyrics.bottom, lessThanOrEqualTo(size.height - insets.bottom));
+        await tester.tapAt(Offset(lyrics.right - 6, lyrics.top + 10));
+        await settlePlayer(tester);
+        expect(toggle.hitTestable(), findsOneWidget);
+        expect(tester.getSize(spacer).height, closeTo(kToolbarHeight, 1));
+        expect(
+          tester.getRect(layout).top,
+          closeTo(insets.top + kToolbarHeight, 1),
+        );
+        expect(tester.takeException(), isNull);
+      });
+    }
   }
 
   testWidgets('Material landscape artwork beside lyrics hides idle controls', (
@@ -2417,6 +2676,7 @@ void main() {
   testWidgets(
     'Mornye lyrics keep the active line sharp with bold leading-aligned text',
     (tester) async {
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await pumpNowPlaying(
         tester,
         theme: MornyeTheme.build(Brightness.light),
@@ -5089,6 +5349,22 @@ class _SeekController extends MusicPlayerController {
     completions.add(completion);
     return completion.future;
   }
+}
+
+/// A computer playing in the phone's place; the player reads only its name
+/// and the song on its way there.
+class _TestRemote implements RemotePlayback {
+  @override
+  String get name => 'Studio PC';
+
+  @override
+  Stream<RemoteTransfer?> get transfers => Stream.value(null);
+
+  @override
+  Stream<double> get volumes => const Stream.empty();
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 class _TestCollections extends LibraryCollectionsNotifier {

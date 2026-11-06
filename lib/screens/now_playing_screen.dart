@@ -8,16 +8,14 @@ import 'package:flutter/services.dart' show SystemUiOverlayStyle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:mornye/controllers/clickable_metadata.dart';
+import 'package:mornye/controllers/player_track_navigation.dart';
 import 'package:mornye/controllers/player_metadata_controller.dart';
 import 'package:mornye/l10n/l10n.dart';
-import 'package:mornye/providers/download_history_provider.dart';
 import 'package:mornye/providers/library_collections_provider.dart';
 import 'package:mornye/providers/lyrics_translation_provider.dart';
 import 'package:mornye/providers/music_player_provider.dart';
 import 'package:mornye/providers/settings_provider.dart';
 import 'package:mornye/routes/now_playing_route.dart';
-import 'package:mornye/screens/downloaded_album_screen.dart';
-import 'package:mornye/screens/local_album_screen.dart';
 import 'package:mornye/screens/equalizer_screen.dart';
 import 'package:mornye/screens/lyrics_share_screen.dart';
 import 'package:mornye/theme/mornye_theme.dart';
@@ -25,7 +23,6 @@ import 'package:mornye/theme/player_artwork_theme.dart';
 import 'package:mornye/utils/file_access.dart';
 import 'package:mornye/utils/lyrics_parser.dart';
 import 'package:mornye/utils/playback_seek_preview.dart';
-import 'package:mornye/utils/logger.dart';
 import 'package:mornye/widgets/app_bottom_sheet.dart';
 import 'package:mornye/widgets/app_snack_bar.dart';
 import 'package:mornye/widgets/app_icon.dart';
@@ -36,6 +33,7 @@ import 'package:mornye/widgets/desktop/desktop_commands.dart'
     show DesktopCommand, desktopTooltip;
 import 'package:mornye/widgets/desktop/desktop_inspector.dart';
 import 'package:mornye/widgets/link/link_actions.dart';
+import 'package:mornye/widgets/network_offline_actions.dart';
 import 'package:mornye/widgets/link/link_devices_sheet.dart';
 import 'package:mornye/widgets/lyrics_options_button.dart';
 import 'package:mornye/widgets/lyrics_screen_awake.dart';
@@ -60,10 +58,16 @@ import 'package:mornye/providers/player_motion_artwork_provider.dart';
 
 export 'package:mornye/routes/now_playing_route.dart';
 
-final _log = AppLogger('NowPlaying');
-
-/// Material portrait's "Playing on" row, kept while empty.
+/// Portrait's "Playing on" row, kept while empty.
 const _playingOnRowHeight = 36.0;
+
+/// Screens shorter than this keep Mornye's volume row clear by leaving the
+/// empty row out; its cover and controls need the height.
+const _mornyePlayingOnMinScreenHeight = 720.0;
+
+/// What Mornye holds back above its volume row, so the toolbar reaches
+/// Material's height while the track header stays level with Material's.
+const _mornyeControlsHeadroom = 20.0;
 
 /// How much of an iPhone's home indicator inset stays under that row. The
 /// indicator sits in the screen's bottom 13pt, and the label's text ends 8pt
@@ -121,6 +125,7 @@ class NowPlayingScreen extends ConsumerStatefulWidget {
 class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
   ProviderSubscription<AsyncValue<MediaItem?>>? _mediaItemSub;
   ProviderSubscription<bool>? _lyricsPlayingSub;
+  ProviderSubscription<bool>? _lyricsAutoHideSub;
   late final _trackMetadata =
       widget.metadataControllerFactory?.call() ?? PlayerMetadataController();
   late final LyricsTranslationController _lyricsTranslation;
@@ -177,6 +182,19 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
       }
       _scheduleLyricsControlsHide();
     });
+    _lyricsAutoHideSub = ref.listenManual<bool>(
+      settingsProvider.select((settings) => settings.autoHideLyricsControls),
+      (_, enabled) {
+        if (!enabled) {
+          _lyricsPointers.clear();
+          _lyricsScrollDistance = 0;
+          if (_lyricsControlsHidden) {
+            setState(() => _lyricsControlsHidden = false);
+          }
+        }
+        _scheduleLyricsControlsHide();
+      },
+    );
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       unawaited(
@@ -247,6 +265,7 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
     _lyricsIdleTimer?.cancel();
     _mediaItemSub?.close();
     _lyricsPlayingSub?.close();
+    _lyricsAutoHideSub?.close();
     _lyricsTranslation.cancel(owner: this);
     _trackMetadata.dispose();
     _artworkForeground.dispose();
@@ -358,14 +377,13 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
         materialBackdrop &&
         MediaQuery.orientationOf(context) == Orientation.portrait;
     final overCover = materialFullScreen && _currentPage != 1;
-    // Material's portrait keeps the "Playing on" row while empty, so the
-    // controls stay put when a computer takes over playback. On an iPhone
-    // the row reaches into the home indicator's inset rather than stacking
-    // a second empty band on top of it.
+    // Portrait keeps the "Playing on" row while empty, so the controls stay
+    // put when a computer takes over playback. On an iPhone the row reaches
+    // into the home indicator's inset rather than stacking a second empty
+    // band on top of it.
     final reservesPlayingOnRow =
-        !mornye &&
         MediaQuery.orientationOf(context) == Orientation.portrait &&
-        screen.height >= 640;
+        screen.height >= (mornye ? _mornyePlayingOnMinScreenHeight : 640);
     final bottomInset = MediaQuery.paddingOf(context).bottom;
     final homeIndicatorBelowRow =
         reservesPlayingOnRow && Theme.of(context).platform == TargetPlatform.iOS
@@ -451,7 +469,13 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
         : MediaQuery.orientationOf(context) == Orientation.landscape
         ? 0
         : 36;
+    final materialLandscapeArtwork =
+        !mornye &&
+        !widget.embedded &&
+        MediaQuery.orientationOf(context) == Orientation.landscape &&
+        ref.watch(settingsProvider.select((s) => s.landscapeLyricsArtwork));
     final player = Scaffold(
+      extendBodyBehindAppBar: materialLandscapeArtwork,
       backgroundColor: mornye || materialBackdrop
           ? Colors.transparent
           : colorScheme.surface,
@@ -531,9 +555,18 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
       body: FadeTransition(
         opacity: contentOpacity,
         child: SafeArea(
+          top: !materialLandscapeArtwork,
           bottom: homeIndicatorBelowRow == null,
           child: Column(
             children: [
+              if (materialLandscapeArtwork) ...[
+                SizedBox(height: MediaQuery.viewPaddingOf(context).top),
+                PlayerLyricsControlsCollapse(
+                  key: const ValueKey('material-landscape-toolbar-space'),
+                  hidden: _lyricsImmersive,
+                  child: const SizedBox(height: kToolbarHeight),
+                ),
+              ],
               Expanded(
                 child: mornye
                     ? NotificationListener<ScrollUpdateNotification>(
@@ -543,9 +576,12 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
                           metadata: _trackMetadata,
                           seekPreview: _seekPreview,
                           colorScheme: colorScheme,
-                          page: live ? 0 : _currentPage,
+                          page: _currentPage,
                           motionArtwork: artwork(),
                           artworkAspectRatio: artworkRatio,
+                          controlsHeadroom: reservesPlayingOnRow
+                              ? _mornyeControlsHeadroom
+                              : 0,
                           insetArtwork: !fullBleed,
                           artworkTopInset:
                               MediaQuery.paddingOf(context).top +
@@ -584,8 +620,8 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
                         metadata: _trackMetadata,
                         seekPreview: _seekPreview,
                         colorScheme: colorScheme,
-                        showLyrics: !live && _currentPage == 1,
-                        immersive: !live && _lyricsImmersive,
+                        showLyrics: _currentPage == 1,
+                        immersive: _lyricsImmersive,
                         compactPlayer: ref.watch(
                           settingsProvider.select((s) => s.compactPlayer),
                         ),
@@ -614,8 +650,22 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
                       if (live)
                         Padding(
                           padding: const EdgeInsets.symmetric(vertical: 8),
-                          child: AudioOutputButton(
-                            color: colorScheme.onSurfaceVariant,
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              IconButton(
+                                tooltip: context.l10n.nowPlayingTabLyrics,
+                                isSelected: _currentPage == 1,
+                                icon: const Icon(CupertinoIcons.quote_bubble),
+                                onPressed: mornye
+                                    ? _toggleMornyeLyrics
+                                    : _toggleMaterialLyrics,
+                              ),
+                              AudioOutputButton(
+                                color: colorScheme.onSurfaceVariant,
+                              ),
+                              const SizedBox(width: 48),
+                            ],
                           ),
                         )
                       else if (mornye && !_landscape)
@@ -705,9 +755,8 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
                           ),
                         ),
                       // Landscape has no row to spare; the toolbar's devices
-                      // button shows the device there. Mornye's larger cover
-                      // and short phones' lyrics keep the room an empty row
-                      // would take.
+                      // button shows the device there. Short phones' lyrics
+                      // keep the room an empty row would take.
                       if (MediaQuery.orientationOf(context) ==
                           Orientation.portrait) ...[
                         if (!reservesPlayingOnRow) ...[
@@ -716,11 +765,12 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
                           ),
                           const SizedBox(height: 8),
                         ] else
-                          const SizedBox(
-                            key: ValueKey('link-playing-on-row'),
+                          SizedBox(
+                            key: const ValueKey('link-playing-on-row'),
                             height: _playingOnRowHeight,
                             child: Center(
                               child: LinkPlayingOnLabel(
+                                color: mornye ? Colors.white : null,
                                 height: _playingOnRowHeight,
                               ),
                             ),
@@ -870,6 +920,7 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
 
   bool get _canAutoHideLyricsControls =>
       _lyricsAutoHideLayout &&
+      ref.read(settingsProvider).autoHideLyricsControls &&
       _currentPage == 1 &&
       ref.read(playbackPlayingProvider) &&
       !MediaQuery.accessibleNavigationOf(context);
@@ -910,6 +961,7 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
 
   bool _onLyricsScroll(ScrollUpdateNotification notification) {
     if (_currentPage != 1 ||
+        !ref.read(settingsProvider).autoHideLyricsControls ||
         _landscape ||
         notification.dragDetails == null ||
         notification.metrics.axis != Axis.vertical) {
@@ -1050,16 +1102,8 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
     }
   }
 
-  Future<void> _goToCurrentArtist(MediaItem mediaItem) async {
-    final track = ref.read(playerCollectionTrackProvider(mediaItem)).value;
-    // A downloaded track's source is the service its audio came from, not a
-    // metadata catalog; the lookup uses the user's search provider instead.
-    await navigateToArtist(
-      context,
-      artistName: mediaItem.artist ?? '',
-      artistId: track?.artistId,
-    );
-  }
+  Future<void> _goToCurrentArtist(MediaItem mediaItem) =>
+      openPlayingArtist(context, ref, mediaItem);
 
   Future<void> _updatePlayerCollection(
     MediaItem item, {
@@ -1167,6 +1211,13 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
                       title: sheetContext.l10n.linkSaveToPhone,
                       onTap: () => Navigator.of(sheetContext).pop('linkSave'),
                     ),
+                  if (!saveToPhone && canSaveNetworkOfflineSource(source))
+                    SettingsItem(
+                      icon: Icons.download_for_offline_outlined,
+                      title: sheetContext.l10n.offlineSave,
+                      onTap: () =>
+                          Navigator.of(sheetContext).pop('networkOffline'),
+                    ),
                   SettingsItem(
                     icon: Icons.bedtime_outlined,
                     title: sheetContext.l10n.nowPlayingSleepTimer,
@@ -1240,6 +1291,9 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
         break;
       case 'linkSave':
         linkSaveSongsToPhone(context, ref, transfer.desktop);
+        break;
+      case 'networkOffline':
+        await savePlayingNetworkOffline(context, ref, mediaItem);
         break;
       case 'details':
         unawaited(
@@ -1327,68 +1381,7 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
   Future<void> _goToCurrentAlbum({
     required MediaItem mediaItem,
     required String source,
-  }) async {
-    final albumName = (mediaItem.album ?? '').trim();
-    if (albumName.isEmpty) return;
-
-    // Prefer the stored collection so this action remains useful offline and
-    // opens the exact files the user is currently playing.
-    try {
-      final historyItem = source.isEmpty
-          ? null
-          : await ref
-                .read(downloadHistoryProvider.notifier)
-                .getByFilePathAsync(source);
-      if (!mounted) return;
-      if (historyItem != null) {
-        final albumArtist = (historyItem.albumArtist ?? '').trim();
-        pushViaPreferredNavigator(
-          context,
-          (_) => DownloadedAlbumScreen(
-            albumName: historyItem.albumName,
-            artistName: albumArtist.isNotEmpty
-                ? albumArtist
-                : historyItem.artistName,
-            coverUrl: historyItem.coverUrl,
-          ),
-        );
-        return;
-      }
-    } catch (e) {
-      _log.w('Failed to resolve downloaded album: $e');
-    }
-
-    try {
-      final album = await ref
-          .read(musicPlayerControllerProvider)
-          .localAlbumFor(mediaItem.id);
-      if (!mounted) return;
-      if (album != null) {
-        final (:item, :tracks) = album;
-        final albumArtist = (item.albumArtist ?? '').trim();
-        pushViaPreferredNavigator(
-          context,
-          (_) => LocalAlbumScreen(
-            albumName: item.albumName,
-            artistName: albumArtist.isNotEmpty ? albumArtist : item.artistName,
-            coverPath: item.coverPath,
-            tracks: tracks,
-          ),
-        );
-        return;
-      }
-    } catch (e) {
-      _log.w('Failed to resolve local album: $e');
-    }
-
-    if (!mounted) return;
-    await navigateToAlbum(
-      context,
-      albumName: albumName,
-      artistName: mediaItem.artist,
-      coverUrl: mediaItem.artUri?.toString(),
-    );
-  }
+  }) => openPlayingAlbum(context, ref, mediaItem: mediaItem, source: source);
 
   /// Opens Up Next. The Material sheet captures the theme of [context], the
   /// player's artwork scope.

@@ -215,7 +215,7 @@ void main() {
     await expectLater(
       db.transaction((_) async {
         await LibrarySchema.upgrade(db, 14, LibrarySchema.version);
-        await db.execute('PRAGMA user_version = 17');
+        await db.execute('PRAGMA user_version = ${LibrarySchema.version}');
       }),
       throwsA(isA<StateError>()),
     );
@@ -234,9 +234,12 @@ void main() {
     await db.execute('DROP TRIGGER fail_later_page');
     await db.transaction((_) async {
       await LibrarySchema.upgrade(db, 14, LibrarySchema.version);
-      await db.execute('PRAGMA user_version = 17');
+      await db.execute('PRAGMA user_version = ${LibrarySchema.version}');
     });
-    expect((await db.rawQuery('PRAGMA user_version')).single.values.single, 17);
+    expect(
+      (await db.rawQuery('PRAGMA user_version')).single.values.single,
+      LibrarySchema.version,
+    );
     expect(
       (await db.rawQuery(
         'SELECT COUNT(DISTINCT item_id) FROM library_path_keys',

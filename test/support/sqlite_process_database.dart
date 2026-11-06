@@ -20,6 +20,7 @@ class SqliteProcessDatabase implements Database, Transaction {
   static Future<SqliteProcessDatabase> open({String path = ':memory:'}) async =>
       SqliteProcessDatabase._(
         await Process.start('python3', [
+          '-X', 'utf8',
           '-u',
           '-c',
           r'''

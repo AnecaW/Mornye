@@ -20,6 +20,7 @@ import 'package:mornye/theme/app_tokens.dart';
 import 'package:mornye/theme/mornye_theme.dart';
 import 'package:mornye/utils/int_utils.dart';
 import 'package:mornye/utils/string_utils.dart';
+import 'package:mornye/utils/usb_output_status_label.dart';
 import 'package:mornye/widgets/app_bottom_sheet.dart';
 import 'package:mornye/widgets/app_icon.dart';
 import 'package:mornye/widgets/audio_analysis_widget.dart';
@@ -36,14 +37,24 @@ Future<void> showAudioInfoSheet(
   Map<String, String> linkSources = const {},
 }) {
   unawaited(metadata.ensureFileMetadata());
-  return showAppScrollableBottomSheet<void>(
+  return showAppModalBottomSheet<void>(
     context: context,
-    title: context.l10n.audioInfoTitle,
-    subtitle: metadata.qualityLabel,
-    builder: (context, controller) => _AudioInfoSheet(
-      metadata: metadata,
-      controller: controller,
-      linkSources: linkSources,
+    useRootNavigator: true,
+    isScrollControlled: true,
+    builder: (context) => AppScrollableSheet(
+      builder: (context, controller) => ListenableBuilder(
+        listenable: metadata,
+        builder: (context, child) => AppBottomSheet(
+          title: context.l10n.audioInfoTitle,
+          subtitle: metadata.qualityLabel,
+          child: child!,
+        ),
+        child: _AudioInfoSheet(
+          metadata: metadata,
+          controller: controller,
+          linkSources: linkSources,
+        ),
+      ),
     ),
   );
 }
@@ -70,12 +81,18 @@ class _AudioInfoSheetState extends State<_AudioInfoSheet>
   String? _loadedPath;
   int _loadGeneration = 0;
   bool _loading = false;
+  Timer? _statusTimer;
+  (bool?, double?, double?) _processingSnapshot = (null, null, null);
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     widget.metadata.addListener(_load);
+    usbAudioStatus.addListener(_usbChanged);
+    playbackExclusiveStatus.addListener(_usbChanged);
+    _refreshStatus();
+    _scheduleStatusRefresh();
     _load();
   }
 
@@ -83,13 +100,46 @@ class _AudioInfoSheetState extends State<_AudioInfoSheet>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     widget.metadata.removeListener(_load);
+    usbAudioStatus.removeListener(_usbChanged);
+    playbackExclusiveStatus.removeListener(_usbChanged);
+    _statusTimer?.cancel();
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) unawaited(_load(force: true));
+    _scheduleStatusRefresh();
+    if (state == AppLifecycleState.resumed) {
+      _refreshStatus();
+      unawaited(_load(force: true));
+    }
   }
+
+  void _refreshStatus() {
+    final handler = musicPlayerRuntime.handler;
+    unawaited(handler?.refreshOutputStatus());
+    final processing = handler?.processing;
+    final snapshot = (
+      processing?.direct,
+      processing?.normalizationGain,
+      processing?.autoMixRate,
+    );
+    if (snapshot != _processingSnapshot) {
+      setState(() => _processingSnapshot = snapshot);
+    }
+  }
+
+  void _scheduleStatusRefresh() {
+    _statusTimer?.cancel();
+    if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
+      return;
+    }
+    _statusTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      _refreshStatus();
+    });
+  }
+
+  void _usbChanged() => unawaited(_load(force: true));
 
   Future<void> _load({bool force = false}) async {
     final path = widget.metadata.filePath;
@@ -131,6 +181,9 @@ class _AudioInfoSheetState extends State<_AudioInfoSheet>
       widget.metadata,
       usbAudioStatus,
       playbackEqualizer,
+      playbackExclusiveStatus,
+      playbackExclusiveOutput,
+      playbackOutputVolume,
     ]),
     builder: (context, _) {
       final facts = _AudioFacts(
@@ -144,6 +197,8 @@ class _AudioInfoSheetState extends State<_AudioInfoSheet>
         equalizer: playbackEqualizer.value,
         processing: musicPlayerRuntime.handler?.processing,
         settings: musicPlayerRuntime.settings,
+        exclusiveStatus: playbackExclusiveStatus.value,
+        softwareVolume: playbackOutputVolume.value,
         linkDevice: linkSourceName(
           widget.linkSources,
           widget.metadata.filePath,
@@ -232,6 +287,7 @@ class _AudioInfoSheetState extends State<_AudioInfoSheet>
         ..writeln(section.title);
       for (final fact in section.facts) {
         report.writeln('${fact.label}: ${fact.value}');
+        if (fact.detail case final detail?) report.writeln(detail);
       }
     }
     await Clipboard.setData(ClipboardData(text: report.toString().trim()));
@@ -295,27 +351,39 @@ class _FactRow extends StatelessWidget {
                 horizontal: inset,
                 vertical: tokens.rowPaddingVCompact,
               ),
-              child: LayoutBuilder(
-                // The value keeps its natural width up to just over half the
-                // row, so short values never squeeze long labels onto two lines.
-                builder: (context, constraints) => Row(
-                  children: [
-                    Expanded(
-                      child: Text(fact.label, style: theme.textTheme.bodyLarge),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  LayoutBuilder(
+                    // The value keeps its natural width up to just over half the
+                    // row, so short values never squeeze long labels onto two lines.
+                    builder: (context, constraints) => Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            fact.label,
+                            style: theme.textTheme.bodyLarge,
+                          ),
+                        ),
+                        SizedBox(width: tokens.gapMd),
+                        ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxWidth: constraints.maxWidth * 0.55,
+                          ),
+                          child: Text(
+                            fact.value,
+                            textAlign: TextAlign.end,
+                            style: valueStyle,
+                          ),
+                        ),
+                      ],
                     ),
-                    SizedBox(width: tokens.gapMd),
-                    ConstrainedBox(
-                      constraints: BoxConstraints(
-                        maxWidth: constraints.maxWidth * 0.55,
-                      ),
-                      child: Text(
-                        fact.value,
-                        textAlign: TextAlign.end,
-                        style: valueStyle,
-                      ),
-                    ),
+                  ),
+                  if (fact.detail case final detail?) ...[
+                    SizedBox(height: tokens.gapSm),
+                    Text(detail, style: theme.textTheme.bodySmall),
                   ],
-                ),
+                ],
               ),
             ),
           ),
@@ -342,11 +410,12 @@ class _Section {
 }
 
 class _Fact {
-  const _Fact(this.label, this.value, {this.emphasis = false});
+  const _Fact(this.label, this.value, {this.emphasis = false, this.detail});
 
   final String label;
   final String value;
   final bool emphasis;
+  final String? detail;
 }
 
 const _losslessFormats = {'flac', 'alac', 'wav', 'aiff', 'ape', 'wv', 'pcm'};
@@ -365,6 +434,8 @@ class _AudioFacts {
     required this.equalizer,
     required this.processing,
     required this.settings,
+    required this.exclusiveStatus,
+    required this.softwareVolume,
     this.linkDevice,
   });
 
@@ -378,6 +449,8 @@ class _AudioFacts {
   final EqualizerSettings equalizer;
   final PlaybackProcessing? processing;
   final AppSettings settings;
+  final ExclusiveOutputStatus exclusiveStatus;
+  final double softwareVolume;
 
   /// The paired computer or phone the network song plays from.
   final String? linkDevice;
@@ -393,7 +466,7 @@ class _AudioFacts {
   late final int? bitrateKbps =
       readPositiveInt(metadata['bitrate']) ??
       ((route?.stream?.bitrate ?? 0) > 0
-          ? (route!.stream!.bitrate! / 1000).round()
+          ? route!.stream!.bitrate! ~/ 1000
           : null);
   late final int? durationSeconds = readPositiveInt(metadata['duration']);
   late final bool lossless =
@@ -401,6 +474,7 @@ class _AudioFacts {
       _losslessFormats.contains(codec.toLowerCase());
   late final bool direct =
       (processing?.direct ?? false) && usb.reason == 'active';
+  late final bool exclusive = exclusiveStatus == ExclusiveOutputStatus.active;
 
   List<_Section> sections() => [
     _Section(l10n.audioInfoSource, _source()),
@@ -528,8 +602,7 @@ class _AudioFacts {
     final String signalPath;
     if (direct && usb.driver == 'usb_direct') {
       signalPath = l10n.audioInfoPathDirect;
-    } else if ((direct && usb.driver == 'aaudio_exclusive') ||
-        playbackExclusiveStatus.value == ExclusiveOutputStatus.active) {
+    } else if ((direct && usb.driver == 'aaudio_exclusive') || exclusive) {
       signalPath = l10n.audioInfoPathExclusive;
     } else {
       signalPath = l10n.audioInfoPathSystem;
@@ -550,6 +623,8 @@ class _AudioFacts {
     return [
       _Fact(l10n.audioInfoPlayer, l10n.audioInfoPlayerValue),
       _Fact(l10n.audioInfoSignalPath, signalPath),
+      if (settings.usbBitPerfect || usb.reason != 'idle')
+        _Fact(l10n.usbBitPerfect, usbOutputStatusLabel(l10n, usb)),
       if (!direct && decoder != null)
         _Fact(
           l10n.audioInfoDecoder,
@@ -571,33 +646,43 @@ class _AudioFacts {
       if ((rate - 1).abs() > 0.001)
         _Fact(l10n.audioInfoTempo, '${rate.toStringAsFixed(3)}×'),
       if (_resampling case final value?) _Fact(l10n.audioInfoResampling, value),
-      _Fact(
-        l10n.audioInfoBitPerfect,
-        _bitPerfect
-            ? l10n.audioInfoBitPerfectActive
-            : l10n.audioInfoBitPerfectNo,
-        emphasis: _bitPerfect,
-      ),
+      _Fact(l10n.audioInfoBitPerfect, switch (_bitPerfect) {
+        AudioBitPerfectStatus.verified => l10n.audioInfoBitPerfectActive,
+        AudioBitPerfectStatus.systemMixed => l10n.audioInfoBitPerfectNo,
+        AudioBitPerfectStatus.processed => l10n.audioInfoBitPerfectProcessed,
+        AudioBitPerfectStatus.unverified => l10n.audioInfoBitPerfectUnverified,
+      }, emphasis: _bitPerfect == AudioBitPerfectStatus.verified),
     ];
   }
 
-  // A preferred mixer format is configuration, not proof of active playback.
-  bool get _bitPerfect => direct;
+  // EQ settings alone do not confirm which filters the engine applied.
+  AudioBitPerfectStatus get _bitPerfect => audioBitPerfectStatus(
+    directActive: direct,
+    exclusiveActive: exclusive,
+    normalizationGain: processing?.normalizationGain ?? 1,
+    tempo: processing?.autoMixRate ?? 1,
+    softwareVolume: softwareVolume,
+  );
 
   bool get _bluetoothFormatUnreported =>
       !direct && route?.bluetoothFormatUnreported == true;
 
+  bool get _androidOutputUnreported => !direct && route?.platform == 'android';
+
   int? get _outputRate {
     if (direct) return usb.sampleRate;
-    if (_bluetoothFormatUnreported) return null;
+    // Shared mixer properties cannot describe an exclusive engine's output.
+    if (exclusive || _androidOutputUnreported) return null;
     return route?.device?.mixerSampleRate ?? route?.mixerSampleRate;
   }
 
   String? get _resampling {
-    if (_bluetoothFormatUnreported) return l10n.audioInfoAndroidNotReported;
+    if (_androidOutputUnreported) return l10n.audioInfoAndroidNotReported;
     final source = sampleRate, output = _outputRate;
     if (source == null || output == null) return null;
-    if (_bitPerfect || source == output) return l10n.audioInfoResamplingNone;
+    if (_bitPerfect == AudioBitPerfectStatus.verified || source == output) {
+      return l10n.audioInfoResamplingNone;
+    }
     return '${_khz(source)} → ${_khz(output)}';
   }
 
@@ -621,7 +706,15 @@ class _AudioFacts {
       if (_outputRate case final rate?)
         _Fact(l10n.audioInfoOutputRate, _khz(rate)),
       if (_bluetoothFormatUnreported) ...[
-        _Fact(l10n.audioInfoBluetoothFormat, l10n.audioInfoAndroidNotReported),
+        _Fact(
+          l10n.audioInfoBluetoothFormat,
+          l10n.audioInfoBluetoothUnavailable,
+          detail: l10n.audioInfoBluetoothUnavailableHint,
+        ),
+      ],
+      if (_androidOutputUnreported) ...[
+        if (!_bluetoothFormatUnreported)
+          _Fact(l10n.audioInfoOutputRate, l10n.audioInfoAndroidNotReported),
         if (route?.mixerSampleRate case final rate?)
           _Fact(l10n.audioInfoSystemDefaultRate, _khz(rate)),
       ],
@@ -634,7 +727,7 @@ class _AudioFacts {
           ].join(' · '),
         )
       else if (device?.mixerBitDepth case final bits?
-          when !_bluetoothFormatUnreported)
+          when !exclusive && !_androidOutputUnreported)
         _Fact(l10n.audioInfoOutputFormat, '$bits-bit'),
       if (device != null && route?.platform == 'android')
         _Fact(

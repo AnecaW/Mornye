@@ -8,6 +8,7 @@ const String kSeedColorKey = 'seed_color';
 const String kUseAmoledKey = 'use_amoled';
 const String kThemeStyleKey = 'theme_style';
 const String kMornyeAccentKey = 'mornye_accent';
+const String kMornyeAccentMovedToBlueKey = 'mornye_accent_moved_to_blue';
 const String kUseSystemFontKey = 'use_system_font';
 const String kCustomFontIdKey = 'custom_font_id';
 const String kCustomFontNameKey = 'custom_font_name';
@@ -46,7 +47,7 @@ enum MornyeAccent { red, orange, green, teal, blue, purple, pink }
 MornyeAccent mornyeAccentFromString(String? value) =>
     MornyeAccent.values.firstWhere(
       (accent) => accent.name == value,
-      orElse: () => MornyeAccent.red,
+      orElse: () => MornyeAccent.blue,
     );
 
 /// Style used until the person picks one: Mornye on macOS, Material on
@@ -59,7 +60,7 @@ AppThemeStyle defaultAppThemeStyle() =>
 AppThemeStyle themeStyleFromString(String? value) => AppThemeStyle.values
     .firstWhere((style) => style.name == value, orElse: defaultAppThemeStyle);
 
-/// Default Spotify green color for fallback
+/// Fallback seed when dynamic color and a custom seed are unavailable.
 const int kDefaultSeedColor = 0xFF1DB954;
 
 class ThemeSettings {
@@ -84,7 +85,7 @@ class ThemeSettings {
     this.seedColorValue = kDefaultSeedColor,
     this.useAmoled = false,
     this.style = AppThemeStyle.material,
-    this.mornyeAccent = MornyeAccent.red,
+    this.mornyeAccent = MornyeAccent.blue,
     this.useSystemFont = false,
     this.customFontId = '',
     this.customFontName = '',

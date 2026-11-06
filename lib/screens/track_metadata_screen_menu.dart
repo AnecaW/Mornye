@@ -45,7 +45,25 @@ extension _TrackMetadataMenu on _TrackMetadataScreenState {
             else if (downloadItem != null)
               UnifiedLibraryItem.fromDownloadHistory(downloadItem),
           ]);
+    final uploadItems = [
+      if (_fileExists && !_isNetworkItem)
+        if (localItem != null)
+          UnifiedLibraryItem.fromLocalLibrary(localItem)
+        else if (downloadItem != null)
+          UnifiedLibraryItem.fromDownloadHistory(downloadItem),
+    ];
     return <_MetadataOption>[
+      if (canSaveNetworkOfflineSource(cleanFilePath) && desktopSongs.isEmpty)
+        _MetadataOption(
+          icon: Icons.download_for_offline_outlined,
+          label: l10n.offlineSave,
+          onTap: () => saveNetworkOffline(screenContext, ref, [
+            if (localItem != null)
+              UnifiedLibraryItem.fromLocalLibrary(localItem)
+            else if (downloadItem != null)
+              UnifiedLibraryItem.fromDownloadHistory(downloadItem),
+          ]),
+        ),
       if (_fileExists && showPlayer)
         _MetadataOption(
           icon: Icons.playlist_play,
@@ -70,6 +88,15 @@ extension _TrackMetadataMenu on _TrackMetadataScreenState {
           label: l10n.linkSendToDesktop(linkDesktopName(linkClient)),
           onTap: () => linkSendSongsToDesktop(screenContext, ref, phoneSongs),
         ),
+      if (networkUploadOffered(
+        ref.read(networkUploadConnectionsProvider).value,
+        uploadItems,
+      ))
+        _MetadataOption(
+          icon: Icons.cloud_upload_outlined,
+          label: l10n.networkUpload,
+          onTap: () => uploadToNetworkStorage(screenContext, ref, uploadItems),
+        ),
       if (albumName.trim().isNotEmpty)
         _MetadataOption(
           icon: Icons.album_outlined,
@@ -93,7 +120,7 @@ extension _TrackMetadataMenu on _TrackMetadataScreenState {
         dividerAbove: _fileExists,
         onTap: () => _copyToClipboard(screenContext, cleanFilePath),
       ),
-      if (canEditFile)
+      if (_canEditMetadataFile)
         _MetadataOption(
           icon: Icons.edit_outlined,
           label: l10n.trackEditMetadata,
@@ -173,12 +200,23 @@ extension _TrackMetadataMenu on _TrackMetadataScreenState {
           dividerAbove: _spotifyId == null && !(isrc?.isNotEmpty ?? false),
           onTap: () => _shareFile(screenContext),
         ),
+      if (downloadItem?.originFilePath != null)
+        _MetadataOption(
+          icon: Icons.cloud_off_outlined,
+          label: l10n.offlineDeleteServer,
+          destructive: true,
+          onTap: () => deleteOfflineServerCopies(screenContext, ref, [
+            UnifiedLibraryItem.fromDownloadHistory(downloadItem!),
+          ]),
+        ),
       if (remoteFile)
         remote(LinkLibraryAction.delete)
       else if (_canDeleteFile)
         _MetadataOption(
           icon: Icons.delete_outline,
-          label: _isNetworkItem
+          label: downloadItem?.originFilePath != null
+              ? l10n.offlineRemove
+              : _isNetworkItem
               ? l10n.trackMetadataDelete
               : l10n.trackRemoveFromDevice,
           destructive: true,

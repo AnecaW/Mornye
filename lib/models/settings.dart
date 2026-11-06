@@ -23,6 +23,27 @@ String playbackNormalizationModeFromJson(Object? value) =>
 double musicHapticsLevelFromJson(Object? value) =>
     value is num && value.isFinite ? value.toDouble().clamp(0, 1) : 0.5;
 
+/// Sort choices offered by the Library, in display order.
+const librarySortModes = [
+  'latest',
+  'oldest',
+  'size-desc',
+  'size-asc',
+  'a-z',
+  'z-a',
+  'artist-asc',
+  'artist-desc',
+  'album-asc',
+  'album-desc',
+  'release-newest',
+  'release-oldest',
+  'genre-asc',
+  'genre-desc',
+];
+
+String librarySortModeFromJson(Object? value) =>
+    value is String && librarySortModes.contains(value) ? value : 'latest';
+
 @JsonSerializable(explicitToJson: true)
 class AppSettings {
   static const String homeFeedProviderOff = '__off__';
@@ -117,6 +138,7 @@ class AppSettings {
   @JsonKey(fromJson: playerCoverStyleFromJson)
   final String playerCoverStyle; // 'default' (card), 'fullscreen' or ''
   final bool landscapeLyricsArtwork;
+  final bool autoHideLyricsControls;
   // Material: idle lyrics shrink the player to a slim bar, not hide it.
   final bool compactPlayer;
   final bool isFirstLaunch;
@@ -131,6 +153,8 @@ class AppSettings {
   final bool filterContributingArtistsInAlbumArtist;
   final String historyViewMode;
   final String historyFilterMode;
+  @JsonKey(fromJson: librarySortModeFromJson)
+  final String historySortMode;
 
   /// Library view opened when switching to the Library tab:
   /// 'last' (keep last used), 'all', 'albums', 'singles', or 'playlists'.
@@ -240,6 +264,9 @@ class AppSettings {
   /// Latin alphabet.
   final bool lyricsAiRomanize;
 
+  /// Align AI translations and readings to sung words instead of whole lines.
+  final bool lyricsAiWordSync;
+
   final String
   lastSeenVersion; // Last app version the user has acknowledged (e.g. '3.7.0')
 
@@ -302,6 +329,7 @@ class AppSettings {
     this.musicHapticsStrength = 0.5,
     this.playerCoverStyle = '',
     this.landscapeLyricsArtwork = false,
+    this.autoHideLyricsControls = true,
     this.compactPlayer = false,
     this.isFirstLaunch = true,
     this.checkForUpdates = true,
@@ -315,6 +343,7 @@ class AppSettings {
     this.filterContributingArtistsInAlbumArtist = false,
     this.historyViewMode = 'grid',
     this.historyFilterMode = 'all',
+    this.historySortMode = 'latest',
     this.defaultLibraryView = 'last',
     this.libraryQualityLabelMode = AppSettings.libraryQualityLabelBitDepthOnly,
     this.askQualityBeforeDownload = true,
@@ -377,6 +406,7 @@ class AppSettings {
     this.lyricsAiInstruction = '',
     this.lyricsAutoTranslate = false,
     this.lyricsAiRomanize = true,
+    this.lyricsAiWordSync = false,
     this.lastSeenVersion = '',
     this.deduplicateDownloads = true,
     this.allowQualityVariants = false,
@@ -453,6 +483,7 @@ class AppSettings {
     double? musicHapticsStrength,
     String? playerCoverStyle,
     bool? landscapeLyricsArtwork,
+    bool? autoHideLyricsControls,
     bool? compactPlayer,
     bool? isFirstLaunch,
     bool? checkForUpdates,
@@ -466,6 +497,7 @@ class AppSettings {
     bool? filterContributingArtistsInAlbumArtist,
     String? historyViewMode,
     String? historyFilterMode,
+    String? historySortMode,
     String? defaultLibraryView,
     String? libraryQualityLabelMode,
     bool? askQualityBeforeDownload,
@@ -525,6 +557,7 @@ class AppSettings {
     String? lyricsAiInstruction,
     bool? lyricsAutoTranslate,
     bool? lyricsAiRomanize,
+    bool? lyricsAiWordSync,
     String? lastSeenVersion,
     bool? deduplicateDownloads,
     bool? allowQualityVariants,
@@ -596,6 +629,8 @@ class AppSettings {
       playerCoverStyle: playerCoverStyle ?? this.playerCoverStyle,
       landscapeLyricsArtwork:
           landscapeLyricsArtwork ?? this.landscapeLyricsArtwork,
+      autoHideLyricsControls:
+          autoHideLyricsControls ?? this.autoHideLyricsControls,
       compactPlayer: compactPlayer ?? this.compactPlayer,
       isFirstLaunch: isFirstLaunch ?? this.isFirstLaunch,
       checkForUpdates: checkForUpdates ?? this.checkForUpdates,
@@ -612,6 +647,7 @@ class AppSettings {
           this.filterContributingArtistsInAlbumArtist,
       historyViewMode: historyViewMode ?? this.historyViewMode,
       historyFilterMode: historyFilterMode ?? this.historyFilterMode,
+      historySortMode: historySortMode ?? this.historySortMode,
       defaultLibraryView: defaultLibraryView ?? this.defaultLibraryView,
       libraryQualityLabelMode:
           libraryQualityLabelMode ?? this.libraryQualityLabelMode,
@@ -694,6 +730,7 @@ class AppSettings {
       lyricsAiInstruction: lyricsAiInstruction ?? this.lyricsAiInstruction,
       lyricsAutoTranslate: lyricsAutoTranslate ?? this.lyricsAutoTranslate,
       lyricsAiRomanize: lyricsAiRomanize ?? this.lyricsAiRomanize,
+      lyricsAiWordSync: lyricsAiWordSync ?? this.lyricsAiWordSync,
       lastSeenVersion: lastSeenVersion ?? this.lastSeenVersion,
       deduplicateDownloads: deduplicateDownloads ?? this.deduplicateDownloads,
       allowQualityVariants: allowQualityVariants ?? this.allowQualityVariants,

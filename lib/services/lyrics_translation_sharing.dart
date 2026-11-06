@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mornye/services/lyrics_translation.dart';
+import 'package:mornye/services/lyrics_translation_alignment.dart';
 
 final _sourceHash = RegExp(r'^[0-9a-f]{64}$');
 
@@ -29,6 +30,16 @@ class SharedLyricsTranslation {
     'language': language,
     'translations': result.translations,
     'romanizations': result.romanizations,
+    if (result.wordSynced)
+      'alignments': [
+        for (final line in result.alignments)
+          [for (final chunk in line) chunk.toJson()],
+      ],
+    if (result.romanizationWordSynced)
+      'romanizationAlignments': [
+        for (final line in result.romanizationAlignments)
+          [for (final chunk in line) chunk.toJson()],
+      ],
     'updatedMs': updatedMs,
   };
 
@@ -56,7 +67,17 @@ class SharedLyricsTranslation {
     }
     final texts = (translations as List).cast<String?>();
     final readings = (romanizations as List).cast<String?>();
-    if (texts.isEmpty ||
+    final alignments = readLyricsTranslationAlignments(
+      value['alignments'],
+      texts,
+    );
+    final romanizationAlignments = readLyricsTranslationAlignments(
+      value['romanizationAlignments'],
+      readings,
+    );
+    if (alignments == null ||
+        romanizationAlignments == null ||
+        texts.isEmpty ||
         texts.every((line) => line == null || line.isEmpty) ||
         (readings.isNotEmpty && readings.length != texts.length)) {
       return null;
@@ -67,6 +88,8 @@ class SharedLyricsTranslation {
       result: LyricsTranslationResult(
         List.unmodifiable(texts),
         romanizations: List.unmodifiable(readings),
+        alignments: alignments,
+        romanizationAlignments: romanizationAlignments,
       ),
       updatedMs: updated,
     );

@@ -15,6 +15,8 @@ export 'package:mornye/widgets/desktop/desktop_inspector.dart'
 /// App-wide desktop commands. Each one has one keyboard shortcut, mirrored in
 /// the macOS menu bar and named in the tooltip of the control that runs it.
 enum DesktopCommand {
+  openAudioFiles,
+  openAudioFolder,
   playPause,
   next,
   previous,
@@ -23,6 +25,7 @@ enum DesktopCommand {
   search,
   settings,
   back,
+  forward,
   lyrics,
   upNext,
   toggleSidebar,
@@ -83,6 +86,12 @@ SingleActivator? desktopCommandShortcut(
 ]) {
   final target = platform ?? defaultTargetPlatform;
   return switch (command) {
+    DesktopCommand.openAudioFiles => _primary(LogicalKeyboardKey.keyO, target),
+    DesktopCommand.openAudioFolder => _primary(
+      LogicalKeyboardKey.keyO,
+      target,
+      shift: true,
+    ),
     DesktopCommand.playPause => const SingleActivator(LogicalKeyboardKey.space),
     DesktopCommand.next => _primary(LogicalKeyboardKey.arrowRight, target),
     DesktopCommand.previous => _primary(LogicalKeyboardKey.arrowLeft, target),
@@ -91,6 +100,7 @@ SingleActivator? desktopCommandShortcut(
     DesktopCommand.search => _primary(LogicalKeyboardKey.keyF, target),
     DesktopCommand.settings => _primary(LogicalKeyboardKey.comma, target),
     DesktopCommand.back => _primary(LogicalKeyboardKey.bracketLeft, target),
+    DesktopCommand.forward => _primary(LogicalKeyboardKey.bracketRight, target),
     DesktopCommand.lyrics => _primary(
       LogicalKeyboardKey.keyL,
       target,
@@ -111,7 +121,7 @@ SingleActivator? desktopCommandShortcut(
             )
           : null,
     DesktopCommand.refresh => _primary(LogicalKeyboardKey.keyR, target),
-    // Music's "Switch to MiniPlayer" on macOS. Ctrl+Alt elsewhere is AltGr
+    // Use Cmd+Option+M on macOS. Ctrl+Alt elsewhere is AltGr
     // on many keyboard layouts, so Windows and Linux add Shift instead.
     DesktopCommand.miniPlayer => _primary(
       LogicalKeyboardKey.keyM,
@@ -154,6 +164,12 @@ List<SingleActivator> desktopCommandShortcuts(
     ?desktopCommandShortcut(command, target),
     if (command == DesktopCommand.fullScreen && _usesCommandKey(target))
       const SingleActivator(LogicalKeyboardKey.f11),
+    // The Back and Forward keys of Windows and Linux keyboards. Mouse side
+    // buttons arrive as pointer buttons instead (DesktopShortcuts).
+    if (command == DesktopCommand.back && !_usesCommandKey(target))
+      const SingleActivator(LogicalKeyboardKey.browserBack),
+    if (command == DesktopCommand.forward && !_usesCommandKey(target))
+      const SingleActivator(LogicalKeyboardKey.browserForward),
   ];
 }
 

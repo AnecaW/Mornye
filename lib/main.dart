@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:mornye/services/audio_file_open_service.dart';
 import 'package:crypto/crypto.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
@@ -373,9 +374,10 @@ Future<void> _startBackgroundPlayback() async {
 /// calls.
 Future<void> _initializeOrientation() async {
   await initializeAndroidTv();
-  // MainActivity.onCreate already asks phones for portrait, the request
-  // below, and the router observer repeats it on the first page. TV gets
-  // fixed landscape there and the user landscape here.
+  // MainActivity.onCreate already asks phones for portrait and lets tablets
+  // follow the device, as the request below would, and the router observer
+  // repeats it on the first page. TV gets fixed landscape there and the user
+  // landscape here.
   if (Platform.isAndroid && !isAndroidTv) return;
   await setAppOrientation();
 }
@@ -703,8 +705,9 @@ class _EagerInitializationState extends ConsumerState<EagerInitialization>
     }
     if (_desktopLibraryWatcher != null) return;
     final watcher = _desktopLibraryWatcher = DesktopLibraryWatcher(
-      scanSource: (sourceId) =>
-          ref.read(localLibraryProvider.notifier).startSourceScan(sourceId),
+      scanSource: (sourceId) => ref
+          .read(localLibraryProvider.notifier)
+          .startSourceScan(sourceId, notify: false, waitForCurrentScan: true),
       isScanning: () => ref.read(localLibraryProvider).isScanning,
     );
     _desktopLibrarySourcesSub = ref.listenManual<List<LocalLibrarySource>>(
@@ -766,7 +769,10 @@ class _EagerInitializationState extends ConsumerState<EagerInitialization>
     if (pendingSourceId != null && pendingSourceId.trim().isNotEmpty) {
       await ref
           .read(localLibraryProvider.notifier)
-          .startSourceScan(pendingSourceId.trim());
+          .startSourceScan(
+            pendingSourceId.trim(),
+            notify: prefs.getBool(localLibraryActiveScanNotifyKey) ?? true,
+          );
       return;
     }
     final lastScanned = readLocalLibraryLastScannedAt(prefs);
@@ -789,7 +795,7 @@ class _EagerInitializationState extends ConsumerState<EagerInitialization>
       }
     }
 
-    await ref.read(localLibraryProvider.notifier).scanAllSources();
+    await ref.read(localLibraryProvider.notifier).scanAllSources(notify: false);
   }
 
   Future<void> _initializeAppServices() async {
@@ -799,6 +805,7 @@ class _EagerInitializationState extends ConsumerState<EagerInitialization>
       await Future.wait([
         NotificationService().initialize(),
         ShareIntentService().initialize(),
+        AudioFileOpenService.instance.initialize(),
       ]);
     } catch (e) {
       debugPrint('Failed to initialize app services: $e');

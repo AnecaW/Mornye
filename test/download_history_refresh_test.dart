@@ -10,11 +10,16 @@ import 'package:mornye/services/history_database.dart';
 /// Rows newest first, as `getAll` orders them.
 class _StoredHistory implements HistoryDatabase {
   final rows = <DownloadHistoryItem>[];
+  int migrationReads = 0;
   int pageReads = 0;
+  int maintenanceReads = 0;
   Completer<void>? gate;
 
   @override
-  Future<bool> migrateFromSharedPreferences() async => false;
+  Future<bool> migrateFromSharedPreferences() async {
+    migrationReads++;
+    return false;
+  }
 
   @override
   Future<int> getCount() async => rows.length;
@@ -37,6 +42,14 @@ class _StoredHistory implements HistoryDatabase {
   Future<Map<String, dynamic>?> findByFilePath(String filePath) async => null;
 
   @override
+  Future<Map<String, dynamic>?> findOfflineCopy(String origin) async {
+    for (final row in rows) {
+      if (row.originFilePath == origin) return row.toJson();
+    }
+    return null;
+  }
+
+  @override
   Future<void> upsert(Map<String, dynamic> json) async {
     final item = DownloadHistoryItem.fromJson(json);
     rows
@@ -48,7 +61,10 @@ class _StoredHistory implements HistoryDatabase {
   Future<List<Map<String, dynamic>>> getEntriesWithPathsPage({
     required int limit,
     int offset = 0,
-  }) async => const [];
+  }) async {
+    maintenanceReads++;
+    return const [];
+  }
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
@@ -100,6 +116,80 @@ _loadedHistory(_StoredHistory db) async {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   SharedPreferences.setMockInitialValues({});
+
+  test(
+    'concurrent offline saves keep one row and retain its identity after a missing copy',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'history-offline-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final first = await File(
+        '${directory.path}/first.flac',
+      ).writeAsBytes([1]);
+      final second = await File(
+        '${directory.path}/second.flac',
+      ).writeAsBytes([2]);
+      final db = _StoredHistory();
+      final loaded = await _loadedHistory(db);
+      final a = _item(
+        1,
+      ).copyWith(filePath: first.path, originFilePath: 'network://nas/a.flac');
+      final b = _item(
+        2,
+      ).copyWith(filePath: second.path, originFilePath: 'network://nas/a.flac');
+      final firstSave = loaded.notifier.saveOfflineCopy(a);
+      final secondSave = loaded.notifier.saveOfflineCopy(b);
+      await firstSave;
+      await expectLater(secondSave, throwsA(isA<OfflineCopyAlreadySaved>()));
+      expect(db.rows, hasLength(1));
+      expect(db.rows.single.filePath, first.path);
+      await first.delete();
+      await loaded.notifier.saveOfflineCopy(b);
+      expect(db.rows, hasLength(1));
+      expect(db.rows.single.id, a.id);
+      expect(db.rows.single.filePath, second.path);
+    },
+  );
+
+  test('disposed startup skips the deferred history load', () async {
+    final db = _StoredHistory();
+    final container = ProviderContainer(
+      overrides: [
+        downloadHistoryProvider.overrideWith(
+          () => DownloadHistoryNotifier(database: db),
+        ),
+      ],
+    );
+    container.read(downloadHistoryProvider);
+    container.dispose();
+
+    await Future<void>.delayed(Duration.zero);
+
+    expect(db.migrationReads, 0);
+    expect(db.pageReads, 0);
+  });
+
+  testWidgets('disposal cancels pending startup history maintenance', (
+    tester,
+  ) async {
+    final db = _StoredHistory()..rows.add(_item(1));
+    final container = ProviderContainer(
+      overrides: [
+        downloadHistoryProvider.overrideWith(
+          () => DownloadHistoryNotifier(database: db),
+        ),
+      ],
+    );
+    container.read(downloadHistoryProvider);
+    await tester.pump();
+    expect(db.pageReads, 1);
+    container.dispose();
+
+    await tester.pump(const Duration(seconds: 5));
+
+    expect(db.maintenanceReads, 0);
+  });
 
   test('an unchanged refresh notifies nobody and keeps the revision', () async {
     final db = _StoredHistory()
@@ -210,6 +300,7 @@ void main() {
       albumArtist: 'Album artist',
       coverUrl: 'https://example.com/cover.jpg',
       filePath: '/music/song.flac',
+      originFilePath: 'network://nas/Artist/Album/song.flac',
       storageMode: 'saf',
       downloadTreeUri: 'content://tree/music',
       safRelativeDir: 'Artist/Album',

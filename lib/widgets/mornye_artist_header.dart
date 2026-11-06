@@ -50,10 +50,22 @@ class _MornyeArtistSurfaceState extends State<MornyeArtistSurface> {
     super.dispose();
   }
 
+  /// The sidebar's artwork scrolls with the hero it continues.
+  bool _onPageScroll(ScrollNotification notification) {
+    final metrics = notification.metrics;
+    if (notification.depth == 0 && metrics.axis == Axis.vertical) {
+      ShellNavigationService.setChromeBackdropOffset(
+        this,
+        math.max(metrics.pixels, 0),
+      );
+    }
+    return false;
+  }
+
   @override
   Widget build(BuildContext context) {
     // Desktop album and playlist pages keep the plain pane background and
-    // app accent; artist pages keep their artwork tint, as in Apple Music.
+    // app accent; artist pages keep their artwork tint.
     if (isDesktopPlatform && widget.neutralActions) return widget.child;
     final baseTheme = Theme.of(context);
     if (!identical(baseTheme, _baseTheme) ||
@@ -93,16 +105,22 @@ class _MornyeArtistSurfaceState extends State<MornyeArtistSurface> {
           final useAccent =
               !widget.neutralActions && dominant.saturation >= 0.08;
           final accent = HSLColor.fromColor(palette.primary);
+          // Keep a faint artwork tint on artist pages; album pages use the
+          // lighter neutral surface.
           final surface = useAccent
               ? accent
-                    .withSaturation((accent.saturation * 0.9).clamp(0.0, 0.88))
-                    .withLightness(0.14 + dominant.lightness * 0.05)
+                    .withSaturation((accent.saturation * 0.6).clamp(0.0, 0.6))
+                    .withLightness(0.08 + dominant.lightness * 0.03)
                     .toColor()
               : dominant
                     .withSaturation(
                       (dominant.saturation * 0.45).clamp(0.0, 0.22),
                     )
-                    .withLightness(0.24 + dominant.lightness * 0.20)
+                    .withLightness(
+                      widget.neutralActions
+                          ? 0.24 + dominant.lightness * 0.20
+                          : 0.05,
+                    )
                     .toColor();
           final route = ModalRoute.of(context);
           if (route != null) {
@@ -111,6 +129,9 @@ class _MornyeArtistSurfaceState extends State<MornyeArtistSurface> {
               route: route,
               brightness: Brightness.dark,
               surface: surface,
+              backdrop: isDesktopPlatform && !widget.neutralActions
+                  ? source
+                  : null,
             );
           }
           return CoverPaletteBuilder(
@@ -169,12 +190,18 @@ class _MornyeArtistSurfaceState extends State<MornyeArtistSurface> {
                   ),
                 );
               }
+              final page = HeaderPalette(
+                scheme: _innerTheme.colorScheme,
+                child: widget.child,
+              );
               return Theme(
                 data: _innerTheme,
-                child: HeaderPalette(
-                  scheme: _innerTheme.colorScheme,
-                  child: widget.child,
-                ),
+                child: isDesktopPlatform && !widget.neutralActions
+                    ? NotificationListener<ScrollNotification>(
+                        onNotification: _onPageScroll,
+                        child: page,
+                      )
+                    : page,
               );
             },
           );
@@ -193,6 +220,7 @@ class MornyeArtistHeader extends StatelessWidget {
     required this.artwork,
     required this.actions,
     required this.showTitle,
+    this.toolbarActions = const [],
     this.showTitleListenable,
     this.listeners,
     this.logoUrl,
@@ -202,6 +230,9 @@ class MornyeArtistHeader extends StatelessWidget {
   final String name;
   final Widget artwork;
   final List<Widget> actions;
+
+  /// Grouped in the glass capsule at the toolbar's trailing end.
+  final List<Widget> toolbarActions;
   final bool showTitle;
 
   /// Replaces [showTitle] when set; see [headerToolbarTitle].
@@ -218,7 +249,7 @@ class MornyeArtistHeader extends StatelessWidget {
   List<Widget> buildSlivers(BuildContext context) {
     final surface = Theme.of(context).colorScheme.surface;
     final back = Padding(
-      padding: EdgeInsetsDirectional.only(start: isDesktopPlatform ? 16 : 12),
+      padding: EdgeInsetsDirectional.only(start: isDesktopPlatform ? 8 : 12),
       child: Align(
         alignment: AlignmentDirectional.centerStart,
         widthFactor: 1,
@@ -273,8 +304,7 @@ class MornyeArtistHeader extends StatelessWidget {
               listenersHeight +
               (actions.isEmpty ? 0 : 94) +
               32;
-          // Desktop: the portrait fills most of the pane, as in Apple Music
-          // on the Mac.
+          // The desktop portrait fills most of the content pane.
           final expandedHeight = isDesktopPlatform
               ? math.max(
                   contentHeight + 160,
@@ -289,23 +319,32 @@ class MornyeArtistHeader extends StatelessWidget {
             surfaceTintColor: Colors.transparent,
             leadingWidth: 64,
             leading: back,
-            title: headerToolbarTitle(
-              showTitleListenable,
-              showTitle,
-              (showTitle) => AnimatedOpacity(
-                opacity: showTitle ? 1 : 0,
-                duration: const Duration(milliseconds: 180),
-                child: Text(
-                  name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 17,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
+            actions: toolbarActions.isEmpty
+                ? null
+                : [MornyeActionCapsule(children: toolbarActions)],
+            actionsPadding: EdgeInsetsDirectional.only(
+              end: isDesktopPlatform ? 8 : 12,
             ),
+            // The desktop hero already displays the artist's name.
+            title: isDesktopPlatform
+                ? null
+                : headerToolbarTitle(
+                    showTitleListenable,
+                    showTitle,
+                    (showTitle) => AnimatedOpacity(
+                      opacity: showTitle ? 1 : 0,
+                      duration: const Duration(milliseconds: 180),
+                      child: Text(
+                        name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
             flexibleSpace: FlexibleSpaceBar(
               collapseMode: CollapseMode.pin,
               stretchModes: const [StretchMode.zoomBackground],

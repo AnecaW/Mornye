@@ -22,6 +22,8 @@ void main() {
     late bool failResume;
     late bool fatal;
     late bool volumeBlocked;
+    Map<String, dynamic>? statusReply;
+    Completer<Map<String, dynamic>>? pendingStatus;
     Map<String, dynamic>? hardwareVolume;
     late String transport;
     late Map<dynamic, dynamic> prepareArguments;
@@ -46,6 +48,8 @@ void main() {
       failResume = false;
       fatal = false;
       volumeBlocked = false;
+      statusReply = null;
+      pendingStatus = null;
       hardwareVolume = null;
       transport = 'pcm';
       prepareArguments = {};
@@ -86,6 +90,10 @@ void main() {
             };
           case 'position':
             return position;
+          case 'status':
+            return pendingStatus?.future ??
+                statusReply ??
+                {'token': token, 'reason': 'active'};
           case 'seek':
             position = (call.arguments as Map)['position'] as int;
           case 'resume':
@@ -118,6 +126,25 @@ void main() {
         expect(native.calls.where((c) => c.$2 == 'setSourceUrl'), isEmpty);
         await deck.setNetworkSource('https://stream.test/new.flac');
         expect(native.sources['usb-test'], 'https://stream.test/new.flac');
+      },
+    );
+
+    test(
+      'native status restores a stale display without restarting audio',
+      () async {
+        await deck.setFileSource(
+          '/one.flac',
+          preferBitPerfect: true,
+          directUsb: true,
+        );
+        await deck.resume();
+        usbAudioStatus.value = const UsbAudioStatus();
+        final before = List<String>.of(usbCalls);
+        await deck.refreshNativeStatus();
+        expect(usbAudioStatus.value.reason, 'active');
+        expect(usbAudioStatus.value.driver, 'usb_direct');
+        expect(usbCalls, [...before, 'status']);
+        expect(deck.state, PlaybackDeckState.playing);
       },
     );
 
@@ -164,6 +191,28 @@ void main() {
         expect(await oldPosition, isNull);
       },
     );
+    test(
+      'native readiness does not claim active bit-perfect playback',
+      () async {
+        await deck.setFileSource('/one.flac', preferBitPerfect: true);
+        statusReply = {'token': token, 'reason': 'ready'};
+        await deck.refreshNativeStatus();
+        expect(usbAudioStatus.value.reason, 'ready');
+        expect(usbCalls, isNot(contains('resume')));
+      },
+    );
+
+    test('a late status reply cannot change the new track status', () async {
+      await deck.setFileSource('/one.flac', preferBitPerfect: true);
+      final oldToken = token;
+      pendingStatus = Completer<Map<String, dynamic>>();
+      final refreshing = deck.refreshNativeStatus();
+      await _until(() => usbCalls.contains('status'));
+      await deck.setFileSource('/two.flac', preferBitPerfect: true);
+      pendingStatus!.complete({'token': oldToken, 'reason': 'active'});
+      await refreshing;
+      expect(usbAudioStatus.value.reason, 'ready');
+    });
 
     test('direct driver and DoP are explicit and passed to native', () async {
       await deck.setFileSource(
@@ -496,4 +545,78 @@ void main() {
       await deck.dispose();
     }
   });
+
+  test('slow ordinary position queries do not overlap timer ticks', () async {
+    final deck = AudioplayersPlaybackDeck(playerId: 'slow-ticks');
+    final reply = Completer<int?>();
+    try {
+      deck.startPositionUpdates(const Duration(milliseconds: 10));
+      await deck.setFileSource('/ticks.flac');
+      await deck.resume();
+      await Future<void>.delayed(Duration.zero);
+      native.calls.clear();
+      native.positionReplies['slow-ticks'] = reply;
+      int reads() => native.calls
+          .where(
+            (call) =>
+                call.$1 == 'slow-ticks' && call.$2 == 'getCurrentPosition',
+          )
+          .length;
+      await _until(() => reads() != 0);
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      expect(reads(), 1);
+      native.positionReplies.remove('slow-ticks');
+      reply.complete(1000);
+      await _until(() => reads() > 1);
+      await deck.pause();
+    } finally {
+      native.positionReplies.remove('slow-ticks');
+      if (!reply.isCompleted) reply.complete(null);
+      await deck.dispose();
+    }
+  });
+
+  for (final dispose in [false, true]) {
+    test('a late position reply is ignored after the updater is '
+        '${dispose ? 'disposed' : 'replaced'}', () async {
+      const id = 'retired-ticks';
+      final deck = AudioplayersPlaybackDeck(playerId: id);
+      final reply = Completer<int?>();
+      var disposed = false;
+      final positions = <Duration>[];
+      final subscription = deck.onPositionChanged.listen(positions.add);
+      try {
+        deck.startPositionUpdates(const Duration(milliseconds: 10));
+        await deck.setFileSource('/ticks.flac');
+        await deck.resume();
+        await Future<void>.delayed(Duration.zero);
+        native.calls.clear();
+        native.positionReplies[id] = reply;
+        await _until(
+          () => native.calls.any(
+            (call) => call.$1 == id && call.$2 == 'getCurrentPosition',
+          ),
+        );
+        native.positionReplies.remove(id);
+        if (dispose) {
+          await deck.dispose();
+          disposed = true;
+        } else {
+          deck.startPositionUpdates(
+            const Duration(milliseconds: 10),
+            wanted: () => false,
+          );
+        }
+        positions.clear();
+        reply.complete(1000);
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+        expect(positions, isEmpty);
+      } finally {
+        native.positionReplies.remove(id);
+        if (!reply.isCompleted) reply.complete(null);
+        if (!disposed) await deck.dispose();
+        await subscription.cancel();
+      }
+    });
+  }
 }

@@ -7,7 +7,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mornye/controllers/player_metadata_controller.dart';
 import 'package:mornye/l10n/app_localizations.dart';
+import 'package:mornye/models/equalizer_settings.dart';
 import 'package:mornye/services/audio_route_info.dart';
+import 'package:mornye/services/music_playback_deck.dart';
+import 'package:mornye/services/playback_deck.dart';
+import 'package:mornye/services/playback_equalizer.dart';
 import 'package:mornye/theme/mornye_theme.dart';
 import 'package:mornye/widgets/audio_info_sheet.dart';
 
@@ -17,6 +21,11 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   tearDown(() {
+    usbAudioStatus.value = const UsbAudioStatus();
+    playbackExclusiveStatus.value = ExclusiveOutputStatus.pending;
+    playbackExclusiveOutput.value = false;
+    playbackOutputVolume.value = 1;
+    playbackEqualizer.value = const EqualizerSettings();
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(_route, null);
   });
@@ -40,6 +49,142 @@ void main() {
     expect(info.spatialAvailable, isFalse);
     expect(info.stream, isNull);
   });
+
+  test('exclusive access alone does not verify unchanged samples', () {
+    expect(
+      audioBitPerfectStatus(directActive: false, exclusiveActive: true),
+      AudioBitPerfectStatus.unverified,
+    );
+    for (final (gain, tempo, volume) in [
+      (0.8, 1.0, 1.0),
+      (1.0, 1.01, 1.0),
+      (1.0, 1.0, 0.5),
+      (1.0, 1.0, 0.0),
+    ]) {
+      expect(
+        audioBitPerfectStatus(
+          directActive: false,
+          exclusiveActive: true,
+          normalizationGain: gain,
+          tempo: tempo,
+          softwareVolume: volume,
+        ),
+        AudioBitPerfectStatus.processed,
+      );
+    }
+  });
+
+  test('verified native direct output bypasses software processing', () {
+    expect(
+      audioBitPerfectStatus(
+        directActive: true,
+        exclusiveActive: false,
+        normalizationGain: 0.8,
+        tempo: 1.01,
+        softwareVolume: 0.5,
+      ),
+      AudioBitPerfectStatus.verified,
+    );
+    expect(
+      audioBitPerfectStatus(directActive: false, exclusiveActive: false),
+      AudioBitPerfectStatus.systemMixed,
+    );
+  });
+
+  for (final mornye in [false, true]) {
+    testWidgets(
+      'exclusive path and bit-perfect facts stay consistent (Mornye=$mornye)',
+      (tester) async {
+        playbackExclusiveOutput.value = true;
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(
+              _route,
+              (call) async => {
+                'platform': 'windows',
+                'mixerSampleRate': 48000,
+                'device': {
+                  'type': 'usb',
+                  'name': 'Example DAC',
+                  'mixer': {'sampleRate': 48000, 'bitDepth': 24},
+                },
+              },
+            );
+        final metadata = PlayerMetadataController();
+        addTearDown(metadata.dispose);
+        await metadata.load(
+          const MediaItem(
+            id: 'track',
+            title: 'Track',
+            extras: {
+              'source': 'https://example.test/track.flac',
+              'format': 'flac',
+              'bit_depth': 16,
+              'sample_rate': 44100,
+            },
+          ),
+        );
+        await tester.pumpWidget(
+          ProviderScope(
+            child: MaterialApp(
+              theme: mornye ? MornyeTheme.build(Brightness.dark) : ThemeData(),
+              localizationsDelegates: AppLocalizations.localizationsDelegates,
+              supportedLocales: AppLocalizations.supportedLocales,
+              home: Builder(
+                builder: (context) => TextButton(
+                  onPressed: () =>
+                      showAudioInfoSheet(context, metadata: metadata),
+                  child: const Text('open'),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.tap(find.text('open'));
+        await tester.pumpAndSettle();
+
+        // Requesting exclusive mode is not confirmation that it opened.
+        expect(find.text('System mixer'), findsOneWidget);
+        expect(find.text('No, mixed by the system'), findsOneWidget);
+
+        playbackExclusiveStatus.value = ExclusiveOutputStatus.active;
+        await tester.pumpAndSettle();
+        expect(
+          find.text('Exclusive output, bypasses the system mixer'),
+          findsOneWidget,
+        );
+        expect(find.text('Not verified'), findsOneWidget);
+        expect(find.text('No, mixed by the system'), findsNothing);
+        expect(find.text('Yes, unaltered samples'), findsNothing);
+        expect(find.text('44.1 kHz → 48 kHz'), findsNothing);
+        expect(find.text('Output sample rate'), findsNothing);
+        expect(find.text('Output format'), findsNothing);
+
+        playbackOutputVolume.value = 0.5;
+        await tester.pumpAndSettle();
+        expect(find.text('No, audio processing is active'), findsOneWidget);
+        expect(find.text('Not verified'), findsNothing);
+
+        playbackOutputVolume.value = 1;
+        await tester.pumpAndSettle();
+        expect(find.text('Not verified'), findsOneWidget);
+
+        // A configured EQ is not telemetry proving which filters applied.
+        playbackEqualizer.value = const EqualizerSettings(enabled: true);
+        await tester.pumpAndSettle();
+        expect(find.text('Not verified'), findsOneWidget);
+        expect(find.text('Yes, unaltered samples'), findsNothing);
+
+        playbackExclusiveStatus.value = ExclusiveOutputStatus.unavailable;
+        await tester.pumpAndSettle();
+        expect(find.text('System mixer'), findsOneWidget);
+        expect(find.text('No, mixed by the system'), findsOneWidget);
+        expect(find.text('Not verified'), findsNothing);
+        expect(find.text('44.1 kHz → 48 kHz'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
 
   test('Android Bluetooth PCM properties do not report codec transport', () {
     for (final type in ['bluetooth', 'bluetooth_le', 'hearing_aid']) {
@@ -131,7 +276,12 @@ void main() {
           find.text('Bluetooth codec format'),
           200,
         );
-        expect(find.text('Not reported by Android'), findsNWidgets(2));
+        expect(find.text('Not reported by Android'), findsOneWidget);
+        expect(find.text('Unavailable to this app'), findsOneWidget);
+        expect(
+          find.textContaining('Android may show the active codec'),
+          findsOneWidget,
+        );
         expect(find.text('44.1 kHz → 48 kHz'), findsNothing);
         expect(find.text('44.1 kHz → 96 kHz'), findsNothing);
         expect(find.text('Output sample rate'), findsNothing);
@@ -204,9 +354,7 @@ void main() {
     expect(find.text('Phone speaker · Example phone'), findsOneWidget);
   });
 
-  testWidgets('shows source, signal and resampling to the output device', (
-    tester,
-  ) async {
+  testWidgets('Android defaults do not claim DAC resampling', (tester) async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(
           _route,
@@ -258,13 +406,69 @@ void main() {
     expect(find.text('Up to 48 kHz (Nyquist)'), findsOneWidget);
     expect(find.text('144 dB'), findsOneWidget);
     expect(find.text('No ReplayGain tags'), findsOneWidget);
-    await tester.scrollUntilVisible(find.text('96 kHz → 48 kHz'), 200);
-    expect(find.text('96 kHz → 48 kHz'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('Resampling'), 200);
+    expect(find.text('96 kHz → 48 kHz'), findsNothing);
     expect(find.text('Yes, unaltered samples'), findsNothing);
     await tester.scrollUntilVisible(find.text('USB audio · Example DAC'), 200);
+    expect(find.text('System default sample rate'), findsOneWidget);
     await tester.scrollUntilVisible(find.text('2.0 ms · 96 frames'), 200);
     expect(find.text('2.0 ms · 96 frames'), findsOneWidget);
   });
+
+  for (final mornye in [false, true]) {
+    testWidgets('USB changes refresh an open audio sheet (Mornye=$mornye)', (
+      tester,
+    ) async {
+      var device = 'First DAC';
+      var reads = 0;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(_route, (call) async {
+            reads++;
+            return {
+              'platform': 'android',
+              'device': {'type': 'usb', 'name': device},
+            };
+          });
+      final metadata = PlayerMetadataController();
+      addTearDown(metadata.dispose);
+      await metadata.load(
+        const MediaItem(
+          id: 'track',
+          title: 'Track',
+          extras: {
+            'source': 'https://example.test/track.flac',
+            'format': 'flac',
+          },
+        ),
+      );
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(
+            theme: mornye ? MornyeTheme.build(Brightness.dark) : ThemeData(),
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            home: Builder(
+              builder: (context) => TextButton(
+                onPressed: () =>
+                    showAudioInfoSheet(context, metadata: metadata),
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      final before = reads;
+      device = 'Second DAC';
+      usbAudioStatus.value = const UsbAudioStatus(reason: 'route_changed');
+      await tester.pumpAndSettle();
+      expect(reads, greaterThan(before));
+      await tester.scrollUntilVisible(find.text('USB audio · Second DAC'), 200);
+      expect(find.text('USB audio · First DAC'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    });
+  }
 
   testWidgets('a song from a paired device shows where it plays from', (
     tester,
@@ -356,10 +560,12 @@ void main() {
         expect(reads, 1);
         expect(find.text('Reading tags...'), findsOneWidget);
         expect(find.text('No ReplayGain tags'), findsNothing);
+        final initialQuality = metadata.qualityLabel!;
+        expect(find.text(initialQuality), findsOneWidget);
 
         tags.complete({
           'format': 'opus',
-          'bitrate': 380,
+          'bitrate': 238,
           'replaygain_track_gain': '5.00 dB',
           'replaygain_track_peak': '0.326353',
           'replaygain_album_gain': '5.00 dB',
@@ -368,6 +574,9 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.text('No ReplayGain tags'), findsNothing);
         expect(find.text('Reading tags...'), findsNothing);
+        expect(find.text(initialQuality), findsNothing);
+        expect(find.text(metadata.qualityLabel!), findsOneWidget);
+        expect(find.text('238 kbps'), findsOneWidget);
         expect(find.text('+5.00 dB'), findsNWidgets(2));
         expect(find.textContaining('0.326353'), findsNWidgets(2));
 

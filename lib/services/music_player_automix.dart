@@ -1,14 +1,23 @@
 part of 'music_player_service.dart';
 
-/// Creates the clocks that time AutoMix fades, audio-progress checks and the
-/// position ticks that feed them. Only tests replace it, to run transitions
-/// on a fake clock.
+/// Creates the clocks that time AutoMix fades, its start, audio-progress
+/// checks and the position ticks that feed them. Only tests replace it, to
+/// run transitions on a fake clock.
 Stopwatch Function() autoMixStopwatch = Stopwatch.new;
 
 /// Owns only the extra deck and transition work. The ordinary player remains
 /// the sole transport when AutoMix is disabled or a transition cannot be made.
 class _MusicAutoMix {
   _MusicAutoMix(this.handler, this.analyzer, this.renderer);
+
+  /// How long before the end of a song its mix is prepared. A plan starts
+  /// within the last minute (the longest fade), which leaves preparation
+  /// at least 90 s, and a song skipped earlier prepares nothing.
+  static const lead = Duration(seconds: 150);
+
+  /// How far a start computed from a new position may move before the
+  /// start timer is set again.
+  static const _startTolerance = Duration(milliseconds: 20);
 
   final MusicPlayerHandler handler;
   final AutoMixAnalyzer analyzer;
@@ -34,7 +43,9 @@ class _MusicAutoMix {
   bool _starting = false;
   double _incomingVolume = 1;
   double rate = 1;
+  final Stopwatch _clock = autoMixStopwatch()..start();
   Timer? _startTimer;
+  Duration _startDue = Duration.zero;
   Timer? _fadeTimer;
   Future<void> _fadeWrite = Future<void>.value();
   bool _writing = false;
@@ -42,6 +53,13 @@ class _MusicAutoMix {
   void _setStatus(AutoMixStatus status) {
     if (identical(musicPlayerRuntime.handler, handler)) {
       autoMixStatus.value = status;
+    }
+  }
+
+  void _setPreparing(bool preparing) {
+    _preparing = preparing;
+    if (identical(musicPlayerRuntime.handler, handler)) {
+      autoMixPreparing.value = preparing;
     }
   }
 
@@ -55,6 +73,7 @@ class _MusicAutoMix {
   };
 
   bool get _canMix =>
+      !handler._cast.active &&
       handler._settings.autoMix &&
       !handler._settings.usbBitPerfect &&
       // A second deck cannot open a device held in exclusive mode.
@@ -77,10 +96,12 @@ class _MusicAutoMix {
       _playGeneration == handler._playRequestGeneration &&
       _queueRevision == handler._sessionQueueRevision;
 
-  /// Whether [onPosition] would act now: a planned mix times its start from
-  /// every position, and a song not yet planned starts its analysis. Keep
-  /// in step with the early returns of [onPosition].
-  bool get wantsPosition {
+  /// Whether [onPosition] would act on a position near [estimate]: a planned
+  /// mix times its start from every position, and a song not yet planned
+  /// starts its analysis once [lead] remains. A second of slack keeps the
+  /// tick that crosses [lead] read. Keep in step with the early returns of
+  /// [onPosition].
+  bool wantsPosition(Duration estimate) {
     if (!_canMix || _cancelling > 0 || _starting || _fadeTimer != null) {
       return false;
     }
@@ -89,6 +110,7 @@ class _MusicAutoMix {
     final duration = handler.mediaItem.value?.duration;
     return duration != null &&
         duration >= const Duration(seconds: 20) &&
+        duration - estimate <= lead + const Duration(seconds: 1) &&
         _attempt !=
             '${handler._playRequestGeneration}:${handler._sessionQueueRevision}';
   }
@@ -102,16 +124,28 @@ class _MusicAutoMix {
         return;
       }
       final delay = plan.start - position;
+      final wait = delay.isNegative ? Duration.zero : delay;
+      final due = _clock.elapsed + wait;
+      // Positions follow the clock, so most ticks confirm the timer set.
+      if ((_startTimer?.isActive ?? false) &&
+          (due - _startDue).abs() <= _startTolerance) {
+        return;
+      }
       _startTimer?.cancel();
+      _startDue = due;
       final generation = _generation;
-      _startTimer = Timer(delay.isNegative ? Duration.zero : delay, () {
+      _startTimer = Timer(wait, () {
         if (_current(generation)) unawaited(_start(generation));
       });
       return;
     }
     if (_preparing) return;
     final duration = handler.mediaItem.value?.duration;
-    if (duration == null || duration < const Duration(seconds: 20)) return;
+    if (duration == null ||
+        duration < const Duration(seconds: 20) ||
+        duration - position > lead) {
+      return;
+    }
     final key =
         '${handler._playRequestGeneration}:${handler._sessionQueueRevision}';
     if (_attempt == key) return;
@@ -120,7 +154,7 @@ class _MusicAutoMix {
   }
 
   Future<void> _prepare(Duration duration) async {
-    _preparing = true;
+    _setPreparing(true);
     final generation = ++_generation;
     _playGeneration = handler._playRequestGeneration;
     _queueRevision = handler._sessionQueueRevision;
@@ -141,10 +175,10 @@ class _MusicAutoMix {
       final current = handler._media[index];
       final next = handler._media[nextIndex];
       if (current.isNetwork || next.isNetwork) return;
-      final currentPath = await handler._resolveSource(current);
+      final currentPath = await handler._formats.resolve(current);
       if (currentPath == null || !_current(generation)) return;
       pins.add(currentPath);
-      final nextPath = await handler._resolveSource(next);
+      final nextPath = await handler._formats.resolve(next);
       if (nextPath == null || !_current(generation)) return;
       // A song a paired phone is still sending (or sending again, its
       // received copy gone) streams from a URL, which neither the mix deck
@@ -246,7 +280,7 @@ class _MusicAutoMix {
       if (effectDeck != null) await handler._disposeDeck(effectDeck);
       if (effectTail != null) await effectTail.dispose();
       _preparationPins.remove(generation);
-      if (generation == _generation) _preparing = false;
+      if (generation == _generation) _setPreparing(false);
       await handler._cleanupPendingResolvedPaths();
     }
   }
@@ -385,10 +419,15 @@ class _MusicAutoMix {
       handler._playRequestGeneration++;
       handler._recordPlayHistory(nextIndex);
       handler._normalizationVolume = _incomingVolume;
-      handler._activeResolvedPath = next.isContentUri ? _nextPath : null;
+      handler._activeResolvedPath =
+          next.isContentUri || handler._formats.owns(_nextPath)
+          ? _nextPath
+          : null;
       handler._pendingRestorePosition = null;
+      handler._failures.started(next, _nextPath);
       rate = plan.rate;
       handler._runtime.personalization.begin(_learningTrack(next));
+      handler._playbackInstance++;
       handler.mediaItem.add(
         handler
             ._toMediaItem(
@@ -680,7 +719,7 @@ class _MusicAutoMix {
     _next = null;
     _nextPath = null;
     _nextDuration = null;
-    _preparing = false;
+    _setPreparing(false);
     _starting = false;
     _attempt = null;
     try {

@@ -61,7 +61,7 @@ class _LiveBroadcastTimelineState extends State<LiveBroadcastTimeline>
         widget.playing &&
         !widget.loading &&
         !MediaQuery.disableAnimationsOf(context) &&
-        TickerMode.of(context);
+        TickerMode.valuesOf(context).enabled;
     if (animate && !_pulse.isAnimating) {
       _pulse.repeat(reverse: true);
     } else if (!animate) {
@@ -96,6 +96,7 @@ class _LiveBroadcastTimelineState extends State<LiveBroadcastTimeline>
         child: AnimatedBuilder(
           animation: _pulse,
           builder: (context, _) => Row(
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Expanded(child: _line(color, leading: true)),
               Flexible(
@@ -105,7 +106,9 @@ class _LiveBroadcastTimelineState extends State<LiveBroadcastTimeline>
                     horizontal: widget.compact ? 10 : 18,
                   ),
                   child: Row(
+                    key: const ValueKey('live-broadcast-status'),
                     mainAxisSize: MainAxisSize.min,
+                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       if (widget.loading)
                         AppLoadingIndicator(

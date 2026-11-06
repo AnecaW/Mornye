@@ -301,6 +301,9 @@ Future<bool> fileExists(String? path) async {
   if (path.startsWith('network://')) return true;
   final realPath = isCueVirtualPath(path) ? stripCueTrackSuffix(path) : path;
   if (isContentUri(realPath)) {
+    // A phone's content URI can arrive with synced statistics; a computer has
+    // no way to open one.
+    if (isDesktopPlatform) return false;
     return PlatformBridge.safExists(realPath);
   }
   return File(realPath).exists();
@@ -387,11 +390,15 @@ Future<bool> deleteFile(
       final deleted = await PlatformBridge.safDelete(path);
       confirmedAbsent = deleted || !await PlatformBridge.safExists(path);
     } else {
-      final file = File(path);
-      if (await file.exists()) {
-        await file.delete();
-      }
-      confirmedAbsent = !await file.exists();
+      final source = path;
+      return await (deletionEvents ?? SourceDeletionEvents.instance).delete(
+        source,
+        () async {
+          final file = File(source);
+          if (await file.exists()) await file.delete();
+          return !await file.exists();
+        },
+      );
     }
   } catch (_) {
     return false;

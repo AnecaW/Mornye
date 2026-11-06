@@ -22,6 +22,7 @@ abstract final class HistorySchema {
         album_artist TEXT,
         cover_url TEXT,
         file_path TEXT NOT NULL,
+        origin_file_path TEXT,
         storage_mode TEXT,
         download_tree_uri TEXT,
         saf_relative_dir TEXT,
@@ -68,18 +69,10 @@ abstract final class HistorySchema {
 
     await db.execute('CREATE INDEX idx_spotify_id ON history(spotify_id)');
     await db.execute('CREATE INDEX idx_isrc ON history(isrc)');
-    await db.execute(
-      'CREATE INDEX idx_downloaded_at ON history(downloaded_at DESC)',
-    );
-    await db.execute(
-      'CREATE INDEX idx_album ON history(album_name, album_artist)',
-    );
-    await db.execute(
-      'CREATE INDEX IF NOT EXISTS idx_history_track_artist ON history(track_name, artist_name)',
-    );
     await _createNormalizedIndexes(db);
     await _createQueueIndexes(db);
     await _createPathKeyTable(db);
+    await _createOriginIndex(db);
     final searchFtsAvailable = await createSearchFts(db);
 
     _log.i('Database schema created with indexes');
@@ -110,11 +103,6 @@ abstract final class HistorySchema {
     if (oldVersion < 5) {
       await addColumn('total_tracks', 'INTEGER');
       await addColumn('total_discs', 'INTEGER');
-    }
-    if (oldVersion < 6) {
-      await db.execute(
-        'CREATE INDEX IF NOT EXISTS idx_history_track_artist ON history(track_name, artist_name)',
-      );
     }
     if (oldVersion < 7) {
       await _createPathKeyTable(db);
@@ -164,7 +152,33 @@ abstract final class HistorySchema {
       await sqlite.backfillPathKeys(db, 'history', 'history_path_keys');
       _log.i('Updated history path keys with provider document identities');
     }
+    if (oldVersion < 17) {
+      await sqlite.backfillPathKeys(db, 'history', 'history_path_keys');
+    }
+    if (oldVersion < 16) {
+      // Idempotent: an older build lowers user_version without a downgrade
+      // step, and its native writer recreates the dropped indexes.
+      for (final index in unusedIndexes) {
+        await db.execute('DROP INDEX IF EXISTS $index');
+      }
+      await _createQueueIndexes(db);
+    }
+    if (oldVersion < 18) {
+      await addColumn('origin_file_path', 'TEXT');
+      await _createOriginIndex(db);
+    }
   }
+
+  static Future<void> _createOriginIndex(DatabaseExecutor db) => db.execute(
+    'CREATE INDEX IF NOT EXISTS idx_history_origin ON history(origin_file_path)',
+  );
+
+  /// No query seeks or orders by these. v16 and the native writer drop them.
+  static const unusedIndexes = [
+    'idx_downloaded_at',
+    'idx_album',
+    'idx_history_track_artist',
+  ];
 
   static Future<bool> createSearchFts(DatabaseExecutor db) {
     return sqlite.createTrigramFtsIndex(
@@ -208,6 +222,9 @@ abstract final class HistorySchema {
     );
     await db.execute(
       'CREATE INDEX IF NOT EXISTS idx_history_queue_release ON history(sort_release, sort_track, id)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_history_sort_album_artist ON history(sort_album_artist)',
     );
   }
 

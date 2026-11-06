@@ -1,4 +1,4 @@
-import 'dart:ui' show ImageFilter;
+import 'dart:ui' show ImageFilter, lerpDouble;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -6,6 +6,7 @@ import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:mornye/providers/runtime_profile_provider.dart';
 import 'package:mornye/theme/mornye_theme.dart';
 import 'package:mornye/utils/desktop_platform.dart';
+import 'package:mornye/widgets/mornye_glass_press.dart';
 import 'package:mornye/widgets/mornye_selection_pill.dart';
 import 'package:mornye/widgets/mornye_liquid_backdrop.dart';
 import 'package:mornye/widgets/mornye_squircle_border.dart';
@@ -18,6 +19,7 @@ class MornyeSegmentedControl extends ConsumerWidget {
     required this.selectedIndex,
     required this.onChanged,
     this.samplesBackdrop = true,
+    this.compact = false,
   });
 
   final List<String> labels;
@@ -27,45 +29,52 @@ class MornyeSegmentedControl extends ConsumerWidget {
   /// See [MornyeGlass.samplesBackdrop].
   final bool samplesBackdrop;
 
+  /// A pointer-sized control for a desktop toolbar, 36 tall.
+  final bool compact;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
+    final scaler = MediaQuery.textScalerOf(context);
     // At least 56 so each segment keeps a 48 dp target inside the pill inset.
-    final height = (MediaQuery.textScalerOf(context).scale(15) + 36).clamp(
-      56.0,
-      double.infinity,
-    );
+    final height = compact
+        ? scaler.scale(36)
+        : (scaler.scale(15) + 36).clamp(56.0, double.infinity);
     final contrastBlocked = ref.watch(
       mornyeGlassContrastBlockedProvider(MediaQuery.highContrastOf(context)),
     );
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
+      padding: EdgeInsets.symmetric(vertical: compact ? 0 : 8),
       child: SizedBox(
         height: height,
-        child: MornyeGlass.navigation(
-          blurEnabled: ref.watch(mornyeBlurEnabledProvider),
+        child: MornyeGlassPress(
           radius: height / 2,
-          samplesBackdrop: samplesBackdrop,
-          child: MornyeSelectionPill(
-            contrastBlocked: contrastBlocked,
-            // The held lens follows a finger. A click never holds it, and over
-            // an opaque toolbar it only refracts a flat fill, so desktop skips
-            // it.
-            liquidInteraction:
-                !isDesktopPlatform &&
-                ref.watch(mornyeLiquidGlassProvider) &&
-                MornyeTheme.glassClarityOf(context) > 0.2,
-            labels: labels,
-            selectedIndex: selectedIndex,
-            onChanged: onChanged,
-            itemBuilder: (context, index, selected) => Center(
-              child: Text(
-                labels[index],
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: theme.colorScheme.onSurface,
-                  fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+          child: MornyeGlass.navigation(
+            blurEnabled: ref.watch(mornyeBlurEnabledProvider),
+            radius: height / 2,
+            samplesBackdrop: samplesBackdrop,
+            child: MornyeSelectionPill(
+              contrastBlocked: contrastBlocked,
+              // The held lens follows a finger. A click never holds it, and
+              // over an opaque toolbar it only refracts a flat fill, so desktop
+              // skips it.
+              liquidInteraction:
+                  !isDesktopPlatform &&
+                  ref.watch(mornyeLiquidGlassProvider) &&
+                  MornyeTheme.glassClarityOf(context) > 0.2,
+              labels: labels,
+              selectedIndex: selectedIndex,
+              onChanged: onChanged,
+              padding: EdgeInsets.all(compact ? 3 : 4),
+              itemBuilder: (context, index, selected) => Center(
+                child: Text(
+                  labels[index],
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurface,
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                  ),
                 ),
               ),
             ),
@@ -534,7 +543,11 @@ class MornyeFilterChip extends StatelessWidget {
         ),
       ),
     );
-    return ClipRRect(borderRadius: BorderRadius.circular(24), child: content);
+    return MornyeGlassPress(
+      radius: 24,
+      enabled: onTap != null,
+      child: ClipRRect(borderRadius: BorderRadius.circular(24), child: content),
+    );
   }
 }
 
@@ -569,7 +582,11 @@ class MornyeTabBar extends ConsumerWidget {
     this.liquidGlass = true,
     this.hiddenIconIndices = const {},
     this.contentOpacity = const AlwaysStoppedAnimation(1),
+    this.fold = const AlwaysStoppedAnimation(0),
   });
+
+  /// Side of the circle the glass folds into.
+  static const double foldedSize = 52;
 
   final List<NavigationDestination> destinations;
   final int selectedIndex;
@@ -580,6 +597,10 @@ class MornyeTabBar extends ConsumerWidget {
 
   /// Fade only the foreground so the backdrop can keep sampling the page.
   final Animation<double> contentOpacity;
+
+  /// From 0, the full bar, to 1, the glass narrowed into a leading circle of
+  /// [foldedSize]. It may overshoot, which makes the shape wobble as it lands.
+  final Animation<double> fold;
 
   /// The floating layout also supplies the coordinates for collapsing icons.
   static bool usesLiquidGlass(
@@ -630,12 +651,36 @@ class MornyeTabBar extends ConsumerWidget {
               child: Transform.scale(
                 scaleX: 1 + 0.025 * progress,
                 scaleY: 1 + 0.06 * progress,
-                child: MornyeGlass.navigation(
-                  blurEnabled: blurEnabled,
-                  strongTint: true,
-                  tintOpacity: MornyeTheme.navigationOpacity(context),
-                  refractionDepth: 0.45 + 0.15 * progress,
-                  child: const SizedBox.expand(),
+                child: LayoutBuilder(
+                  builder: (context, constraints) => AnimatedBuilder(
+                    animation: fold,
+                    builder: (context, _) {
+                      final amount = fold.value;
+                      return Align(
+                        alignment: AlignmentDirectional.bottomStart,
+                        child: SizedBox(
+                          width: lerpDouble(
+                            constraints.maxWidth,
+                            foldedSize,
+                            amount,
+                          ),
+                          height: lerpDouble(
+                            constraints.maxHeight,
+                            foldedSize,
+                            amount,
+                          ),
+                          child: MornyeGlass.navigation(
+                            blurEnabled: blurEnabled,
+                            strongTint: true,
+                            tintOpacity: MornyeTheme.navigationOpacity(context),
+                            refractionDepth: 0.45 + 0.15 * progress,
+                            radius: lerpDouble(32, foldedSize / 2, amount)!,
+                            child: const SizedBox.expand(),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
                 ),
               ),
             ),

@@ -346,6 +346,21 @@ class ListeningStatisticsStore {
     return readListeningSummary(db, start, end);
   }
 
+  Future<List<ListeningTotal>> loadReplayableTracks(
+    DateTime start,
+    DateTime end, {
+    required int limit,
+    int offset = 0,
+    bool latestFirst = false,
+  }) async => readReplayableListeningTracks(
+    await _open(),
+    start,
+    end,
+    limit: limit,
+    offset: offset,
+    latestFirst: latestFirst,
+  );
+
   /// Runs a read-only aggregate against the statistics database.
   Future<T> read<T>(Future<T> Function(DatabaseExecutor db) query) async =>
       query(await _open());
@@ -402,6 +417,32 @@ Future<void> writeListeningDeltas(
   });
 }
 
+/// Builds one row per song in the date range, ordered by listening time unless
+/// [order] overrides it. Uses the latest day's details and falls back to the
+/// latest cover in the range when that day has none.
+String _listeningTracksSql({
+  String where = '',
+  String having = '',
+  String order = 'totals.milliseconds DESC',
+  String tail = '',
+}) =>
+    '''
+    SELECT totals.track_key, details.title, details.artist, details.album,
+      COALESCE(details.artwork, covered.artwork) AS artwork,
+      totals.milliseconds, totals.plays
+    FROM (
+      SELECT track_key, SUM(milliseconds) AS milliseconds, SUM(plays) AS plays,
+        MAX(day) AS last_day,
+        MAX(CASE WHEN artwork IS NOT NULL THEN day END) AS cover_day
+      FROM listening WHERE day >= ? AND day < ?$where GROUP BY track_key$having
+    ) AS totals
+    JOIN listening AS details ON details.track_key = totals.track_key
+      AND details.day = totals.last_day
+    LEFT JOIN listening AS covered ON covered.track_key = totals.track_key
+      AND covered.day = totals.cover_day
+    ORDER BY $order$tail
+  ''';
+
 /// Aggregate in SQLite so an annual recap transfers one row per song, artist
 /// and day, rather than every daily song record into the Flutter heap.
 /// A song shows its latest day's details, and the latest cover recorded in
@@ -412,22 +453,7 @@ Future<ListeningSummary> readListeningSummary(
   DateTime end,
 ) async {
   final arguments = [listeningDay(start), listeningDay(end)];
-  final rows = await db.rawQuery('''
-    SELECT totals.track_key, details.title, details.artist, details.album,
-      COALESCE(details.artwork, covered.artwork) AS artwork,
-      totals.milliseconds, totals.plays
-    FROM (
-      SELECT track_key, SUM(milliseconds) AS milliseconds, SUM(plays) AS plays,
-        MAX(day) AS last_day,
-        MAX(CASE WHEN artwork IS NOT NULL THEN day END) AS cover_day
-      FROM listening WHERE day >= ? AND day < ? GROUP BY track_key
-    ) AS totals
-    JOIN listening AS details ON details.track_key = totals.track_key
-      AND details.day = totals.last_day
-    LEFT JOIN listening AS covered ON covered.track_key = totals.track_key
-      AND covered.day = totals.cover_day
-    ORDER BY totals.milliseconds DESC
-  ''', arguments);
+  final rows = await db.rawQuery(_listeningTracksSql(), arguments);
   final artistRows = await db.rawQuery('''
     SELECT artist, SUM(milliseconds) AS milliseconds
     FROM listening WHERE day >= ? AND day < ? GROUP BY artist
@@ -462,6 +488,43 @@ Future<ListeningSummary> readListeningSummary(
         row['day'] as String: row['milliseconds'] as int,
     },
   );
+}
+
+/// Returns [limit] tracks from [offset] with at least one recorded play,
+/// excluding keys beginning with `http://` or `https://`.
+///
+/// Orders by listening time, or last played day then listening time when
+/// [latestFirst] is true. Track keys break ties for stable pagination.
+/// Statistics record days, so playback order within a day is unavailable.
+Future<List<ListeningTotal>> readReplayableListeningTracks(
+  DatabaseExecutor db,
+  DateTime start,
+  DateTime end, {
+  required int limit,
+  int offset = 0,
+  bool latestFirst = false,
+}) async {
+  final rows = await db.rawQuery(
+    _listeningTracksSql(
+      where:
+          " AND track_key NOT GLOB 'http://*'"
+          " AND track_key NOT GLOB 'https://*'",
+      having: ' HAVING SUM(plays) > 0',
+      order: latestFirst
+          ? 'totals.last_day DESC, totals.milliseconds DESC'
+          : 'totals.milliseconds DESC',
+      tail: ', totals.track_key LIMIT ? OFFSET ?',
+    ),
+    [listeningDay(start), listeningDay(end), limit, offset],
+  );
+  return [
+    for (final row in rows)
+      ListeningTotal(
+        ListeningTrack.fromRow(row),
+        row['milliseconds'] as int,
+        row['plays'] as int,
+      ),
+  ];
 }
 
 final _listeningClock = Stopwatch()..start();

@@ -57,6 +57,18 @@ from the upstream package are not vendored.
   service is no longer attached" when the service changed or the interface
   was destroyed; `destroy()` also clears the method handler and shuts the
   executor down.
+- Android: queue positions read a published, immutable queue snapshot without
+  taking the service monitor. Artwork decoding and queue publication can hold
+  that monitor on the media worker; an Android Auto insertion callback on the
+  main thread must not wait for them. Clearing the service replaces the queue
+  snapshot instead of mutating one a callback might still be reading.
+- Android: reuse native notification actions and PlaybackState custom actions
+  while the controls are equal. Position-only updates previously rebuilt all
+  actions and PendingIntents on the main thread twice per second. A changed
+  control or service configuration rebuilds them; compact layout changes keep
+  the existing actions. The app's instrumented
+  `AudioServiceResponsivenessTest` covers slow artwork, queue snapshots,
+  action reuse, changed controls and configuration invalidation.
 - Android: close the `ParcelFileDescriptor` used for content artwork after
   decoding, including failure paths. The service listener stays attached while
   an Activity retains its Flutter engine across service recreation; engine
@@ -122,10 +134,27 @@ from the upstream package are not vendored.
   in flight, later changes keep only the newest queue, which is sent as soon
   as the in-flight call completes or fails, so the native queue always ends
   on the latest change and keeps its place among `setMediaItem` and
-  `setState` calls. The payload and the full queue are unchanged. The app's
+  `setState` calls. The app's
   `test/audio_service_queue_platform_test.dart` covers it. On upgrade, check
   whether upstream now reads the queue on another platform (then widen the
   check) or coalesces queue sends itself.
+- Android/Dart: bound the platform session queue to 500 entries before
+  creating message objects. A window initially keeps 100 entries before the
+  current one, with the remaining space after it; it shifts when playback
+  gets within 50 entries of an edge that has more songs beyond it. Index-only
+  playback updates also move the window. The handler retains its full queue
+  and logical playback index. Nonzero windows stamp absolute indices under
+  `com.ryanheise.audio_service.queueIndex` in message extras; caller-supplied
+  values cannot override the stamp. `QueueItemIndex` gives native queue
+  entries those IDs, so `setActiveQueueItemId` and `skipToQueueItem` use the
+  full logical index even while a newer window is pending. Position-based
+  native insert/remove requests map through the currently published window.
+  Old payloads without the private extra retain their positional IDs. Media
+  IDs, artwork, current-item metadata, browser results, preload behavior and
+  other platforms are unchanged. Android Auto, watches and system queue
+  views see the window (owner-approved). The app's queue-platform test covers
+  mapping, mutations, pending sends, codec size and platform scope;
+  `QueueItemIndexTest.java` covers native and legacy ID handling.
 
 Android 13+ still chooses the positions and built-in transport icons in System
 UI. We preserve real play/pause/previous/next semantics for headsets, lock screen
@@ -142,10 +171,13 @@ Compared against the pub.dev 0.18.19 package in the local pub cache:
 - `android/src/main/java/com/ryanheise/audioservice/MediaButtonReceiver.java`
 - `android/src/main/java/com/ryanheise/audioservice/PinnedMetadataCache.java` (new)
 - `android/src/main/java/com/ryanheise/audioservice/RecentArtCache.java` (new)
+- `android/src/main/java/com/ryanheise/audioservice/QueueItemIndex.java` (new)
 - `android/src/test/java/com/ryanheise/audioservice/PinnedMetadataCacheTest.java` (new)
 - `android/src/test/java/com/ryanheise/audioservice/RecentArtCacheTest.java` (new)
+- `android/src/test/java/com/ryanheise/audioservice/QueueItemIndexTest.java` (new)
 - `darwin/audio_service/Sources/audio_service/AudioServicePlugin.m`
 - `lib/audio_service.dart`
+- `lib/src/android_queue_window.dart` (new)
 
 ## Upgrading
 

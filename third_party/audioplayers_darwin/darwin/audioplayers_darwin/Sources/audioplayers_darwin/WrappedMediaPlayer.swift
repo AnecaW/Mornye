@@ -33,9 +33,18 @@ enum ReleaseMode: String {
 
   private var reference: AudioplayersDarwinPlugin
   private var player: AVPlayer
+  private var streamMetadata: StreamMetadata?
+
+  func currentStreamMetadata() -> [String: String] {
+    var result = streamMetadata?.values ?? [:]
+    result["source"] = url
+    return result
+  }
+
   private var equalizer = EqualizerAudioTap()
   private var equalizerConfiguration: [String: Any] = [:]
   private var equalizerAttached = false
+  private var equalizerRevision = 0
 
   func equalizerDiagnostics() -> [String: Any] { equalizer.diagnostics() }
 
@@ -43,8 +52,20 @@ enum ReleaseMode: String {
     equalizerConfiguration = configuration
     equalizer.dsp.configure(configuration)
     if configuration["enabled"] as? Bool == true, !equalizerAttached, let item = player.currentItem {
-      try await EqualizerAudioTap.attach(to: item, processor: equalizer)
-      if player.currentItem === item { equalizerAttached = true }
+      equalizerRevision += 1
+      let revision = equalizerRevision
+      let processor = equalizer
+      try await EqualizerAudioTap.attach(to: item, processor: processor,
+        shouldAttach: { [weak self, weak item] in
+          guard let self, let item else { return false }
+          return self.player.currentItem === item && self.equalizerRevision == revision
+        })
+      guard player.currentItem === item, equalizerRevision == revision else { return }
+      equalizerAttached = true
+      // Installing a mix can rebuild the renderer for the current output route.
+      // Restore transport intent after that rebuild, never a captured old intent:
+      // Pause/interrupt/Next may have arrived while asset loading was suspended.
+      if isPlaying && player.timeControlStatus == .paused { resume() }
     }
   }
   private var playbackRate: Double
@@ -163,6 +184,9 @@ enum ReleaseMode: String {
       reset()
       self.url = url
       let playerItem = try createPlayerItem(url: url, isLocal: isLocal, mimeType: mimeType)
+      let metadata = StreamMetadata()
+      playerItem.add(metadata.output)
+      streamMetadata = metadata
       preparingNetwork = !isLocal
       if !isLocal {
         playerItem.preferredForwardBufferDuration = forwardBuffer
@@ -247,7 +271,10 @@ enum ReleaseMode: String {
     guard let currentItem = player.currentItem else {
       return
     }
-    await currentItem.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+    let finished = await currentItem.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+    // Replacing or disposing the source can finish an outstanding seek.
+    // Its completion must not pause the new item or publish an old event.
+    guard finished, player.currentItem === currentItem else { return }
     if !self.isPlaying {
       self.player.pause()
     }
@@ -276,7 +303,7 @@ enum ReleaseMode: String {
   }
 
   private func getDurationCMTime() -> CMTime? {
-    return player.currentItem?.asset.duration
+    return player.currentItem?.duration
   }
 
   private func getCurrentCMTime() -> CMTime? {
@@ -353,7 +380,7 @@ enum ReleaseMode: String {
             self.checkBufferedPreparation(playerItem)
           case .failed:
             let preparing = self.playerItemStatusContinuation != nil
-            let failure = playerItem.error ?? NSError(domain: "MornyePlayback", code: -1)
+            let failure = Self.sourceError(playerItem.error)
             let diagnostic = failure as NSError
             self.eventHandler.onLog(message: "AVPlayer failed domain=\(diagnostic.domain) code=\(diagnostic.code)")
             self.finishPlayerItemPreparation(.failure(failure))
@@ -393,6 +420,20 @@ enum ReleaseMode: String {
       // Replacing the player item triggers continuation of the observation.
       self.player.replaceCurrentItem(with: playerItem)
     }
+  }
+
+  /// Preserve the native cause without exposing URLs, headers or credentials
+  /// from NSError.userInfo in the player error or exported logs.
+  static func sourceError(_ error: Error?) -> AudioPlayerError {
+    var causes: [String] = []
+    var current = error as NSError?
+    for _ in 0..<5 {
+      guard let cause = current else { break }
+      causes.append("\(cause.domain) (\(cause.code))")
+      current = cause.userInfo[NSUnderlyingErrorKey] as? NSError
+    }
+    let detail = causes.isEmpty ? "" : " [\(causes.joined(separator: "; "))]"
+    return .error("Failed to set playerItem\(detail)")
   }
 
   private func finishPlayerItemPreparation(_ result: Result<Void, Error>) {
@@ -437,6 +478,8 @@ enum ReleaseMode: String {
   }
 
   private func reset() {
+    equalizerRevision += 1
+    streamMetadata = nil
     next = nil
     finishPlayerItemPreparation(.failure(CancellationError()))
     if let cObserver = completionObserver {
@@ -448,7 +491,7 @@ enum ReleaseMode: String {
   }
 
   private func updateDuration() {
-    guard let duration = player.currentItem?.asset.duration else {
+    guard let duration = getDurationCMTime() else {
       return
     }
     if CMTimeGetSeconds(duration) > 0 {

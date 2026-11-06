@@ -242,7 +242,7 @@ jobs:
           mkdir -p .tmp/native-tests
           xcrun swiftc -parse-as-library -target "$(uname -m)-apple-macos14.0" \
             "$native/WrappedMediaPlayer.swift" "$native/Utils.swift" "$native/AudioPlayerError.swift" \
-            "$native/EqualizerAudioTap.swift" "$native/EqualizerDSP.swift" \
+            "$native/EqualizerAudioTap.swift" "$native/EqualizerDSP.swift" "$native/StreamMetadata.swift" \
             third_party/audioplayers_darwin/tests/SourceLifecycleTests.swift -o .tmp/native-tests/source-lifecycle
           .tmp/native-tests/source-lifecycle
       - name: Test AVPlayer with authenticated Subsonic streams
@@ -322,6 +322,6 @@ jobs:
           mkdir -p .tmp/native-tests
           xcrun swiftc -parse-as-library -target "$(uname -m)-apple-macos14.0" \
             "$native/WrappedMediaPlayer.swift" "$native/Utils.swift" "$native/AudioPlayerError.swift" \
-            "$native/EqualizerAudioTap.swift" "$native/EqualizerDSP.swift" \
+            "$native/EqualizerAudioTap.swift" "$native/EqualizerDSP.swift" "$native/StreamMetadata.swift" \
             third_party/audioplayers_darwin/tests/SourceLifecycleTests.swift -o .tmp/native-tests/source-lifecycle
           .tmp/native-tests/source-lifecycle

@@ -1,3 +1,5 @@
+import 'package:mornye/services/discord_artwork_resolver.dart';
+import 'package:mornye/services/radio_metadata.dart';
 import 'package:mornye/services/server_scrobbling.dart';
 import 'dart:async';
 import 'package:connectivity_plus/connectivity_plus.dart';
@@ -18,6 +20,7 @@ import 'package:audio_session/audio_session.dart'
         AudioInterruptionType;
 import 'package:mornye/services/listening_statistics.dart' show ListeningTrack;
 import 'package:mornye/services/library_database.dart';
+import 'package:mornye/services/app_state_database.dart';
 import 'package:mornye/services/media_library_browser.dart';
 import 'package:mornye/services/sqlite_helpers.dart' show normalizeLookupText;
 import 'package:mornye/services/platform_bridge.dart';
@@ -25,9 +28,13 @@ import 'package:mornye/services/playback_normalization.dart';
 import 'package:mornye/services/playback_automation.dart';
 import 'package:mornye/services/playback_session_writer.dart';
 import 'package:mornye/services/content_uri_playback_cache.dart';
+import 'package:mornye/services/file_access_check.dart';
+import 'package:mornye/services/avplayer_formats.dart';
+import 'package:mornye/services/cast_output.dart';
 import 'package:mornye/services/cover_store.dart';
 import 'package:mornye/services/music_player_runtime.dart';
 import 'package:mornye/services/music_playback_deck.dart';
+import 'package:mornye/services/network_playback_cache.dart';
 import 'package:mornye/services/network_storage_service.dart'
     show
         subsonicSongIdFromPath,
@@ -49,6 +56,7 @@ import 'package:mornye/utils/playback_artwork.dart';
 import 'package:mornye/services/downloaded_embedded_cover_resolver.dart';
 import 'package:mornye/utils/logger.dart';
 import 'package:mornye/services/playable_media.dart';
+import 'package:mornye/utils/file_access.dart' show fileExists;
 
 export 'autoplay_signal.dart';
 export 'music_player_runtime.dart';
@@ -59,7 +67,11 @@ export 'playback_session_restore.dart';
 part 'music_player_automix.dart';
 part 'music_player_autoplay.dart';
 part 'music_player_covers.dart';
+part 'music_player_cast.dart';
+part 'music_player_formats.dart';
+part 'music_player_failures.dart';
 part 'music_player_gapless.dart';
+part 'music_player_prefetch.dart';
 
 final _log = AppLogger('MusicPlayer');
 
@@ -79,7 +91,8 @@ class PlaybackProcessing {
   /// Linear volume from ReplayGain normalization; 1 when none applies.
   final double normalizationGain;
 
-  /// A direct USB or exclusive path that bypasses the system mixer and DSP.
+  /// A verified native direct path that bypasses the system mixer and DSP.
+  /// Desktop exclusive output may still apply software processing.
   final bool direct;
 
   /// AutoMix tempo matching; 1 outside a transition.
@@ -90,6 +103,14 @@ class PlaybackProcessing {
 void refreshPlaybackNormalization(String source) {
   final handler = musicPlayerRuntime.handler;
   if (handler != null) unawaited(handler._refreshNormalizationSource(source));
+}
+
+Future<void> notifyPlaybackSourceRelocated(
+  String previous,
+  String replacement,
+) async {
+  await musicPlayerRuntime.handler?.onSourceRelocated(previous, replacement);
+  await AppStateDatabase.instance.relocatePlaybackSource(previous, replacement);
 }
 
 List<int> buildShuffledQueueOrder({
@@ -126,8 +147,12 @@ class MusicPlayerHandler extends BaseAudioHandler
   PlaybackDependencies get _dependencies => _runtime.dependencies;
   AppSettings get _settings => _runtime.settings;
   late PlaybackDeck _player;
+  late final _MusicCast _cast;
   late final _MusicAutoMix _autoMix;
   late final _MusicGapless _gapless = _MusicGapless(this);
+  late final _MusicPrefetch _prefetch = _MusicPrefetch(this);
+  late final _MusicFormats _formats = _MusicFormats(this);
+  late final _MusicFailures _failures = _MusicFailures(this);
   late final _MusicCovers _covers = _MusicCovers(this);
   late final _MusicAutoplay _autoplay;
   late final MusicHaptics _haptics;
@@ -152,7 +177,12 @@ class MusicPlayerHandler extends BaseAudioHandler
   int _networkRecoveries = 0;
   bool _recoveringNetwork = false;
   int? _waitingForNetworkGeneration;
+  final _radioArtwork = DiscordArtworkResolver();
+  RadioMetadataMonitor? _radioMetadata;
+
   int _nextPlayGeneration() {
+    _radioMetadata?.close();
+    _radioMetadata = null;
     if (_activeLoad != null && !_activeLoad!.cancelled) {
       _log.d('Superseding playback request=$_playRequestGeneration');
     }
@@ -162,6 +192,7 @@ class MusicPlayerHandler extends BaseAudioHandler
     return ++_playRequestGeneration;
   }
 
+  int _playbackInstance = 0;
   final _metadataChanges = <String, Object>{};
   String? _activeResolvedPath;
   bool _disposed = false;
@@ -276,6 +307,7 @@ class MusicPlayerHandler extends BaseAudioHandler
     AutoplayLibraryLoader? autoplayLibraryLoader,
     MusicHapticsAnalyzer? hapticsAnalyzer,
     HapticPulse? hapticPulse,
+    CastOutput? castOutput,
   }) : _runtime = runtime ?? musicPlayerRuntime {
     // Switching back from a remote session restores phone volume handling.
     androidPlaybackInfo.add(LocalAndroidPlaybackInfo());
@@ -302,6 +334,13 @@ class MusicPlayerHandler extends BaseAudioHandler
           _log.w('Failed to update persisted playback session: $error'),
     );
     _player = _dependencies.createDeck('music-player');
+    _cast = _MusicCast(
+      this,
+      castOutput ??
+          (Platform.isAndroid || Platform.isIOS || isDesktopPlatform
+              ? CastOutput.instance
+              : null),
+    );
     _normalizationCache = PlaybackNormalizationCache(
       readMetadata: (path, {displayName}) => path.startsWith('network://')
           ? _dependencies
@@ -343,13 +382,17 @@ class MusicPlayerHandler extends BaseAudioHandler
     }
   }
 
-  MediaItem _toMediaItem(PlayableMedia media, {String? resolvedSource}) =>
-      media.toMediaItem(
-        resolvedSource: resolvedSource,
-        unknownTitle: _runtime.unknownTitle,
-        unknownArtist: _runtime.unknownArtist,
-        covers: _dependencies.coverStore,
-      );
+  MediaItem _toMediaItem(PlayableMedia media, {String? resolvedSource}) {
+    final item = media.toMediaItem(
+      resolvedSource: resolvedSource,
+      unknownTitle: _runtime.unknownTitle,
+      unknownArtist: _runtime.unknownArtist,
+      covers: _dependencies.coverStore,
+    );
+    return item.copyWith(
+      extras: {...?item.extras, 'playbackInstance': _playbackInstance},
+    );
+  }
 
   void _init() {
     if (_initialized) return;
@@ -435,6 +478,7 @@ class MusicPlayerHandler extends BaseAudioHandler
     _refreshPlaybackAutomation();
 
     _listenToPlayer(_player);
+    _cast.initialize();
     if (_dependencies.isIOS) WidgetsBinding.instance.addObserver(this);
   }
 
@@ -550,6 +594,13 @@ class MusicPlayerHandler extends BaseAudioHandler
       player.onPlayerStateChanged.listen(
         (state) {
           if (!identical(player, _player)) return;
+          if (_cast.active &&
+              state == PlaybackDeckState.playing &&
+              _sourceReady &&
+              _switchingGeneration == 0) {
+            // Playing from the TV's controls also releases a prior app pause.
+            _userPaused = false;
+          }
           if (state == PlaybackDeckState.paused && player.needsSourceReload) {
             _userPaused = true;
             _pausedByInterruption = false;
@@ -573,7 +624,7 @@ class MusicPlayerHandler extends BaseAudioHandler
           // Preparation errors are handled by _loadIndex, including the SAF
           // fallback. Runtime failures must not look like successful completion.
           if (_sourceReady || _switchingGeneration == 0) {
-            _reportPlaybackError(player, error, stackTrace);
+            unawaited(_failures.onRuntimeError(player, error, stackTrace));
           }
         },
       ),
@@ -750,6 +801,7 @@ class MusicPlayerHandler extends BaseAudioHandler
 
       _subscriptions.add(
         session.interruptionEventStream.listen((event) {
+          if (_cast.active) return;
           _log.d(
             'Audio interruption ${event.begin ? 'began' : 'ended'} '
             'type=${event.type} player=${_player.state} '
@@ -785,6 +837,7 @@ class MusicPlayerHandler extends BaseAudioHandler
 
       _subscriptions.add(
         session.becomingNoisyEventStream.listen((_) {
+          if (_cast.active) return;
           // Headphones unplugged / output route lost.
           _pausedByInterruption = false;
           unawaited(_pauseForFocusLoss(reason: 'becoming noisy'));
@@ -800,11 +853,13 @@ class MusicPlayerHandler extends BaseAudioHandler
     // Both follow mobile system volume and audio_session routes, which
     // desktop does not use.
     final pauseOnMute =
+        !_cast.active &&
         !isDesktopPlatform &&
         _settings.playerMode == 'internal' &&
         _settings.pauseOnMute &&
         !_settings.usbBitPerfect;
     final playOnHeadphonesConnected =
+        !_cast.active &&
         !isDesktopPlatform &&
         _settings.playerMode == 'internal' &&
         _settings.playOnHeadphonesConnected;
@@ -866,6 +921,7 @@ class MusicPlayerHandler extends BaseAudioHandler
 
   bool get _shouldIgnoreComplete =>
       _switchingGeneration != 0 ||
+      _failures.checking ||
       _interruptionActive ||
       _userPaused ||
       _playbackError != null;
@@ -901,6 +957,7 @@ class MusicPlayerHandler extends BaseAudioHandler
   }
 
   Future<bool> _activateAudioSession(int generation) async {
+    if (_cast.active) return true;
     if (isDesktopPlatform) return true;
     try {
       // Android 15+ rejects background focus requests without an active
@@ -1124,13 +1181,13 @@ class MusicPlayerHandler extends BaseAudioHandler
         now - readAt < _positionBroadcastInterval - _positionQueryAllowance &&
         persistedAt != null &&
         DateTime.now().difference(persistedAt) <
-            _positionPersistInterval - _positionQueryAllowance &&
-        !_autoMix.wantsPosition &&
-        !_gapless.wantsPosition(
-          _lastBroadcastPosition + (now - readAt) * _autoMix.rate,
-        ) &&
-        !_autoplay.wouldFill) {
-      return false;
+            _positionPersistInterval - _positionQueryAllowance) {
+      final estimate = _lastBroadcastPosition + (now - readAt) * _autoMix.rate;
+      if (!_autoMix.wantsPosition(estimate) &&
+          !_gapless.wantsPosition(estimate) &&
+          !_autoplay.wouldFill) {
+        return false;
+      }
     }
     _positionQueriedAt = now;
     return true;
@@ -1175,6 +1232,7 @@ class MusicPlayerHandler extends BaseAudioHandler
       );
     }
     _autoMix.onPosition(position);
+    _prefetch.onPosition(position);
     _gapless.onPosition(position);
     unawaited(_autoplay.fill());
     if (_restoringSession ||
@@ -1202,6 +1260,8 @@ class MusicPlayerHandler extends BaseAudioHandler
     _normalizationGeneration++;
     _normalizationCache.invalidate(source);
     await _sourceCache.invalidate(source, waitForPending: true);
+    // A FLAC copy carries the tags it was made with.
+    await _formats.invalidate(source);
     if (_disposed) return;
     if (_index >= 0 &&
         _index < _media.length &&
@@ -1220,6 +1280,8 @@ class MusicPlayerHandler extends BaseAudioHandler
           'http',
           'https',
         }.contains(Uri.tryParse(path)?.scheme) ||
+        // A network song keeps its loudness whether or not it is cached.
+        _prefetch.owns(path) ||
         !_settings.playbackNormalization ||
         _settings.usbBitPerfect ||
         _player.isDirect) {
@@ -1241,6 +1303,11 @@ class MusicPlayerHandler extends BaseAudioHandler
     direct: _player.isDirect,
     autoMixRate: _autoMix.rate,
   );
+
+  Future<void> refreshOutputStatus() async {
+    final player = _player;
+    if (player is AudioplayersPlaybackDeck) await player.refreshNativeStatus();
+  }
 
   /// Re-applies normalization to the playing track when the setting flips.
   void reapplyNormalization() {
@@ -1297,7 +1364,24 @@ class MusicPlayerHandler extends BaseAudioHandler
     PlayableMedia media, {
     PlaybackLoad? load,
   }) async {
+    if (_dependencies.sourceDeletionEvents.isDeleting(media.source)) {
+      return null;
+    }
     if (media.source.startsWith('network://')) {
+      try {
+        final copy = await _dependencies.offlineCopy(media.source);
+        if (copy != null) {
+          final resolved = copy.startsWith('content://')
+              ? await _sourceCache.resolve(copy)
+              : copy;
+          if (resolved != null) return resolved;
+        }
+      } catch (_) {
+        // An unavailable local copy leaves the server source usable.
+      }
+      // A whole prefetched copy opens as a local file on every engine; a
+      // song still downloading streams from the server instead.
+      if (await _prefetch.lookup(media) case final cached?) return cached;
       try {
         if (load != null) {
           final prepare = _dependencies.prepareNetworkSource;
@@ -1316,6 +1400,15 @@ class MusicPlayerHandler extends BaseAudioHandler
         return null;
       }
     }
+    if (media.originSource case final origin?) {
+      if (!await fileExists(media.source)) {
+        try {
+          return await _dependencies.resolveNetworkSource(origin);
+        } catch (_) {
+          return null;
+        }
+      }
+    }
     if (!media.isContentUri) {
       if (_runtime.arrivingFile(media.source) case final arriving?) {
         return arriving.url;
@@ -1330,7 +1423,13 @@ class MusicPlayerHandler extends BaseAudioHandler
         return null;
       }
     }
-    return _sourceCache.resolve(media.source);
+    final resolved = await _sourceCache.resolve(media.source);
+    if (resolved == null && media.originSource != null) {
+      try {
+        return await _dependencies.resolveNetworkSource(media.originSource!);
+      } catch (_) {}
+    }
+    return resolved;
   }
 
   Future<void> _cleanupPendingResolvedPaths() => _sourceCache.releaseUnpinned();
@@ -1553,6 +1652,7 @@ class MusicPlayerHandler extends BaseAudioHandler
 
   bool _isCurrentPlayRequest(int generation, PlayableMedia media) {
     return !_disposed &&
+        !_dependencies.sourceDeletionEvents.isDeleting(media.source) &&
         generation == _playRequestGeneration &&
         _index >= 0 &&
         _index < _media.length &&
@@ -1699,11 +1799,15 @@ class MusicPlayerHandler extends BaseAudioHandler
     int index, {
     bool recordHistory = true,
     bool userSkip = false,
+    bool startPaused = false,
     Duration startPosition = Duration.zero,
   }) async {
     if (_disposed || index < 0 || index >= _media.length) return;
     if (!_recoveringNetwork) _networkRecoveries = 0;
     _recoveringNetwork = false;
+    if (_dependencies.sourceDeletionEvents.isDeleting(_media[index].source)) {
+      return;
+    }
     if (_reloadingAfterServerDied) {
       _reloadingAfterServerDied = false;
     } else {
@@ -1767,6 +1871,7 @@ class MusicPlayerHandler extends BaseAudioHandler
           generation,
           media,
           recordHistory: recordHistory,
+          startPaused: startPaused,
           startPosition: startPosition,
         );
       } finally {
@@ -1788,48 +1893,64 @@ class MusicPlayerHandler extends BaseAudioHandler
       media.source.toLowerCase().endsWith('.dsf') ||
       media.source.toLowerCase().endsWith('.dff');
 
-  Future<void> _startResolvedSource(
+  /// Starts [path] and returns what plays: [path], or a FLAC copy when
+  /// AVPlayer cannot open it.
+  Future<String> _startResolvedSource(
     String path,
     int generation,
     PlayableMedia media,
-    Duration? position,
-  ) async {
+    Duration? position, {
+    bool startPaused = false,
+  }) async {
     final load = _activeLoad;
     load?.mark(PlaybackPreparationStage.buffering);
     if (_player is PlaybackPreparationDeck && load != null) {
       await (_player as PlaybackPreparationDeck).configurePreparation(
         load.bufferPolicy,
       );
-      if (!_isCurrentPlayRequest(generation, media)) return;
+      if (!_isCurrentPlayRequest(generation, media)) return path;
     }
     // AudioPlayer.play combines prepare/seek/resume without a cancellation
     // boundary. A late prepare from an old request could resume the wrong
     // source. Serialize preparation and recheck before making it audible.
     // Link may resolve a network song to its completed local copy.
     // A file still arriving resolves to its HTTP stream instead.
-    if (const {'http', 'https'}.contains(Uri.tryParse(path)?.scheme)) {
-      await _player.setNetworkSource(
-        path,
-        arriving: _runtime.streamsArrivingFile(path),
-      );
-    } else {
-      await _player.setFileSource(
-        path,
-        preferBitPerfect: _settings.usbBitPerfect,
-        directUsb: _settings.usbDirect,
-        allowFixedVolume: _settings.usbAllowFixedVolume,
-        dapExclusive: _settings.dapExclusive,
-        allowDop: _settings.usbDsdOverPcm,
-        requiresDsd: _requiresDsd(media),
+    try {
+      if (const {'http', 'https'}.contains(Uri.tryParse(path)?.scheme)) {
+        await _player.setNetworkSource(
+          path,
+          arriving: _runtime.streamsArrivingFile(path),
+        );
+      } else {
+        await _player.setFileSource(
+          path,
+          preferBitPerfect: _settings.usbBitPerfect,
+          directUsb: _settings.usbDirect,
+          allowFixedVolume: _settings.usbAllowFixedVolume,
+          dapExclusive: _settings.dapExclusive,
+          allowDop: _settings.usbDsdOverPcm,
+          requiresDsd: _requiresDsd(media),
+        );
+      }
+    } catch (_) {
+      if (!_isCurrentPlayRequest(generation, media)) rethrow;
+      final copy = await _formats.afterFailure(media, path);
+      if (copy == null || !_isCurrentPlayRequest(generation, media)) rethrow;
+      return _startResolvedSource(
+        copy,
+        generation,
+        media,
+        position,
+        startPaused: startPaused,
       );
     }
-    if (!_isCurrentPlayRequest(generation, media)) return;
+    if (!_isCurrentPlayRequest(generation, media)) return path;
     load?.mark(PlaybackPreparationStage.readyToPlay);
     if (position != null) {
       await _player.seek(position);
-      if (!_isCurrentPlayRequest(generation, media)) return;
+      if (!_isCurrentPlayRequest(generation, media)) return path;
     }
-    await _player.resume();
+    if (!startPaused) await _player.resume();
     if (!_isCurrentPlayRequest(generation, media)) await _player.pause();
     if (_isCurrentPlayRequest(generation, media)) {
       final storage = NetworkStorageService.instance;
@@ -1873,6 +1994,7 @@ class MusicPlayerHandler extends BaseAudioHandler
         );
       }
     }
+    return path;
   }
 
   Future<void> _loadIndex(
@@ -1880,6 +2002,7 @@ class MusicPlayerHandler extends BaseAudioHandler
     PlayableMedia media, {
     required bool recordHistory,
     required Duration startPosition,
+    bool startPaused = false,
   }) async {
     final load = _activeLoad ?? PlaybackLoad(requestId: generation);
     final preparationClock = Stopwatch()..start();
@@ -1890,6 +2013,7 @@ class MusicPlayerHandler extends BaseAudioHandler
           generation,
           media,
           recordHistory: recordHistory && attempt == 0,
+          startPaused: startPaused,
           startPosition: startPosition,
           load: load,
         );
@@ -1955,10 +2079,27 @@ class MusicPlayerHandler extends BaseAudioHandler
     required bool recordHistory,
     required Duration startPosition,
     required PlaybackLoad load,
+    required bool startPaused,
   }) async {
+    await load.wait(_cast.applyOutput());
+    if (!_isCurrentPlayRequest(generation, media)) return;
+    if (media.source.startsWith('network://')) {
+      try {
+        final copy = await load.wait(_dependencies.offlineCopy(media.source));
+        if (!_isCurrentPlayRequest(generation, media)) return;
+        if (copy != null) {
+          _relocateQueuedSource(media.source, copy, origin: media.source);
+          media = _media[_index];
+        }
+      } on PlaybackSuperseded {
+        rethrow;
+      } catch (_) {
+        // An unavailable offline lookup must leave progressive streaming usable.
+      }
+    }
     _pausedByInterruption = false;
     _interruptionActive = false;
-    _userPaused = false;
+    _userPaused = startPaused;
 
     if (recordHistory) _recordPlayHistory(_index);
 
@@ -1967,6 +2108,7 @@ class MusicPlayerHandler extends BaseAudioHandler
       duration: media.duration,
     );
     _runtime.personalization.begin(_learningTrack(media));
+    _playbackInstance++;
     mediaItem.add(_toMediaItem(media));
     _lastBroadcastPosition = Duration.zero;
     _lastPositionBroadcastAt = null;
@@ -1975,9 +2117,9 @@ class MusicPlayerHandler extends BaseAudioHandler
     // foreground window) so audio_service can start its foreground service
     // before the async source resolve below.
     _broadcastState(
-      playerState: _dependencies.isAndroid
-          ? PlaybackDeckState.playing
-          : PlaybackDeckState.paused,
+      playerState: startPaused
+          ? PlaybackDeckState.paused
+          : PlaybackDeckState.playing,
       loading: true,
     );
     await _claimHardwareMediaButtons();
@@ -2011,7 +2153,7 @@ class MusicPlayerHandler extends BaseAudioHandler
     // MediaPlayer duplicates that descriptor, so the original can be closed
     // immediately after play() without retaining a full-file cache copy.
     ContentUriPlaybackLease? playbackLease;
-    if (_dependencies.isAndroid && media.isContentUri) {
+    if (_dependencies.isAndroid && media.isContentUri && !_cast.active) {
       try {
         playbackLease = await PlatformBridge.openContentUriPlaybackLease(
           media.source,
@@ -2021,7 +2163,8 @@ class MusicPlayerHandler extends BaseAudioHandler
       }
     }
     var resolved =
-        playbackLease?.path ?? await _resolveSource(media, load: load);
+        playbackLease?.path ??
+        await load.wait(_formats.resolve(media, load: load));
     var usingLocalSafCopy = media.isContentUri && playbackLease == null;
     if (!_isCurrentPlayRequest(generation, media)) {
       if (playbackLease != null) {
@@ -2030,6 +2173,15 @@ class MusicPlayerHandler extends BaseAudioHandler
       return;
     }
     if (resolved == null) {
+      if (await _failures.skipMissing(
+        media,
+        resolved,
+        generation,
+        startPaused: startPaused,
+      )) {
+        return;
+      }
+      if (!_isCurrentPlayRequest(generation, media)) return;
       if (media.isNetwork) {
         throw const PlaybackFailure(PlaybackFailureKind.missing);
       }
@@ -2066,7 +2218,8 @@ class MusicPlayerHandler extends BaseAudioHandler
       if (!_isCurrentPlayRequest(generation, media)) return;
       await _player.configureOutput();
       if (!_isCurrentPlayRequest(generation, media)) return;
-      final focusGranted = await _activateAudioSession(generation);
+      final focusGranted =
+          startPaused || await _activateAudioSession(generation);
       if (!_isCurrentPlayRequest(generation, media)) return;
       if (!focusGranted) {
         _sourceReady = false;
@@ -2087,7 +2240,13 @@ class MusicPlayerHandler extends BaseAudioHandler
           ? effectiveStartPosition
           : null;
       try {
-        await _startResolvedSource(resolved, generation, media, startAt);
+        resolved = await _startResolvedSource(
+          resolved,
+          generation,
+          media,
+          startAt,
+          startPaused: startPaused,
+        );
         if (playbackLease != null) {
           await PlatformBridge.closeContentUriPlaybackLease(
             playbackLease.token,
@@ -2124,6 +2283,48 @@ class MusicPlayerHandler extends BaseAudioHandler
       }
       if (!_isCurrentPlayRequest(generation, media)) return;
       _sourceReady = true;
+      if (media.id.startsWith('subsonic-radio://')) {
+        final station = _toMediaItem(media);
+        _radioMetadata?.close();
+        final deck = _player;
+        _radioMetadata = RadioMetadataMonitor(
+          source: resolved,
+          native: () => deck is PlaybackStreamMetadataDeck
+              ? (deck as PlaybackStreamMetadataDeck).streamMetadata()
+              : Future.value(const <String, String>{}),
+          onChanged: (track) {
+            if (!_isCurrentPlayRequest(generation, media)) return;
+            final current = station.copyWith(
+              title: track.title.isEmpty ? station.title : track.title,
+              artist: track.title.isEmpty ? station.artist : track.artist,
+              album: track.title.isEmpty ? station.album : track.album,
+              extras: {
+                ...?station.extras,
+                'radioTrackKey': track.title.isEmpty ? null : track.key,
+                'radioStationName': station.title,
+              },
+            );
+            // Publish first so artwork and lyrics of the outgoing track vanish.
+            mediaItem.add(current);
+            if (track.title.isEmpty || track.artist.isEmpty) return;
+            unawaited(() async {
+              final artwork = await _radioArtwork.resolve(
+                MediaItem(
+                  id: track.key,
+                  title: track.title,
+                  artist: track.artist,
+                  album: track.album,
+                ),
+              );
+              if (!_isCurrentPlayRequest(generation, media) ||
+                  mediaItem.value?.extras?['radioTrackKey'] != track.key)
+                return;
+              if (artwork != null)
+                mediaItem.add(current.copyWith(artUri: Uri.parse(artwork)));
+            }());
+          },
+        )..start();
+      }
       if (!(_player is PlaybackBufferingDeck &&
           (_player as PlaybackBufferingDeck).isBuffering)) {
         load.mark(PlaybackPreparationStage.playing);
@@ -2132,7 +2333,10 @@ class MusicPlayerHandler extends BaseAudioHandler
         unawaited(_loadNetworkMetadata(media, generation));
       }
       _pendingRestorePosition = null;
-      _activeResolvedPath = usingLocalSafCopy ? resolved : null;
+      _activeResolvedPath = usingLocalSafCopy || _formats.owns(resolved)
+          ? resolved
+          : null;
+      _failures.started(media, resolved);
       await _cleanupPendingResolvedPaths();
       if (!_isCurrentPlayRequest(generation, media)) return;
       // Plain file paths were already published before loading. Re-publishing
@@ -2152,6 +2356,24 @@ class MusicPlayerHandler extends BaseAudioHandler
     } catch (e, stackTrace) {
       if (!_isCurrentPlayRequest(generation, media)) return;
       if (media.isNetwork) rethrow;
+      if (await _failures.skipMissing(
+        media,
+        resolved,
+        generation,
+        startPaused: startPaused,
+      )) {
+        return;
+      }
+      if (!_isCurrentPlayRequest(generation, media)) return;
+      if (await _formats.skipUnplayable(
+        media,
+        resolved,
+        generation,
+        startPaused: startPaused,
+      )) {
+        return;
+      }
+      if (!_isCurrentPlayRequest(generation, media)) return;
       _reportPlaybackError(_player, e, stackTrace);
     } finally {
       if (playbackLease != null) {
@@ -2530,6 +2752,7 @@ class MusicPlayerHandler extends BaseAudioHandler
     unawaited(_runtime.ranker.flush());
     _playbackAutomation.cancelPendingActions();
     _autoplay.reset();
+    _prefetch.stop();
     cancelSleepTimer();
     final generation = _nextPlayGeneration();
     _switchingGeneration = 0;
@@ -2680,7 +2903,11 @@ class MusicPlayerHandler extends BaseAudioHandler
   Future<void> playMediaItem(MediaItem mediaItem) =>
       playFromMediaId(mediaItem.id);
 
-  void _relocateQueuedSource(String previous, String replacement) {
+  void _relocateQueuedSource(
+    String previous,
+    String replacement, {
+    String? origin,
+  }) {
     _normalizationCache.invalidate(previous);
     unawaited(_sourceCache.invalidate(previous));
     for (var i = 0; i < _media.length; i++) {
@@ -2689,10 +2916,16 @@ class MusicPlayerHandler extends BaseAudioHandler
       _media[i] = PlayableMedia.fromJson({
         ...media.toJson(),
         'source': replacement,
+        'originSource': ?origin,
       })!;
       final old = _queueItems[i];
       final next = old.copyWith(
-        extras: {...?old.extras, 'source': replacement, 'resolvedSource': null},
+        extras: {
+          ...?old.extras,
+          'source': replacement,
+          'resolvedSource': null,
+          'originSource': ?origin,
+        },
       );
       _queueItems[i] = next;
       final original = _originalQueueOrder?.indexWhere(
@@ -2706,8 +2939,20 @@ class MusicPlayerHandler extends BaseAudioHandler
     queue.add(List<MediaItem>.unmodifiable(_queueItems));
   }
 
+  /// Updates queued and persisted sources without restarting the decoder.
+  Future<void> onSourceRelocated(String previous, String replacement) async {
+    if (_disposed || !_media.any((item) => item.source == previous)) return;
+    _relocateQueuedSource(previous, replacement);
+    if (_index >= 0 && _index < _queueItems.length) {
+      mediaItem.add(_queueItems[_index]);
+    }
+    await _persistSession(position: playbackState.value.position);
+  }
+
   /// Refreshes every occurrence without reopening the decoder or seeking.
   Future<void> onSourceMetadataChanged(String source) async {
+    // An edited network file must not play from its copy before the edit.
+    await _prefetch.invalidate(source);
     if (_disposed || !_media.any((item) => item.source == source)) return;
     final token = Object();
     _metadataChanges[source] = token;
@@ -2793,54 +3038,74 @@ class MusicPlayerHandler extends BaseAudioHandler
     }
   }
 
+  /// Release native file handles before unlinking a local song. Stop alone can
+  /// retain the source in AVPlayer/MediaPlayer, so retire the owning deck.
+  /// Keep the queue until deletion succeeds; a failed delete remains resumable.
+  Future<void> prepareSourceDeletion(String source) async {
+    if (_disposed ||
+        _cast.active ||
+        !_media.any((item) => item.source == source)) {
+      return;
+    }
+    final isCurrent =
+        _index >= 0 &&
+        _index < _media.length &&
+        _media[_index].source == source;
+    final generation = isCurrent
+        ? ++_playRequestGeneration
+        : _playRequestGeneration;
+    if (isCurrent) {
+      _sourceReady = false;
+      _userPaused = true;
+      _pendingRestorePosition = playbackState.value.position;
+      _playbackAutomation.cancelPendingActions();
+      await _player.cancelPreparation();
+    }
+    await _serializeSourceChange(() async {
+      if (_disposed || generation != _playRequestGeneration) return;
+      await _cancelTransitions();
+      if (!isCurrent || _disposed || generation != _playRequestGeneration) {
+        return;
+      }
+      try {
+        await _disposeDeck(_player);
+      } finally {
+        if (!_disposed) {
+          _player = _dependencies.createDeck('music-player-delete-$generation');
+          _listenToPlayer(_player);
+          _activeResolvedPath = null;
+          _broadcastState(playerState: PlaybackDeckState.paused);
+        }
+      }
+      await _cleanupPendingResolvedPaths();
+    });
+  }
+
   /// Called when a file is deleted from disk. Removes it from the queue and, if
   /// it is the track currently playing, stops or advances so a deleted song can
   /// no longer be played.
   Future<void> onSourceDeleted(String source) async {
     final target = source.trim();
     if (_disposed || target.isEmpty) return;
+    await _prefetch.invalidate(target);
+    if (target.startsWith('network://')) {
+      try {
+        if (await _dependencies.offlineCopy(target) != null) return;
+      } catch (_) {}
+    }
 
     final hadPendingResolution = await _sourceCache.invalidate(target);
 
-    final wasCurrent =
-        _index >= 0 &&
-        _index < _media.length &&
-        _media[_index].source == target;
-
-    var removedBeforeCurrent = 0;
-    final kept = <PlayableMedia>[];
-    final keptQueue = <MediaItem>[];
-    for (var i = 0; i < _media.length; i++) {
-      if (_media[i].source == target) {
-        if (i < _index) removedBeforeCurrent++;
-        continue;
-      }
-      kept.add(_media[i]);
-      keptQueue.add(_queueItems[i]);
-    }
-
-    if (kept.length == _media.length) return;
-
-    _media
-      ..clear()
-      ..addAll(kept);
-    _queueItems
-      ..clear()
-      ..addAll(keptQueue);
-    final keptSet = Set<MediaItem>.identity()..addAll(keptQueue);
-    _originalQueueOrder?.removeWhere((item) => !keptSet.contains(item));
-    _markSessionQueueChanged();
-    _playHistory.clear();
-    queue.add(List<MediaItem>.unmodifiable(_queueItems));
+    final removed = _pruneQueuedSource(target);
+    if (removed == null) return;
 
     Future<void>? reaction;
     if (_media.isEmpty) {
       reaction = stop();
-    } else if (wasCurrent) {
-      final nextIndex = _index.clamp(0, _media.length - 1);
-      reaction = _playIndex(nextIndex);
+    } else if (removed.wasCurrent) {
+      reaction = _playIndex(removed.nextIndex.clamp(0, _media.length - 1));
     } else {
-      _index = (_index - removedBeforeCurrent).clamp(0, _media.length - 1);
+      _index = removed.nextIndex.clamp(0, _media.length - 1);
       _broadcastState();
       unawaited(_persistSession(position: playbackState.value.position));
     }
@@ -2856,16 +3121,67 @@ class MusicPlayerHandler extends BaseAudioHandler
     }
   }
 
+  ({bool wasCurrent, int nextIndex})? _pruneQueuedSource(String target) {
+    final wasCurrent =
+        _index >= 0 &&
+        _index < _media.length &&
+        _media[_index].source == target;
+
+    var removedBeforeCurrent = 0;
+    final kept = <PlayableMedia>[];
+    final keptQueue = <MediaItem>[];
+    final newIndices = <int, int>{};
+    for (var i = 0; i < _media.length; i++) {
+      if (_media[i].source == target) {
+        if (i < _index) removedBeforeCurrent++;
+        continue;
+      }
+      newIndices[i] = kept.length;
+      kept.add(_media[i]);
+      keptQueue.add(_queueItems[i]);
+    }
+
+    if (kept.length == _media.length) return null;
+
+    _media
+      ..clear()
+      ..addAll(kept);
+    _queueItems
+      ..clear()
+      ..addAll(keptQueue);
+    final keptSet = Set<MediaItem>.identity()..addAll(keptQueue);
+    _originalQueueOrder?.removeWhere((item) => !keptSet.contains(item));
+    _markSessionQueueChanged();
+    final keptHistory = [for (final index in _playHistory) ?newIndices[index]];
+    _playHistory
+      ..clear()
+      ..addAll(keptHistory);
+    queue.add(List<MediaItem>.unmodifiable(_queueItems));
+
+    return (wasCurrent: wasCurrent, nextIndex: _index - removedBeforeCurrent);
+  }
+
   Future<void> dispose() => _disposeFuture ??= _dispose();
+
+  @override
+  Future<void> androidSetRemoteVolume(int volumeIndex) =>
+      _cast.setVolume(volumeIndex);
+
+  @override
+  Future<void> androidAdjustRemoteVolume(AndroidVolumeDirection direction) =>
+      _cast.adjustVolume(direction);
 
   Future<void> _dispose() async {
     _autoplay.reset();
+    _prefetch.stop();
     _disposed = true;
+    await _cast.dispose();
     _runtime.personalization.finish();
     await _runtime.personalization.flush();
     if (_dependencies.isIOS) WidgetsBinding.instance.removeObserver(this);
     if (identical(musicPlayerRuntime.handler, this)) {
       autoMixStatus.value = AutoMixStatus.idle;
+      autoMixPreparing.value = false;
     }
     _runtime.detach(this);
     cancelSleepTimer();
@@ -2892,6 +3208,7 @@ class MusicPlayerHandler extends BaseAudioHandler
     }
     _activeResolvedPath = null;
     await _sourceCache.dispose();
+    await _formats.dispose();
   }
 }
 

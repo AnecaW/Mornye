@@ -1,6 +1,7 @@
 //! Backend cover art handling: downloading, resizing, extracting from audio files, and caching.
 
 use super::Backend;
+use crate::files::{StagedFile, SyncBatch};
 use cap_std::fs::OpenOptions;
 use mornye_core::app_version::AppVersion;
 use mornye_core::cover::{MAX_DOWNLOAD_BYTES, resize};
@@ -23,8 +24,8 @@ const CACHE_TTL: Duration = Duration::from_secs(15 * 60);
 const SIZE_ERROR: &str = "cover download exceeds 24 MiB limit";
 
 /// A forced rescan touches this file in the Library cover directory.
-/// Thumbnails older than it are extracted again under the same name, so
-/// playlists, sessions and statistics keep valid paths.
+/// Thumbnails older than it are extracted again. Android publishes changed
+/// bytes under a new name; old references keep their previous file.
 pub const LIBRARY_COVER_REGENERATE_MARKER: &str = ".regenerate";
 
 /// File stem of the Library thumbnail cached under `key`. 128 bits of
@@ -37,6 +38,12 @@ pub fn library_cover_stem(key: &str) -> String {
         .collect();
     format!("cover_{hex}")
 }
+
+/// Songs that embed the same picture share one stored thumbnail through hard
+/// links on desktop and iOS; every song keeps its own name. Android uses
+/// content names. Windows keeps copies because a reader's sharing mode
+/// covers every name of a file.
+const LINK_THUMBNAILS: bool = cfg!(any(target_vendor = "apple", target_os = "linux"));
 
 /// Whether a thumbnail written at `modified` may be reused after the
 /// directory's regenerate marker was touched at `regenerate`.
@@ -284,10 +291,14 @@ impl Backend {
             explicit_key,
             None,
             read_cover,
+            None,
+            cfg!(target_os = "android"),
             check,
         )
     }
 
+    /// With `batch`, the scan flushes the thumbnail folder once at its end
+    /// instead of per file.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn save_cover_to_cache_for_scan(
         &self,
@@ -296,6 +307,7 @@ impl Backend {
         cache_directory: &str,
         explicit_key: &str,
         read: impl FnOnce(&crate::files::FilePath, &str, &Check<'_>) -> Result<CoverArt, String>,
+        batch: Option<&SyncBatch>,
         check: &Check<'_>,
     ) -> Result<String, String> {
         let format = mornye_core::tags::library_extension(audio_path, hint);
@@ -309,6 +321,8 @@ impl Backend {
             explicit_key,
             format,
             read,
+            batch,
+            cfg!(target_os = "android"),
             check,
         )
     }
@@ -322,6 +336,8 @@ impl Backend {
         explicit_key: &str,
         format_override: Option<&str>,
         read: impl FnOnce(&crate::files::FilePath, &str, &Check<'_>) -> Result<CoverArt, String>,
+        batch: Option<&SyncBatch>,
+        content_addressed: bool,
         check: &Check<'_>,
     ) -> Result<String, String> {
         let _operation = self.enter()?;
@@ -366,10 +382,12 @@ impl Backend {
         jpg.native_display()?;
         png.native_display()?;
         // A regenerated thumbnail can change format; the newer file wins.
-        if let Some((_, cached)) = [&jpg, &png]
+        let cached = [&jpg, &png]
             .into_iter()
             .filter_map(|cached| Some((reusable_cached_cover(cached, regenerate)?, cached)))
-            .max_by_key(|(modified, _)| *modified)
+            .max_by_key(|(modified, _)| *modified);
+        if let Some((_, cached)) = cached
+            && !content_addressed
         {
             return Ok(cached.display());
         }
@@ -380,10 +398,12 @@ impl Backend {
         if let Some(value) = format_override {
             format = value.into();
         }
-        if !matches!(
-            format.as_str(),
-            "flac" | "m4a" | "mp3" | "ogg" | "opus" | "wav" | "aiff" | "aif" | "aifc"
-        ) {
+        if cached.is_none()
+            && !matches!(
+                format.as_str(),
+                "flac" | "m4a" | "mp3" | "ogg" | "opus" | "wav" | "aiff" | "aif" | "aifc"
+            )
+        {
             return Err(format!(
                 "unsupported format: {}",
                 if format.is_empty() {
@@ -393,8 +413,33 @@ impl Backend {
                 }
             ));
         }
-        let mut cover = read(&input, &format, &check)?;
-        if let Ok(resized) = mornye_core::cover::library_thumbnail(&cover.data, &check) {
+        let mut cover = if let Some((_, cached)) = cached {
+            let mut data = Vec::new();
+            cached
+                .open(OpenOptions::new().read(true))
+                .map_err(|error| error.to_string())?
+                .take(MAX_DOWNLOAD_BYTES as u64 + 1)
+                .read_to_end(&mut data)
+                .map_err(|error| error.to_string())?;
+            if data.len() > MAX_DOWNLOAD_BYTES {
+                check()?;
+                return Ok(cached.display());
+            }
+            CoverArt {
+                data,
+                mime: if cached.display().ends_with(".png") {
+                    "image/png"
+                } else {
+                    "image/jpeg"
+                }
+                .into(),
+            }
+        } else {
+            read(&input, &format, &check)?
+        };
+        let mut stored = None;
+        if let Ok(thumbnail) = mornye_core::cover::library_thumbnail_entry(&cover.data, &check) {
+            let resized = thumbnail.data;
             cover.mime = if resized.starts_with(b"\x89PNG") {
                 "image/png"
             } else if resized.starts_with(b"\xff\xd8") {
@@ -404,13 +449,47 @@ impl Backend {
             }
             .into();
             cover.data = resized.to_vec();
+            stored = (LINK_THUMBNAILS && !content_addressed).then_some(thumbnail.stored);
         }
         // Library caching may retain unsupported image bytes, but must never
         // swallow cancellation while attempting the optional resize.
         check()?;
-        let output = if cover.mime.contains("png") { png } else { jpg };
+        if content_addressed && cover.data.is_empty() {
+            return Err("empty library artwork".into());
+        }
+        let output = if content_addressed {
+            let stem = mornye_core::cover::library_content_stem(&cover.data);
+            let extension = if cover.data.starts_with(b"\x89PNG") {
+                "png"
+            } else if cover.data.starts_with(b"\xff\xd8") {
+                "jpg"
+            } else if cover.mime.contains("png") {
+                "png"
+            } else {
+                "jpg"
+            };
+            files.resolve_legacy(&path(&format!("{stem}.{extension}")).to_string_lossy())?
+        } else if cover.mime.contains("png") {
+            png
+        } else {
+            jpg
+        };
         let _lock = files.lock(&output, &check)?;
-        if reusable_cached_cover(&output, regenerate).is_some() {
+        if content_addressed && output.metadata().is_ok() {
+            let mut existing = Vec::new();
+            output
+                .open(OpenOptions::new().read(true))
+                .map_err(|error| error.to_string())?
+                .take(cover.data.len() as u64 + 1)
+                .read_to_end(&mut existing)
+                .map_err(|error| error.to_string())?;
+            check()?;
+            if existing != cover.data {
+                return Err("content-addressed library artwork differs from its name".into());
+            }
+            return Ok(output.display());
+        }
+        if !content_addressed && reusable_cached_cover(&output, regenerate).is_some() {
             return Ok(output.display());
         }
         output
@@ -418,8 +497,33 @@ impl Backend {
             .map_err(|error| format!("failed to create cache dir: {error}"))?;
         let permissions = output_permissions(&output)
             .map_err(|error| format!("failed to write cover: {error}"))?;
-        publish_cover(&output, permissions, &cover.data, &check)
+        // Songs of one album reach this point together; holding the record
+        // until the first file is published lets the others link it.
+        let mut stored = stored.as_deref().and_then(|stored| stored.lock().ok());
+        let source = stored
+            .as_deref()
+            .and_then(Option::as_deref)
+            .and_then(|path| {
+                stored_cover(
+                    &files,
+                    path,
+                    &output,
+                    &cover.data,
+                    permissions.as_ref(),
+                    regenerate,
+                )
+            });
+        let source = source.as_ref().map(|(path, file)| (path, file));
+        let stage = stage_cover(&output, permissions, &cover.data, source, &check)
             .map_err(|error| format!("failed to write cover: {error}"))?;
+        match batch {
+            Some(batch) => stage.publish_batched(batch, &check),
+            None => stage.publish(&check),
+        }
+        .map_err(|error| format!("failed to write cover: {error}"))?;
+        if let Some(stored) = stored.as_deref_mut() {
+            *stored = Some(output.display());
+        }
         Ok(output.display())
     }
 
@@ -484,12 +588,16 @@ fn read_cover(
     extract_cover(&mut file, format, check)
 }
 
-/// The modification time of a cached thumbnail that may be reused.
+/// The modification time of a cached thumbnail that may be reused. An empty
+/// file, which a power loss before a scan's final flush can leave, is missing.
 fn reusable_cached_cover(
     path: &crate::files::FilePath,
     regenerate: Option<SystemTime>,
 ) -> Option<SystemTime> {
-    let metadata = path.metadata().ok().filter(|metadata| metadata.is_file())?;
+    let metadata = path
+        .metadata()
+        .ok()
+        .filter(|metadata| metadata.is_file() && metadata.len() > 0)?;
     let modified = metadata
         .modified()
         .map_or(UNIX_EPOCH, |modified| modified.into_std());
@@ -523,12 +631,55 @@ fn output_permissions(
     }
 }
 
+/// `stored`, where an earlier song put this thumbnail, opened for linking. It
+/// qualifies only while it holds exactly `data`, is current for the
+/// regenerate marker and matches an existing output's permissions.
+fn stored_cover(
+    files: &crate::files::ExtensionFiles,
+    stored: &str,
+    output: &crate::files::FilePath,
+    data: &[u8],
+    permissions: Option<&cap_std::fs::Permissions>,
+    regenerate: Option<SystemTime>,
+) -> Option<(crate::files::FilePath, cap_std::fs::File)> {
+    let source = files.resolve_legacy(stored).ok()?;
+    if source.absolute == output.absolute {
+        return None;
+    }
+    let mut file = source.open(OpenOptions::new().read(true)).ok()?;
+    let metadata = file.metadata().ok()?;
+    let modified = metadata.modified().ok()?.into_std();
+    if metadata.len() != data.len() as u64
+        || !library_cover_is_current(modified, regenerate)
+        || permissions.is_some_and(|permissions| *permissions != metadata.permissions())
+    {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(data.len());
+    (&mut file)
+        .take(data.len() as u64 + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    (bytes == data).then_some((source, file))
+}
+
 fn publish_cover(
     output: &crate::files::FilePath,
     permissions: Option<cap_std::fs::Permissions>,
     data: &[u8],
     check: &Check<'_>,
 ) -> Result<(), String> {
+    stage_cover(output, permissions, data, None, check)?.publish(check)
+}
+
+/// Stages `data` for `output`, as a hard link to `source` when it can.
+fn stage_cover(
+    output: &crate::files::FilePath,
+    permissions: Option<cap_std::fs::Permissions>,
+    data: &[u8],
+    source: Option<(&crate::files::FilePath, &cap_std::fs::File)>,
+    check: &Check<'_>,
+) -> Result<StagedFile, String> {
     check()?;
     let mut stage = output
         .stage_existing_parent()
@@ -539,6 +690,24 @@ fn publish_cover(
             .set_permissions(permissions)
             .map_err(|error| error.to_string())?;
     }
+    if let Some((path, file)) = source {
+        let permissions = stage
+            .file
+            .metadata()
+            .map_err(|error| error.to_string())?
+            .permissions();
+        if file
+            .metadata()
+            .is_ok_and(|metadata| metadata.permissions() == permissions)
+        {
+            let (linked_stage, linked) = output
+                .stage_from(path, file)
+                .map_err(|error| error.to_string())?;
+            if linked {
+                return Ok(linked_stage);
+            }
+        }
+    }
     for chunk in data.chunks(16 * 1024) {
         check()?;
         stage
@@ -546,16 +715,61 @@ fn publish_cover(
             .write_all(chunk)
             .map_err(|error| error.to_string())?;
     }
-    stage.publish(check)
+    Ok(stage)
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use std::cell::Cell;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::mpsc;
     use std::thread;
+
+    /// A `size` px JPEG with a little noise, so it compresses like album art.
+    /// Each `seed` gives different bytes.
+    pub(in crate::backend) fn artwork(seed: u32, size: u32) -> Vec<u8> {
+        let mut state = seed.wrapping_mul(2_654_435_761) | 1;
+        let image = image::RgbImage::from_fn(size, size, |x, y| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            let noise = (state & 63) as u8;
+            image::Rgb([
+                (x * 255 / size) as u8 ^ noise,
+                (y * 255 / size) as u8 ^ noise,
+                seed.wrapping_mul(37) as u8 ^ noise,
+            ])
+        });
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 90)
+            .encode_image(&image)
+            .unwrap();
+        jpeg
+    }
+
+    /// An untagged FLAC file with `jpeg` as its front cover.
+    pub(in crate::backend) fn flac_with_picture(jpeg: &[u8]) -> Vec<u8> {
+        let mut picture = 3_u32.to_be_bytes().to_vec();
+        for field in [b"image/jpeg".as_slice(), b""] {
+            picture.extend((field.len() as u32).to_be_bytes());
+            picture.extend(field);
+        }
+        picture.extend([0; 16]);
+        picture.extend((jpeg.len() as u32).to_be_bytes());
+        picture.extend(jpeg);
+        let mut info = [0; 34];
+        let packed = (44_100_u64 << 44) | (1_u64 << 41) | (15_u64 << 36) | 44_100;
+        info[10..18].copy_from_slice(&packed.to_be_bytes());
+        let mut flac = b"fLaC\0".to_vec();
+        flac.extend(&(info.len() as u32).to_be_bytes()[1..]);
+        flac.extend(info);
+        flac.push(0x86);
+        flac.extend(&(picture.len() as u32).to_be_bytes()[1..]);
+        flac.extend(picture);
+        flac.extend([0xff, 0xf8]);
+        flac
+    }
 
     fn cover() -> Cover {
         Cover::new(&NetworkService::new().unwrap(), "1".into())
@@ -583,6 +797,103 @@ mod tests {
         audio.push(frame.len() as u8);
         audio.extend(frame);
         audio
+    }
+
+    #[test]
+    fn android_names_share_one_file_per_picture_and_keep_legacy_references() {
+        let directory = tempfile::tempdir().unwrap();
+        let backend = backend(directory.path());
+        let data = directory.path().join("data");
+        let cache = data.join("covers");
+        let pictures = [artwork(101, 32), artwork(102, 32)];
+        let mut paths = Vec::new();
+        for index in 0..12 {
+            let audio = data.join(format!("{index}.flac"));
+            std::fs::write(&audio, flac_with_picture(&pictures[index % 2])).unwrap();
+            let path = backend
+                .cache_cover(
+                    audio.to_str().unwrap(),
+                    "",
+                    cache.to_str().unwrap(),
+                    &format!("song-{index}"),
+                    None,
+                    read_cover,
+                    None,
+                    true,
+                    &|| Ok(()),
+                )
+                .unwrap();
+            paths.push(path);
+        }
+        assert_eq!(std::fs::read_dir(&cache).unwrap().count(), 2);
+        assert_ne!(paths[0], paths[1]);
+        for index in 2..12 {
+            assert_eq!(paths[index], paths[index % 2]);
+        }
+        assert_eq!(std::fs::read(&paths[0]).unwrap(), pictures[0]);
+        let before = std::fs::metadata(&paths[0]).unwrap().modified().unwrap();
+        let legacy = cache.join(format!("{}.jpg", library_cover_stem("legacy")));
+        std::fs::write(&legacy, &pictures[0]).unwrap();
+        let path = backend
+            .cache_cover(
+                data.join("0.flac").to_str().unwrap(),
+                "",
+                cache.to_str().unwrap(),
+                "legacy",
+                None,
+                |_, _, _| panic!("legacy hit must not reread audio"),
+                None,
+                true,
+                &|| Ok(()),
+            )
+            .unwrap();
+        assert_eq!(path, paths[0]);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            before
+        );
+        assert_eq!(std::fs::read(&legacy).unwrap(), pictures[0]);
+
+        std::fs::write(cache.join(LIBRARY_COVER_REGENERATE_MARKER), "").unwrap();
+        let replacement = backend
+            .cache_cover(
+                data.join("0.flac").to_str().unwrap(),
+                "",
+                cache.to_str().unwrap(),
+                "legacy",
+                None,
+                |_, _, _| {
+                    Ok(CoverArt {
+                        data: pictures[1].clone(),
+                        mime: "image/jpeg".into(),
+                    })
+                },
+                None,
+                true,
+                &|| Ok(()),
+            )
+            .unwrap();
+        assert_eq!(replacement, paths[1]);
+        assert_eq!(std::fs::read(&paths[0]).unwrap(), pictures[0]);
+        assert_eq!(std::fs::read(&legacy).unwrap(), pictures[0]);
+
+        std::fs::write(&paths[1], b"unrelated bytes").unwrap();
+        assert!(
+            backend
+                .cache_cover(
+                    data.join("1.flac").to_str().unwrap(),
+                    "",
+                    cache.to_str().unwrap(),
+                    "fresh",
+                    None,
+                    read_cover,
+                    None,
+                    true,
+                    &|| Ok(()),
+                )
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&paths[1]).unwrap(), b"unrelated bytes");
     }
 
     #[test]
@@ -682,6 +993,155 @@ mod tests {
         assert_eq!(save(), cached);
         assert_eq!(std::fs::read(&cached).unwrap(), jpeg);
         assert_eq!(std::fs::read(&source).unwrap(), audio);
+    }
+
+    #[cfg(unix)]
+    fn inode(path: &str) -> u64 {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(path).unwrap().ino()
+    }
+
+    /// Desktop and iOS link identical thumbnails; Android keeps copies.
+    const LINKED: bool = cfg!(any(target_vendor = "apple", target_os = "linux"));
+
+    #[cfg(unix)]
+    #[test]
+    fn songs_with_the_same_picture_link_one_file_that_still_holds_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let backend = backend(directory.path());
+        let data = directory.path().join("data");
+        let cache = data.join("covers");
+        let art = artwork(9_100, 600);
+        let save = |key: &str, picture: &[u8]| {
+            let source = data.join(format!("{key}.flac"));
+            std::fs::write(&source, flac_with_picture(picture)).unwrap();
+            backend
+                .save_cover_to_cache_with_hint_and_key(
+                    source.to_str().unwrap(),
+                    "",
+                    cache.to_str().unwrap(),
+                    key,
+                    &|| Ok(()),
+                )
+                .unwrap()
+        };
+        let first = save("first", &art);
+        let second = save("second", &art);
+        let other = save("other", &artwork(9_101, 600));
+        assert_ne!(first, second);
+        assert_eq!(std::fs::read(&second).unwrap(), art);
+        assert_eq!(inode(&first) == inode(&second), LINKED);
+        assert_ne!(inode(&first), inode(&other));
+
+        // Removing one name leaves the other song's cover in place.
+        std::fs::remove_file(&first).unwrap();
+        assert_eq!(std::fs::read(&second).unwrap(), art);
+        let third = save("third", &art);
+        assert_eq!(inode(&third) == inode(&second), LINKED);
+
+        // A stored file that no longer holds the bytes is never linked.
+        let replaced = cache.join("replaced");
+        std::fs::write(&replaced, vec![0; art.len()]).unwrap();
+        std::fs::rename(&replaced, &third).unwrap();
+        let fourth = save("fourth", &art);
+        assert_eq!(std::fs::read(&fourth).unwrap(), art);
+        assert_ne!(inode(&fourth), inode(&third));
+        assert_eq!(std::fs::read(&second).unwrap(), art);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_new_thumbnail_keeps_fresh_file_permissions() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let directory = tempfile::tempdir().unwrap();
+        let backend = backend(directory.path());
+        let data = directory.path().join("data");
+        let cache = data.join("covers");
+        let art = artwork(9_150, 600);
+        let save = |key: &str| {
+            let source = data.join(format!("{key}.flac"));
+            std::fs::write(&source, flac_with_picture(&art)).unwrap();
+            backend
+                .save_cover_to_cache_with_hint_and_key(
+                    source.to_str().unwrap(),
+                    "",
+                    cache.to_str().unwrap(),
+                    key,
+                    &|| Ok(()),
+                )
+                .unwrap()
+        };
+        let first = save("first");
+        let mode = std::fs::metadata(&first).unwrap().mode() & 0o7777;
+        std::fs::set_permissions(&first, std::fs::Permissions::from_mode(mode ^ 0o040)).unwrap();
+
+        let second = save("second");
+        assert_eq!(std::fs::metadata(&second).unwrap().mode() & 0o7777, mode);
+        assert_ne!(inode(&first), inode(&second));
+        assert_eq!(std::fs::read(&second).unwrap(), art);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_thumbnail_older_than_the_regenerate_marker_is_not_linked() {
+        let directory = tempfile::tempdir().unwrap();
+        let backend = backend(directory.path());
+        let data = directory.path().join("data");
+        let cache = data.join("covers");
+        let art = artwork(9_200, 600);
+        let save = |key: &str| {
+            let source = data.join(format!("{key}.flac"));
+            std::fs::write(&source, flac_with_picture(&art)).unwrap();
+            backend
+                .save_cover_to_cache_with_hint_and_key(
+                    source.to_str().unwrap(),
+                    "",
+                    cache.to_str().unwrap(),
+                    key,
+                    &|| Ok(()),
+                )
+                .unwrap()
+        };
+        let stale = save("stale");
+        std::fs::File::options()
+            .write(true)
+            .open(&stale)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(60))
+            .unwrap();
+        std::fs::write(cache.join(LIBRARY_COVER_REGENERATE_MARKER), "").unwrap();
+        let fresh = save("fresh");
+        assert_ne!(inode(&fresh), inode(&stale));
+        assert_eq!(std::fs::read(&fresh).unwrap(), art);
+        let later = save("later");
+        assert_eq!(inode(&later) == inode(&fresh), LINKED);
+    }
+
+    #[test]
+    fn an_empty_thumbnail_is_extracted_again() {
+        let directory = tempfile::tempdir().unwrap();
+        let data = directory.path().join("data");
+        let backend = backend(directory.path());
+        let jpeg = b"\xff\xd8\xff\xe0empty";
+        let source = data.join("track.mp3");
+        std::fs::write(&source, id3_audio(jpeg)).unwrap();
+        let cache = data.join("covers");
+        let save = || {
+            backend
+                .save_cover_to_cache_with_hint_and_key(
+                    source.to_str().unwrap(),
+                    "",
+                    cache.to_str().unwrap(),
+                    "track",
+                    &|| Ok(()),
+                )
+                .unwrap()
+        };
+        let cached = save();
+        // What a power loss between a scan's fsync and its final flush can leave.
+        std::fs::write(&cached, b"").unwrap();
+        assert_eq!(save(), cached);
+        assert_eq!(std::fs::read(&cached).unwrap(), jpeg);
     }
 
     #[test]

@@ -608,6 +608,58 @@ extension _HomeTabSearchResultsUI on _HomeTabState {
     VoidCallback? onShowAll,
   }) {
     final mornye = context.isMornye;
+    // The title and chevron both open the section's complete results.
+    if (mornye && onShowAll != null) {
+      return SliverToBoxAdapter(
+        child: Padding(
+          padding: const EdgeInsetsDirectional.fromSTEB(
+            20,
+            22,
+            12,
+            12,
+          ).add(EdgeInsets.symmetric(horizontal: homeContentInset(context))),
+          child: Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: Semantics(
+              button: true,
+              label: context.l10n.searchShowAllCategory(title),
+              onTap: onShowAll,
+              excludeSemantics: true,
+              child: MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: onShowAll,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    spacing: 6,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(
+                                fontWeight: FontWeight.w700,
+                                color: colorScheme.onSurface,
+                              ),
+                        ),
+                      ),
+                      Icon(
+                        CupertinoIcons.chevron_forward,
+                        size: 14,
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
     return SliverToBoxAdapter(
       child: Padding(
         // Aligned with the clamped result list below on wide screens.
@@ -854,6 +906,91 @@ extension _HomeTabSearchResultsUI on _HomeTabState {
     );
   }
 
+  /// Compact desktop navigation with a back action and the provider's full
+  /// filter list. Section headings alone cannot expose filters with no results.
+  Widget _buildSearchBackBar(
+    ColorScheme colorScheme, {
+    required bool showBack,
+    required List<SearchFilter> filters,
+    required String? selectedFilter,
+    Widget? tools,
+  }) {
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: 20 + homeContentInset(context)),
+      child: Row(
+        children: [
+          if (showBack)
+            CupertinoButton(
+              padding: EdgeInsets.zero,
+              minimumSize: const Size(0, 36),
+              onPressed: () => _selectSearchFilter('all'),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                spacing: 4,
+                children: [
+                  Icon(
+                    CupertinoIcons.back,
+                    size: 14,
+                    color: colorScheme.primary,
+                  ),
+                  Text(
+                    context.l10n.historyFilterAll,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: colorScheme.primary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          const Spacer(),
+          if (filters.isNotEmpty)
+            Builder(
+              builder: (buttonContext) => AppIconButton(
+                tooltip: context.l10n.libraryFilterTitle,
+                icon: const Icon(CupertinoIcons.line_horizontal_3_decrease),
+                onPressed: () async {
+                  final selected = await showMornyeContextMenu<String>(
+                    context: buttonContext,
+                    builder: (menuContext) => MornyeContextMenu(
+                      dense: true,
+                      groups: [
+                        [
+                          MornyeMenuAction(
+                            icon: null,
+                            label: context.l10n.historyFilterAll,
+                            selected: selectedFilter == 'all',
+                            onPressed: () => Navigator.pop(menuContext, 'all'),
+                          ),
+                          for (final filter in filters.where(
+                            (filter) =>
+                                canonicalExtensionSearchFilterId(filter.id) !=
+                                'all',
+                          ))
+                            MornyeMenuAction(
+                              icon: filter.icon == null
+                                  ? null
+                                  : mornyeIconFor(_getFilterIcon(filter.icon!)),
+                              label: filter.label ?? filter.id,
+                              selected: selectedFilter == filter.id,
+                              onPressed: () =>
+                                  Navigator.pop(menuContext, filter.id),
+                            ),
+                        ],
+                      ],
+                    ),
+                  );
+                  if (selected != null && mounted) {
+                    _selectSearchFilter(selected);
+                  }
+                },
+              ),
+            ),
+          ?tools,
+        ],
+      ),
+    );
+  }
+
   IconData _getFilterIcon(String iconName) {
     switch (iconName.toLowerCase()) {
       case 'music':
@@ -900,8 +1037,10 @@ extension _HomeTabSearchResultsUI on _HomeTabState {
         _searchFocusNode.hasFocus;
 
     final searchingLibrary = _searchingLibrary;
+    final compact = _compactSearchField;
     return AppSearchField(
       controller: _urlController,
+      compact: compact,
       samplesBackdrop: false,
       focusNode: _searchFocusNode,
       hintText: searchingLibrary
@@ -929,11 +1068,23 @@ extension _HomeTabSearchResultsUI on _HomeTabState {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (hasText)
-            AppIconButton(
-              icon: const Icon(Icons.clear),
-              onPressed: _clearAndRefresh,
-              tooltip: context.l10n.dialogClear,
-            )
+            compact
+                ? IconButton(
+                    icon: const Icon(CupertinoIcons.clear_circled_solid),
+                    iconSize: 17,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints.tightFor(
+                      width: 30,
+                      height: 30,
+                    ),
+                    onPressed: _clearAndRefresh,
+                    tooltip: context.l10n.dialogClear,
+                  )
+                : AppIconButton(
+                    icon: const Icon(Icons.clear),
+                    onPressed: _clearAndRefresh,
+                    tooltip: context.l10n.dialogClear,
+                  )
           else if (showInputActions && !searchingLibrary) ...[
             AppIconButton(
               icon: const Icon(Icons.file_upload_outlined),

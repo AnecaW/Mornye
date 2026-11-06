@@ -83,6 +83,72 @@ extension NetworkStorageUpload on NetworkStorageService {
     File? matchingFile,
     void Function()? checkpoint,
   }) async {
+    final target = await _prepareUploadFolder(folder, relativeDir, filename);
+    final name = target.name;
+    final names = target.names;
+    if (matchingFile != null && names.contains(name.toLowerCase())) {
+      final existing = NetworkStorageService.source(
+        target.connection.id,
+        '${target.parent}$name',
+      );
+      if (await _matchesUpload(
+        existing,
+        matchingFile,
+        await matchingFile.length(),
+        checkpoint ?? () {},
+      ))
+        return existing;
+    }
+
+    final dot = name.lastIndexOf('.');
+    final stem = dot > 0 ? name.substring(0, dot) : name;
+    final suffix = dot > 0 ? name.substring(dot) : '';
+    var candidate = name;
+    bool occupied(String value) =>
+        names.contains(value.toLowerCase()) ||
+        names.contains(
+          '${value.substring(0, value.length - suffix.length)}.lrc'
+              .toLowerCase(),
+        );
+    for (var i = 2; occupied(candidate); i++) {
+      candidate = '$stem ($i)$suffix';
+    }
+    return NetworkStorageService.source(
+      target.connection.id,
+      '${target.parent}$candidate',
+    );
+  }
+
+  /// [filename] under [folder]/[relativeDir], creating missing folders, or
+  /// null when that folder already holds a file of the name. Unlike
+  /// [prepareUpload] it never picks a numbered name: a Library song copied
+  /// again is already there.
+  Future<String?> prepareNewUpload(
+    String folder,
+    String relativeDir,
+    String filename,
+  ) async {
+    final target = await _prepareUploadFolder(folder, relativeDir, filename);
+    if (target.names.contains(target.name.toLowerCase())) return null;
+    return NetworkStorageService.source(
+      target.connection.id,
+      '${target.parent}${target.name}',
+    );
+  }
+
+  Future<
+    ({
+      NetworkConnection connection,
+      String parent,
+      String name,
+      Set<String> names,
+    })
+  >
+  _prepareUploadFolder(
+    String folder,
+    String relativeDir,
+    String filename,
+  ) async {
     final location = await _uploadLocation(folder);
     final c = location.connection;
     var parent = location.path;
@@ -101,38 +167,12 @@ extension NetworkStorageUpload on NetworkStorageService {
       await _makeUploadFolder(c, parent);
     }
     final entries = await list(c, parent);
-    final names = entries.map((e) => e.name.toLowerCase()).toSet();
-    if (matchingFile != null && names.contains(name.toLowerCase())) {
-      final existing = entries.firstWhere(
-        (e) => e.name.toLowerCase() == name.toLowerCase(),
-      );
-      final source = NetworkStorageService.source(
-        c.id,
-        '$parent${existing.name}',
-      );
-      if (await _matchesUpload(
-        source,
-        matchingFile,
-        await matchingFile.length(),
-        checkpoint ?? () {},
-      )) {
-        return source;
-      }
-    }
-    final dot = name.lastIndexOf('.');
-    final stem = dot > 0 ? name.substring(0, dot) : name;
-    final suffix = dot > 0 ? name.substring(dot) : '';
-    var candidate = name;
-    bool occupied(String value) =>
-        names.contains(value.toLowerCase()) ||
-        names.contains(
-          '${value.substring(0, value.length - suffix.length)}.lrc'
-              .toLowerCase(),
-        );
-    for (var i = 2; occupied(candidate); i++) {
-      candidate = '$stem ($i)$suffix';
-    }
-    return NetworkStorageService.source(c.id, '$parent$candidate');
+    return (
+      connection: c,
+      parent: parent,
+      name: name,
+      names: entries.map((e) => e.name.toLowerCase()).toSet(),
+    );
   }
 
   Future<bool> _matchesUpload(

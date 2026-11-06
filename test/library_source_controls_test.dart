@@ -148,6 +148,55 @@ void main() {
     },
   );
   testWidgets(
+    'shared source settings keep disabled servers visible when Local Library is off',
+    (tester) async {
+      final storage = NetworkStorageService(
+        read: () async => null,
+        write: (_) async {},
+      );
+      addTearDown(storage.dispose);
+      await storage.save(
+        const NetworkConnection(
+          id: 'fixture',
+          name: 'Music server',
+          protocol: NetworkProtocol.subsonic,
+          address: 'https://music.test',
+        ),
+      );
+      final c = ProviderContainer(
+        overrides: [
+          librarySourceStorageProvider.overrideWithValue(storage),
+          settingsProvider.overrideWith(_Settings.new),
+          localLibraryProvider.overrideWith(_Library.new),
+        ],
+      );
+      addTearDown(c.dispose);
+      await tester.pumpWidget(app(c, const LibrarySourceSettingsList()));
+      await tester.pumpAndSettle();
+      expect(find.text('Music server'), findsOneWidget);
+      c.read(settingsProvider.notifier).setLocalLibraryEnabled(false);
+      (c.read(localLibraryProvider.notifier) as _Library).disable(true);
+      await tester.pumpAndSettle();
+      expect(find.text('Music server'), findsOneWidget);
+      expect(
+        tester
+            .widgetList<SwitchListTile>(find.byType(SwitchListTile))
+            .map((s) => s.value),
+        [false, false],
+      );
+      expect(find.byIcon(Icons.settings_outlined), findsOneWidget);
+      expect(await storage.connections(), hasLength(1));
+      (c.read(localLibraryProvider.notifier) as _Library).disable(false);
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widgetList<SwitchListTile>(find.byType(SwitchListTile))
+            .map((s) => s.value),
+        [false, true],
+      );
+    },
+  );
+  testWidgets(
     'local switch immediately removes and restores the icon-labelled option',
     (tester) async {
       final c = ProviderContainer(

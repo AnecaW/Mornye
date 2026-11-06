@@ -6,6 +6,10 @@ import 'package:mornye/providers/music_player_provider.dart';
 import 'package:mornye/widgets/desktop/context_menu.dart';
 import 'package:mornye/widgets/desktop/desktop_link_transfer_actions.dart';
 import 'package:mornye/widgets/playlist_picker_sheet.dart';
+import 'package:mornye/services/network_offline_saver.dart';
+import 'package:mornye/widgets/network_offline_actions.dart';
+import 'package:mornye/providers/network_upload_provider.dart';
+import 'package:mornye/widgets/network_upload_actions.dart';
 
 /// Context menu groups for library files (downloaded or scanned), acting on
 /// [items]: the selection the menu was opened on.
@@ -77,6 +81,29 @@ List<List<ContextMenuAction>> libraryTrackMenuGroups(
     ],
     desktopLinkTransferActions(context, ref, items, onDone: onDone),
     [
+      if (items.any((item) => networkOfflineOrigin(item) != null))
+        ContextMenuAction(
+          icon: Icons.download_for_offline_outlined,
+          label: l10n.offlineSave,
+          onSelected: () {
+            onDone?.call();
+            saveNetworkOffline(root, ref, items);
+          },
+        ),
+      if (networkUploadOffered(
+        ref.read(networkUploadConnectionsProvider).value,
+        items,
+      ))
+        ContextMenuAction(
+          icon: Icons.cloud_upload_outlined,
+          label: l10n.networkUpload,
+          onSelected: () {
+            onDone?.call();
+            uploadToNetworkStorage(root, ref, items);
+          },
+        ),
+    ],
+    [
       if (onOpenDetails != null && count == 1)
         ContextMenuAction(
           icon: Icons.info_outline,
@@ -102,10 +129,22 @@ List<List<ContextMenuAction>> libraryTrackMenuGroups(
         ),
     ],
     [
+      if (items.every((item) => item.historyItem?.originFilePath != null))
+        ContextMenuAction(
+          icon: Icons.cloud_off_outlined,
+          label: l10n.offlineDeleteServer,
+          destructive: true,
+          onSelected: () {
+            onDone?.call();
+            deleteOfflineServerCopies(root, ref, items);
+          },
+        ),
       if (onDelete != null)
         ContextMenuAction(
           icon: Icons.delete_outline,
-          label: l10n.selectionDeleteTracksCount(count),
+          label: items.every((item) => item.historyItem?.originFilePath != null)
+              ? l10n.offlineRemove
+              : l10n.selectionDeleteTracksCount(count),
           destructive: true,
           onSelected: onDelete,
         ),

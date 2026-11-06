@@ -167,8 +167,79 @@ class LibraryQueueStore {
 
   /// One page of the metadata Home mixes group songs by, over the same set
   /// as [directoryEntries]: only the columns ranking, decades and the New
-  /// Additions mix read, so a large Library arrives in small rows.
+  /// Additions mix read, so a large Library arrives in small rows. Pages of
+  /// [source] ('downloaded' or 'local') run by id after [afterId], so each
+  /// seeks its primary key; downloads, then scanned files, each by id, is
+  /// the order of the whole set.
   Future<List<Map<String, Object?>>> mixSongs({
+    String? source,
+    String? afterId,
+    bool? includeLocal,
+    int offset = 0,
+    QueueLibraryDbQuery? scope,
+    required int limit,
+  }) => source == null
+      ? _legacyMixSongs(
+          includeLocal: includeLocal ?? true,
+          limit: limit,
+          offset: offset,
+          scope: scope,
+        )
+      : _mixSongsPage(
+          source: source,
+          afterId: afterId,
+          limit: limit,
+          scope: scope,
+        );
+
+  Future<List<Map<String, Object?>>> _mixSongsPage({
+    required String source,
+    String? afterId,
+    required int limit,
+    QueueLibraryDbQuery? scope,
+  }) {
+    final scopedWhere = <String>[];
+    final scopedArgs = <Object?>[];
+    appendLibrarySourceScope(
+      scopedWhere,
+      scopedArgs,
+      scope,
+      'song.file_path',
+      indexed: source == 'local',
+    );
+    final sourceWhere = scopedWhere.isEmpty
+        ? ''
+        : 'AND ${scopedWhere.join(' AND ')}';
+    final after = afterId == null ? '' : 'AND song.id > ?';
+    final sql = switch (source) {
+      'downloaded' =>
+        '''
+        SELECT 'downloaded' AS source, song.id, song.file_path,
+          song.track_name, song.artist_name, song.album_name, song.genre,
+          song.duration, song.release_date, song.downloaded_at AS added_at,
+          NULL AS file_mod_time
+        FROM history_db.history song
+        WHERE COALESCE(song.file_path, '') != '' $after $sourceWhere
+        ''',
+      'local' =>
+        '''
+        SELECT 'local' AS source, song.id, song.file_path, song.track_name,
+          song.artist_name, song.album_name, song.genre, song.duration,
+          song.release_date, song.scanned_at AS added_at, song.file_mod_time
+        FROM ${LibrarySchema.visibleView} song
+        WHERE COALESCE(song.file_path, '') != ''
+          AND ${_notShadowedByHistory('song')} $after $sourceWhere
+        ''',
+      _ => throw ArgumentError.value(source, 'source'),
+    };
+    return _db.rawQuery('$sql ORDER BY song.id LIMIT ?', [
+      ?afterId,
+      ...scopedArgs,
+      limit,
+    ]);
+  }
+
+  Future<List<Map<String, Object?>>> _legacyMixSongs({
     required bool includeLocal,
     required int limit,
     required int offset,
@@ -295,6 +366,7 @@ class LibraryQueueStore {
         request.deviceOnly ||
         request.networkScope != null ||
         sqlite.normalizeLookupText(request.searchQuery).isNotEmpty ||
+        request.excludeNetwork ||
         request.albumArtist != null ||
         request.quality != null ||
         request.format != null ||
@@ -431,6 +503,9 @@ class LibraryQueueStore {
           h.album_artist,
           h.cover_url,
           h.file_path,
+          h.origin_file_path,
+          EXISTS(SELECT 1 FROM library origin
+            WHERE origin.file_path = h.origin_file_path) AS origin_available,
           h.storage_mode,
           h.download_tree_uri,
           h.saf_relative_dir,
@@ -508,6 +583,8 @@ class LibraryQueueStore {
           l.album_artist,
           NULL AS cover_url,
           l.file_path,
+          NULL AS origin_file_path,
+          0 AS origin_available,
           NULL AS storage_mode,
           NULL AS download_tree_uri,
           NULL AS saf_relative_dir,
@@ -572,6 +649,8 @@ class LibraryQueueStore {
           NULL AS album_artist,
           NULL AS cover_url,
           NULL AS file_path,
+          NULL AS origin_file_path,
+          0 AS origin_available,
           NULL AS storage_mode,
           NULL AS download_tree_uri,
           NULL AS saf_relative_dir,
@@ -622,6 +701,7 @@ class LibraryQueueStore {
   }) {
     final unfiltered =
         sqlite.normalizeLookupText(request.searchQuery).isEmpty &&
+        !request.excludeNetwork &&
         request.albumArtist == null &&
         request.quality == null &&
         request.format == null &&
@@ -643,6 +723,15 @@ class LibraryQueueStore {
     final parts = <String>[];
     if (request.source != 'local') {
       final albumKey = unfiltered ? 'h.album_key' : 'c.album_key';
+      final albums = <String>[];
+      if (!unfiltered) {
+        _appendQueueHistoryFilters(
+          albums,
+          args,
+          request,
+          albumCompleteness: false,
+        );
+      }
       final where = <String>[];
       _appendQueueHistoryFilters(
         where,
@@ -676,6 +765,7 @@ class LibraryQueueStore {
             COUNT(*) AS track_count,
             MAX(COALESCE(sort_added, 0)) AS latest_added
           FROM history_db.history
+          ${_albumKeysIn('history_db.history', 'h', albums)}
           GROUP BY album_key
           HAVING COUNT(*) > $minimumTracks
         ) c
@@ -697,7 +787,16 @@ class LibraryQueueStore {
     }
 
     if (request.includeLocal && request.source != 'downloaded') {
-      final albumKey = sourceAlbumKeySql('l');
+      final albumKey = unfiltered ? sourceAlbumKeySql('l') : 'c.album_key';
+      final albums = <String>[];
+      if (!unfiltered) {
+        _appendQueueLocalFilters(
+          albums,
+          args,
+          request,
+          albumCompleteness: false,
+        );
+      }
       final where = <String>[_notShadowedByHistory('l')];
       _appendQueueLocalFilters(
         where,
@@ -733,6 +832,7 @@ class LibraryQueueStore {
             MAX(COALESCE(sort_added, 0)) AS latest_added
           FROM ${LibrarySchema.visibleView} candidate
           WHERE ${_notShadowedByHistory('candidate')}
+          ${_albumKeysIn('library', 'l', albums, and: true)}
           GROUP BY ${sourceAlbumKeySql('candidate')}
           HAVING COUNT(*) > $minimumTracks
         ) c ON c.raw_album_key = l.album_key AND c.album_key = ${sourceAlbumKeySql('l')}'''}
@@ -778,18 +878,40 @@ class LibraryQueueStore {
     return parts.join(' UNION ALL ');
   }
 
+  /// Limits a per-album aggregate to the albums of the rows [where] keeps,
+  /// so a filtered album page aggregates only those albums. The aggregate
+  /// is joined on `album_key`, so any superset of those albums gives the
+  /// same rows.
+  String _albumKeysIn(
+    String table,
+    String alias,
+    List<String> where, {
+    bool and = false,
+  }) => where.isEmpty
+      ? ''
+      : '${and ? 'AND' : 'WHERE'} album_key IN ('
+            'SELECT $alias.album_key FROM $table $alias '
+            'WHERE ${where.join(' AND ')})';
+
+  /// [albumCompleteness] false leaves out the album completeness filter.
   void _appendQueueHistoryFilters(
     List<String> where,
     List<Object?> args,
     QueueLibraryDbQuery request, {
     bool hasCompletenessJoin = false,
+    bool albumCompleteness = true,
   }) {
-    _appendAlbumCompletenessFilter(
-      where,
-      request,
-      albumKey: 'h.album_key',
-      hasJoin: hasCompletenessJoin,
-    );
+    if (request.source == 'on-device') {
+      where.add("h.file_path NOT LIKE 'network://%'");
+    }
+    if (albumCompleteness) {
+      _appendAlbumCompletenessFilter(
+        where,
+        request,
+        albumKey: 'h.album_key',
+        hasJoin: hasCompletenessJoin,
+      );
+    }
     if (request.albumArtist != null) {
       where.add('h.sort_album_artist = ?');
       args.add(sqlite.normalizeLookupText(request.albumArtist));
@@ -839,16 +961,22 @@ class LibraryQueueStore {
     List<Object?> args,
     QueueLibraryDbQuery request, {
     bool hasCompletenessJoin = false,
+    bool albumCompleteness = true,
   }) {
     if (!request.includeIndexedDevice) {
       where.add("l.file_path LIKE 'network://%'");
     }
-    _appendAlbumCompletenessFilter(
-      where,
-      request,
-      albumKey: sourceAlbumKeySql('l'),
-      hasJoin: hasCompletenessJoin,
-    );
+    if (request.source == 'on-device') {
+      where.add("l.file_path NOT LIKE 'network://%'");
+    }
+    if (albumCompleteness) {
+      _appendAlbumCompletenessFilter(
+        where,
+        request,
+        albumKey: sourceAlbumKeySql('l'),
+        hasJoin: hasCompletenessJoin,
+      );
+    }
     if (request.albumArtist != null) {
       where.add('l.album_artist_norm = ?');
       args.add(sqlite.normalizeLookupText(request.albumArtist));
@@ -959,6 +1087,9 @@ class LibraryQueueStore {
         where.add('$filePathExpr NOT LIKE ?');
         args.add(scheme);
       }
+    }
+    if (request.excludeNetwork) {
+      where.add("COALESCE($filePathExpr, '') NOT LIKE 'network://%'");
     }
     final quality = request.quality?.trim().toLowerCase();
     if (quality != null && quality.isNotEmpty) {
@@ -1238,6 +1369,8 @@ class LibraryQueueStore {
         'fileModTime': row['file_mod_time'],
       } else ...{
         'coverUrl': row['cover_url'],
+        'originFilePath': row['origin_file_path'],
+        'originAvailable': row['origin_available'] == 1,
         'storageMode': row['storage_mode'],
         'downloadTreeUri': row['download_tree_uri'],
         'safRelativeDir': row['saf_relative_dir'],

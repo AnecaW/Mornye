@@ -16,12 +16,19 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mornye/services/file_access_check.dart';
 import 'package:mornye/services/network_storage_service.dart';
+import 'package:mornye/services/network_library_scanner.dart';
+import 'package:mornye/services/metadata_cover_resources.dart';
+import 'package:mornye/services/metadata_persistence_service.dart';
 import 'package:mornye/services/library_database.dart';
 import 'package:mornye/services/cue_split_library_service.dart';
 import 'package:mornye/services/link/features/link_save_offline.dart';
+import 'package:mornye/widgets/network_offline_actions.dart';
+import 'package:mornye/widgets/network_upload_actions.dart';
+import 'package:mornye/providers/network_upload_provider.dart';
 import 'package:mornye/models/unified_library_item.dart';
 import 'package:mornye/utils/file_access.dart';
 import 'package:mornye/utils/re_enrich_result.dart';
+import 'package:mornye/utils/service_track_link.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:share_plus/share_plus.dart';
@@ -181,6 +188,8 @@ class _TrackMetadataScreenState extends ConsumerState<TrackMetadataScreen>
   bool get _isNetworkItem => cleanFilePath.startsWith('network://');
   bool _networkFileDeletable = false;
   bool get _canDeleteFile => !_isNetworkItem || _networkFileDeletable;
+  bool get _canEditMetadataFile =>
+      _fileExists && (!_isNetworkItem || _networkFileDeletable);
   bool _isDeleting = false;
   int? get _fileSize => switch (_fileAccess) {
     FileAccessFound(:final stat) => stat.size,
@@ -272,7 +281,9 @@ class _TrackMetadataScreenState extends ConsumerState<TrackMetadataScreen>
 
   /// setState is @protected, so the extension part files route rebuilds
   /// through this forwarder.
-  void _setState(VoidCallback fn) => setState(fn);
+  void _setState(VoidCallback fn) {
+    if (mounted) setState(fn);
+  }
 
   @override
   double calculateExpandedHeight(BuildContext context) {

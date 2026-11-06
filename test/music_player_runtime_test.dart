@@ -19,6 +19,7 @@ import 'package:mornye/services/autoplay_ranker.dart';
 import 'package:mornye/services/autoplay_taste.dart';
 import 'package:mornye/services/background_favorites.dart';
 import 'package:mornye/services/cover_store.dart';
+import 'package:mornye/services/cast_output.dart';
 import 'package:mornye/services/history_database.dart';
 import 'package:mornye/services/library_collections_database.dart';
 import 'package:mornye/services/library_database.dart';
@@ -36,6 +37,7 @@ import 'package:mornye/services/link/link_protocol.dart';
 import 'package:mornye/services/media_library_browser.dart';
 import 'package:mornye/services/music_player_service.dart';
 import 'package:mornye/services/network_metadata_service.dart';
+import 'package:mornye/services/network_playback_cache.dart';
 import 'package:mornye/services/network_storage_service.dart';
 import 'package:mornye/services/playback_deck.dart';
 import 'package:mornye/services/playback_notification.dart';
@@ -50,6 +52,31 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart'
 import 'support/link_fakes.dart';
 import 'support/virtual_time.dart';
 
+/// A NAS download of a three-byte song, held until [release] completes.
+class _NasTransfer implements NetworkPlaybackTransfer {
+  _NasTransfer(this.release);
+
+  final Future<void>? release;
+
+  @override
+  Future<String?> identity(String source) async => 'v1';
+
+  @override
+  Future<void> download(
+    String source,
+    File output, {
+    required void Function() checkpoint,
+    required void Function(int received, int? total) progress,
+  }) async {
+    await release;
+    await output.writeAsBytes([1, 2, 3]);
+    progress(3, 3);
+  }
+
+  @override
+  void close() {}
+}
+
 class _Deck implements PlaybackDeck {
   @override
   PlaybackDeckState state = PlaybackDeckState.stopped;
@@ -59,6 +86,7 @@ class _Deck implements PlaybackDeck {
   Duration position = Duration.zero;
   int disposals = 0;
   bool failStop = false;
+  Future<void> Function()? beforeDispose;
 
   @override
   bool get isDirect => false;
@@ -97,7 +125,11 @@ class _Deck implements PlaybackDeck {
   @override
   Future<Duration?> getCurrentPosition() async => position;
   @override
-  Future<void> dispose() async => disposals++;
+  Future<void> dispose() async {
+    await beforeDispose?.call();
+    disposals++;
+  }
+
   @override
   Future<void> setFileSource(
     String path, {
@@ -124,6 +156,81 @@ class _Deck implements PlaybackDeck {
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _CastDeck extends _Deck {
+  final states = StreamController<PlaybackDeckState>.broadcast(sync: true);
+  final completions = StreamController<void>.broadcast(sync: true);
+
+  @override
+  Stream<PlaybackDeckState> get onPlayerStateChanged => states.stream;
+  @override
+  Stream<void> get onPlayerComplete => completions.stream;
+
+  void remotePlay() {
+    state = PlaybackDeckState.playing;
+    states.add(state);
+  }
+
+  void complete() {
+    state = PlaybackDeckState.completed;
+    states.add(state);
+    completions.add(null);
+  }
+
+  @override
+  Future<void> dispose() async {
+    await states.close();
+    await completions.close();
+    await super.dispose();
+  }
+}
+
+class _QueuedDeck extends _TickingDeck implements QueuedPlaybackDeck {
+  final completions = StreamController<void>.broadcast();
+  void Function()? onStart;
+  String? nextSource;
+  double? nextVolume;
+  bool failQueue = false;
+  int queued = 0;
+
+  @override
+  bool get canQueueNextSource => true;
+  @override
+  Stream<void> get onPlayerComplete => completions.stream;
+  @override
+  Future<bool> queueNextSource(
+    String source, {
+    required double volume,
+    required void Function() onStarted,
+  }) async {
+    queued++;
+    if (failQueue) throw StateError('Native playlist unavailable');
+    nextSource = source;
+    nextVolume = volume;
+    onStart = onStarted;
+    return true;
+  }
+
+  @override
+  Future<void> clearNextSource() async {
+    nextSource = null;
+    nextVolume = null;
+    onStart = null;
+  }
+
+  void advance() {
+    nextSource = null;
+    volumes.add(nextVolume!);
+    position = Duration.zero;
+    onStart?.call();
+  }
+
+  @override
+  Future<void> dispose() async {
+    await completions.close();
+    await super.dispose();
+  }
 }
 
 class _DelayedSeekDeck extends _Deck {
@@ -558,6 +665,7 @@ MusicPlayerRuntime _runtime({
   initialize,
   List<_Deck>? decks,
   PlaybackDeck Function(String)? createDeck,
+  PlaybackDeck Function(CastOutput, MediaItem? Function())? createCastDeck,
   Stream<double> volumeChanges = const Stream.empty(),
   SourceDeletionEvents? sourceDeletionEvents,
   SourceMetadataEvents? sourceMetadataEvents,
@@ -578,6 +686,8 @@ MusicPlayerRuntime _runtime({
   Future<String?> Function(String)? recoverMissingFile,
   Future<String?> Function(String, String, AppSettings)? recoverMovedDownload,
   Future<String> Function(String)? resolveNetworkSource,
+  Future<String?> Function(String)? offlineCopy,
+  NetworkPlaybackCache? networkCache,
   Future<Map<String, dynamic>> Function(String)? readNetworkMetadata,
   CoverStore? coverStore,
 }) {
@@ -606,6 +716,7 @@ MusicPlayerRuntime _runtime({
             decks?.add(deck);
             return deck;
           },
+      createCastDeck: createCastDeck ?? (_, _) => _Deck(),
       audioSession: () async => audioSession,
       initializeHandler: initialize ?? (builder) async => builder(),
       synchronizePlaybackState: synchronizePlaybackState ?? () async {},
@@ -616,6 +727,8 @@ MusicPlayerRuntime _runtime({
       recoverMovedDownload: recoverMovedDownload ?? (_, _, _) async => null,
       resolveNetworkSource:
           resolveNetworkSource ?? NetworkStorageService.instance.resolve,
+      offlineCopy: offlineCopy ?? (_) async => null,
+      networkCache: () => networkCache,
       readNetworkMetadata:
           readNetworkMetadata ?? NetworkMetadataService.instance.read,
       coverStore: coverStore,
@@ -922,6 +1035,239 @@ void main() {
     },
   );
 
+  test('exclusive gapless advances metadata on one continuous deck', () async {
+    final deck = _QueuedDeck();
+    var created = 0;
+    final runtime = _runtime(
+      settings: const AppSettings(
+        pauseOnMute: false,
+        exclusiveOutput: true,
+        gaplessPlayback: true,
+        autoMix: true,
+        playbackNormalization: true,
+      ),
+      createDeck: (_) {
+        created++;
+        return deck;
+      },
+      readMetadata: (path, {displayName}) async => {
+        'replaygain_track_gain': path == '/two.flac' ? '-12 dB' : '-6 dB',
+      },
+    );
+    playbackExclusiveOutput.value = true;
+    addTearDown(() => playbackExclusiveOutput.value = false);
+    final player = await runtime.initialize();
+    await player.setQueueAndPlay([
+      _track,
+      const PlayableMedia(
+        id: 'two',
+        source: '/two.flac',
+        title: 'Two',
+        artist: 'Artist',
+        duration: Duration(seconds: 60),
+      ),
+      const PlayableMedia(
+        id: 'three',
+        source: '/three.flac',
+        title: 'Three',
+        artist: 'Artist',
+        duration: Duration(seconds: 60),
+      ),
+    ]);
+    deck.positionEvents.add(const Duration(seconds: 45));
+    for (var i = 0; i < 30 && deck.nextSource == null; i++) {
+      await _settle();
+    }
+    expect(deck.nextSource, '/two.flac');
+    deck.advance();
+    await _settle();
+    expect(player.mediaItem.value!.id, 'two');
+    expect(player.playbackState.value.queueIndex, 1);
+    expect(player.processing.normalizationGain, closeTo(0.251189, 0.000001));
+    expect(deck.sources, ['/one.flac']);
+    expect(deck.disposals, 0);
+    expect(created, 1);
+    deck.positionEvents.add(const Duration(seconds: 45));
+    for (var i = 0; i < 30 && deck.nextSource == null; i++) {
+      await _settle();
+    }
+    expect(deck.nextSource, '/three.flac');
+    await player.setRepeatMode(AudioServiceRepeatMode.one);
+    await _settle();
+    expect(deck.nextSource, isNull);
+    expect(created, 1);
+  });
+
+  for (final failure in [false, true]) {
+    test(
+      'exclusive gapless handles cancellation and queue failure ($failure)',
+      () async {
+        final deck = _QueuedDeck()..failQueue = failure;
+        final runtime = _runtime(
+          settings: const AppSettings(
+            pauseOnMute: false,
+            exclusiveOutput: true,
+          ),
+          createDeck: (_) => deck,
+        );
+        playbackExclusiveOutput.value = true;
+        addTearDown(() => playbackExclusiveOutput.value = false);
+        final player = await runtime.initialize();
+        await player.setQueueAndPlay([
+          _track,
+          const PlayableMedia(
+            id: 'two',
+            source: '/two.flac',
+            title: 'Two',
+            artist: 'Artist',
+            duration: Duration(seconds: 60),
+          ),
+        ]);
+        deck.positionEvents.add(const Duration(seconds: 45));
+        for (var i = 0; i < 30 && deck.queued == 0; i++) {
+          await _settle();
+        }
+        expect(deck.queued, 1);
+        if (failure) {
+          await _settle();
+          deck.state = PlaybackDeckState.completed;
+          deck.completions.add(null);
+          for (var i = 0; i < 30 && player.mediaItem.value!.id != 'two'; i++) {
+            await _settle();
+          }
+          expect(player.mediaItem.value!.id, 'two');
+          expect(deck.sources, ['/one.flac', '/two.flac']);
+        } else {
+          final stale = deck.onStart!;
+          await player.stop();
+          stale();
+          await _settle();
+          expect(player.mediaItem.value, isNull);
+          expect(deck.nextSource, isNull);
+          expect(deck.state, PlaybackDeckState.stopped);
+        }
+      },
+    );
+  }
+
+  test(
+    'Cast handoff keeps position, controls and queue, and disconnect returns paused',
+    () async {
+      const channel = MethodChannel('runtime-cast-test');
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(
+        channel,
+        (call) async => call.method == 'state' ? {'connected': false} : null,
+      );
+      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+      final events = StreamController<Object?>.broadcast(sync: true);
+      final output = CastOutput(channel: channel, events: events.stream);
+      final local = <_Deck>[];
+      final tv = <_CastDeck>[];
+      final runtime = _runtime(
+        decks: local,
+        createCastDeck: (_, _) {
+          final deck = _CastDeck();
+          tv.add(deck);
+          return deck;
+        },
+      );
+      final handler = MusicPlayerHandler(runtime: runtime, castOutput: output);
+      await output.initialize();
+      await handler.setQueueAndPlay([
+        _track,
+        const PlayableMedia(
+          id: 'two',
+          source: '/two.flac',
+          title: 'Two',
+          artist: 'Artist',
+        ),
+      ]);
+      await handler.seek(const Duration(seconds: 12));
+      events.add({
+        'connected': true,
+        'deviceId': 'tv',
+        'host': '192.0.2.10',
+        'volume': 0.4,
+      });
+      await handler.play();
+      expect(local.single.disposals, 1);
+      expect(tv.single.sources, [_track.source]);
+      expect(tv.single.position.inSeconds, 12);
+      expect(handler.playbackState.value.playing, isTrue);
+      await handler.pause();
+      expect(tv.single.state, PlaybackDeckState.paused);
+      tv.single.remotePlay();
+      expect(handler.playbackState.value.playing, isTrue);
+      tv.single.complete();
+      for (var i = 0; i < 20; i++) {
+        await _settle();
+      }
+      expect(tv.single.sources.last, '/two.flac');
+      expect(handler.queue.value, hasLength(2));
+      events.add({'connected': false});
+      for (var i = 0; i < 20; i++) {
+        await _settle();
+      }
+      expect(local, hasLength(2));
+      expect(local.last.sources.last, '/two.flac');
+      expect(local.last.state, isNot(PlaybackDeckState.playing));
+      expect(handler.playbackState.value.playing, isFalse);
+      await runtime.dispose();
+      output.dispose();
+      await events.close();
+    },
+  );
+
+  test('a paused song stays paused when moved to the TV', () async {
+    const channel = MethodChannel('paused-cast-test');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(
+      channel,
+      (call) async => call.method == 'state' ? {'connected': false} : null,
+    );
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    final events = StreamController<Object?>.broadcast(sync: true);
+    final output = CastOutput(channel: channel, events: events.stream);
+    final tv = _Deck();
+    final runtime = _runtime(createCastDeck: (_, _) => tv);
+    final handler = MusicPlayerHandler(runtime: runtime, castOutput: output);
+    await output.initialize();
+    await handler.setQueueAndPlay([_track]);
+    await handler.pause();
+    events.add({'connected': true, 'deviceId': 'tv', 'host': '192.0.2.10'});
+    for (var i = 0; i < 20; i++) {
+      await _settle();
+    }
+    expect(tv.sources, [_track.source]);
+    expect(tv.state, isNot(PlaybackDeckState.playing));
+    expect(handler.playbackState.value.playing, isFalse);
+    await runtime.dispose();
+    output.dispose();
+    await events.close();
+  });
+
+  test(
+    'playback instances survive pause and seek but change for repeated songs',
+    () async {
+      final handler = await _runtime().initialize();
+      await handler.setQueueAndPlay([_track, _track]);
+      final first = handler.mediaItem.value!.extras!['playbackInstance'];
+      await handler.pause();
+      await handler.play();
+      await handler.seek(Duration.zero);
+      expect(handler.mediaItem.value!.extras!['playbackInstance'], first);
+      await handler.skipToQueueItem(1);
+      expect(handler.mediaItem.value!.id, _track.id);
+      expect(
+        handler.mediaItem.value!.extras!['playbackInstance'],
+        isNot(first),
+      );
+    },
+  );
+
   test(
     'Android updates every queued copy before playing a moved download',
     () async {
@@ -1016,6 +1362,34 @@ void main() {
       expect(RuntimeLinkPlayerPort(runtime).snapshot().current!.title, title);
       await runtime.dispose();
       await events.publish(_track.source);
+    },
+  );
+
+  test(
+    'relocated sources update every queue occurrence without restarting',
+    () async {
+      final decks = <_Deck>[];
+      final store = _ResumeSessionStore();
+      final handler = await _runtime(
+        decks: decks,
+        sessionDatabase: store,
+      ).initialize();
+      await handler.setQueueAndPlay([_track, _track]);
+      await handler.seek(const Duration(seconds: 34));
+      final sources = List.of(decks.first.sources);
+      await handler.onSourceRelocated(_track.source, '/organized/song.flac');
+      expect(handler.queue.value.map((item) => item.extras?['source']), [
+        '/organized/song.flac',
+        '/organized/song.flac',
+      ]);
+      expect(
+        handler.mediaItem.value?.extras?['source'],
+        '/organized/song.flac',
+      );
+      expect(decks.first.sources, sources);
+      expect(decks.first.position, const Duration(seconds: 34));
+      expect(jsonEncode(store.active), contains('/organized/song.flac'));
+      expect(jsonEncode(store.active), isNot(contains(_track.source)));
     },
   );
 
@@ -1797,6 +2171,182 @@ void main() {
     },
   );
 
+  test(
+    'queued network song prefers its offline original and retains its origin',
+    () async {
+      final temp = await Directory.systemTemp.createTemp('player-offline-');
+      addTearDown(() => temp.delete(recursive: true));
+      final local = await File(
+        '${temp.path}/song.flac',
+      ).writeAsBytes([1, 2, 3]);
+      final decks = <_Deck>[];
+      var remoteRequests = 0;
+      final handler = await _runtime(
+        decks: decks,
+        offlineCopy: (_) async => local.path,
+        resolveNetworkSource: (_) async {
+          remoteRequests++;
+          throw const SocketException('Offline');
+        },
+      ).initialize();
+      await handler.setQueueAndPlay([
+        const PlayableMedia(
+          id: 'nas-song',
+          source: 'network://nas/a.flac',
+          title: 'NAS song',
+          artist: 'Artist',
+        ),
+      ]);
+      expect(decks.single.sources, [local.path]);
+      expect(remoteRequests, 0);
+      expect(handler.mediaItem.value!.extras!['source'], local.path);
+      expect(
+        handler.mediaItem.value!.extras!['originSource'],
+        'network://nas/a.flac',
+      );
+      await handler.onSourceDeleted('network://nas/a.flac');
+      expect(handler.queue.value, hasLength(1));
+      expect(handler.playbackState.value.playing, isTrue);
+    },
+  );
+
+  test(
+    'missing offline file falls back to its server without requiring a rescan',
+    () async {
+      final temp = await Directory.systemTemp.createTemp(
+        'player-offline-missing-',
+      );
+      addTearDown(() => temp.delete(recursive: true));
+      final decks = <_Deck>[];
+      final requests = <String>[];
+      final handler = await _runtime(
+        decks: decks,
+        resolveNetworkSource: (source) async {
+          requests.add(source);
+          return 'http://127.0.0.1:1/original';
+        },
+      ).initialize();
+      await handler.setQueueAndPlay([
+        PlayableMedia(
+          id: 'saved-song',
+          source: '${temp.path}/gone.flac',
+          originSource: 'network://nas/a.flac',
+          title: 'NAS song',
+          artist: 'Artist',
+        ),
+      ]);
+      expect(requests, ['network://nas/a.flac']);
+      expect(decks.single.sources, ['stream http://127.0.0.1:1/original']);
+      expect(handler.playbackState.value.playing, isTrue);
+    },
+  );
+
+  group('prefetched network copies', () {
+    const source = 'network://nas/Album/song.flac';
+    const song = PlayableMedia(
+      id: 'nas-song',
+      source: source,
+      title: 'NAS song',
+      artist: 'Artist',
+    );
+
+    Future<NetworkPlaybackCache> networkCache({Future<void>? release}) async {
+      final root = await Directory.systemTemp.createTemp('player-prefetch-');
+      addTearDown(() async {
+        // Let a background index write finish first.
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        try {
+          await root.delete(recursive: true);
+        } on FileSystemException {
+          // Removed with the system temporary folder later.
+        }
+      });
+      return NetworkPlaybackCache(
+        directory: () async => root,
+        transfer: () => _NasTransfer(release),
+        connectionRemovals: SourceDeletionEvents(),
+      );
+    }
+
+    test('a whole copy plays as a local file', () async {
+      final cache = await networkCache();
+      cache.want([source]);
+      expect(await cache.ready(source, const Duration(seconds: 5)), isTrue);
+      final decks = <_Deck>[];
+      var remoteRequests = 0;
+      final handler = await _runtime(
+        decks: decks,
+        networkCache: cache,
+        resolveNetworkSource: (_) async {
+          remoteRequests++;
+          return 'http://127.0.0.1:1/song.flac';
+        },
+      ).initialize();
+
+      await handler.setQueueAndPlay([song]);
+
+      final path = decks.single.sources.single;
+      expect(cache.owns(path), isTrue);
+      expect(await File(path).readAsBytes(), [1, 2, 3]);
+      expect(remoteRequests, 0);
+      // The queue keeps the server song; only this playback opens the copy.
+      expect(handler.mediaItem.value!.extras!['source'], source);
+    });
+
+    test('a song still downloading streams from its server', () async {
+      final cache = await networkCache(release: Completer<void>().future);
+      cache.want([source]);
+      final decks = <_Deck>[];
+      final handler = await _runtime(
+        decks: decks,
+        networkCache: cache,
+        resolveNetworkSource: (_) async => 'http://127.0.0.1:1/song.flac',
+      ).initialize();
+
+      await handler.setQueueAndPlay([song]);
+
+      expect(decks.single.sources, ['stream http://127.0.0.1:1/song.flac']);
+      cache.want([]);
+    });
+
+    test('a saved offline copy plays before a prefetched one', () async {
+      final cache = await networkCache();
+      cache.want([source]);
+      expect(await cache.ready(source, const Duration(seconds: 5)), isTrue);
+      final temp = await Directory.systemTemp.createTemp('player-offline-');
+      addTearDown(() => temp.delete(recursive: true));
+      final local = await File('${temp.path}/song.flac').writeAsBytes([4]);
+      final decks = <_Deck>[];
+      final handler = await _runtime(
+        decks: decks,
+        networkCache: cache,
+        offlineCopy: (_) async => local.path,
+      ).initialize();
+
+      await handler.setQueueAndPlay([song]);
+
+      expect(decks.single.sources, [local.path]);
+    });
+
+    test('an edited song no longer plays from its old copy', () async {
+      final cache = await networkCache();
+      cache.want([source]);
+      expect(await cache.ready(source, const Duration(seconds: 5)), isTrue);
+      cache.want([]);
+      final events = SourceMetadataEvents();
+      final handler = await _runtime(
+        networkCache: cache,
+        sourceMetadataEvents: events,
+        readNetworkMetadata: (_) async => {'error': 'unavailable'},
+      ).initialize();
+      await handler.setQueueAndPlay([song]);
+
+      await events.publish(source);
+
+      expect(await cache.lookup(source), isNull);
+    });
+  });
+
   for (final resolved in [
     '/received/Phone song.flac',
     'http://127.0.0.1:1/song.flac',
@@ -2575,6 +3125,156 @@ void main() {
     },
   );
 
+  for (final hasSuccessor in [false, true]) {
+    test('local deletion releases the decoder first ($hasSuccessor)', () async {
+      final directory = await Directory.systemTemp.createTemp('open-deletion-');
+      addTearDown(() => directory.delete(recursive: true));
+      final file = await File(
+        '${directory.path}/song.flac',
+      ).writeAsString('audio');
+      final events = SourceDeletionEvents();
+      final decks = <_Deck>[];
+      final handler = await _runtime(
+        decks: decks,
+        sourceDeletionEvents: events,
+      ).initialize();
+      await handler.setQueueAndPlay([
+        PlayableMedia(
+          id: 'removed',
+          source: file.path,
+          title: 'Removed',
+          artist: '',
+        ),
+        if (hasSuccessor) _track,
+      ]);
+      final playing = decks.single;
+      var releasedBeforeDelete = false;
+      playing.beforeDispose = () async {
+        releasedBeforeDelete = await file.exists();
+      };
+
+      expect(await deleteFile(file.path, deletionEvents: events), isTrue);
+      expect(releasedBeforeDelete, isTrue);
+      expect(playing.disposals, 1);
+      expect(handler.mediaItem.value?.id, hasSuccessor ? 'one' : null);
+      expect(
+        handler.queue.value.map((item) => item.id),
+        hasSuccessor ? ['one'] : isEmpty,
+      );
+    });
+  }
+
+  test('failed decoder release keeps the current song resumable', () async {
+    final directory = await Directory.systemTemp.createTemp('held-deletion-');
+    addTearDown(() => directory.delete(recursive: true));
+    final file = await File(
+      '${directory.path}/song.flac',
+    ).writeAsString('audio');
+    final events = SourceDeletionEvents();
+    final decks = <_Deck>[];
+    final handler = await _runtime(
+      decks: decks,
+      sourceDeletionEvents: events,
+    ).initialize();
+    await handler.setQueueAndPlay([
+      PlayableMedia(id: 'held', source: file.path, title: 'Held', artist: ''),
+    ]);
+    decks.single.beforeDispose = () async => throw StateError('Release failed');
+    expect(await deleteFile(file.path, deletionEvents: events), isFalse);
+    expect(await file.exists(), isTrue);
+    expect(handler.queue.value.single.id, 'held');
+    expect(handler.mediaItem.value?.id, 'held');
+    expect(handler.playbackState.value.playing, isFalse);
+    await handler.play();
+    expect(decks.last.sources, [file.path]);
+    expect(handler.playbackState.value.playing, isTrue);
+  });
+
+  test(
+    'a rejected storage deletion retains the queue and resume position',
+    () async {
+      final events = SourceDeletionEvents();
+      final handler = await _runtime(sourceDeletionEvents: events).initialize();
+      await handler.setQueueAndPlay([_track]);
+      await handler.seek(const Duration(seconds: 12));
+      expect(await events.delete(_track.source, () async => false), isFalse);
+      expect(handler.queue.value.single.id, 'one');
+      expect(handler.playbackState.value.playing, isFalse);
+      await handler.play();
+      expect(handler.playbackState.value.playing, isTrue);
+      expect(handler.playbackState.value.position.inSeconds, 12);
+    },
+  );
+
+  test(
+    'Play cannot reopen the current file while deletion releases it',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'pending-release-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final file = await File(
+        '${directory.path}/song.flac',
+      ).writeAsString('audio');
+      final events = SourceDeletionEvents();
+      final decks = <_Deck>[];
+      final handler = await _runtime(
+        decks: decks,
+        sourceDeletionEvents: events,
+      ).initialize();
+      await handler.setQueueAndPlay([
+        PlayableMedia(id: 'held', source: file.path, title: 'Held', artist: ''),
+      ]);
+      final entered = Completer<void>();
+      final release = Completer<void>();
+      decks.single.beforeDispose = () async {
+        entered.complete();
+        await release.future;
+      };
+      final deletion = deleteFile(file.path, deletionEvents: events);
+      await entered.future;
+      try {
+        await handler.play();
+        expect(await file.exists(), isTrue);
+        expect(decks.single.sources, [file.path]);
+      } finally {
+        release.complete();
+      }
+      expect(await deletion, isTrue);
+      expect(handler.mediaItem.value, isNull);
+      expect(decks.last.sources, isEmpty);
+    },
+  );
+
+  test(
+    'deleting a duplicate current source selects its immediate successor',
+    () async {
+      final events = SourceDeletionEvents();
+      final handler = await _runtime(sourceDeletionEvents: events).initialize();
+      const next = PlayableMedia(
+        id: 'next',
+        source: '/next.flac',
+        title: 'Next',
+        artist: '',
+      );
+      const last = PlayableMedia(
+        id: 'last',
+        source: '/last.flac',
+        title: 'Last',
+        artist: '',
+      );
+      await handler.setQueueAndPlay([
+        _track,
+        _track,
+        next,
+        last,
+      ], initialIndex: 1);
+      await events.publish(_track.source);
+      expect(handler.mediaItem.value?.id, 'next');
+      expect(handler.playbackState.value.queueIndex, 0);
+    },
+  );
+
   test(
     'SAF deletion releases cached playback copies before returning',
     () async {
@@ -2696,6 +3396,13 @@ void main() {
       await playing;
       await restarted;
       expect(copies, 2);
+      // Superseded preparation returns immediately; the detached provider owns
+      // cleanup when its late file/stat operation completes.
+      final cleanupDeadline = Stopwatch()..start();
+      while (await stale.exists() &&
+          cleanupDeadline.elapsed < const Duration(seconds: 1)) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
       expect(await stale.exists(), isFalse);
       expect(await replacement.exists(), isTrue);
       expect(handler.mediaItem.value?.id, 'removed');
@@ -2807,6 +3514,42 @@ void main() {
       expect(handler.queue.value.map((item) => item.id), libraryOrder);
     },
   );
+
+  test('shuffling an artist plays only the songs that credit them', () async {
+    final added = DateTime(2026).toIso8601String();
+    Map<String, Object?> row(String id, String artist) => {
+      'source': 'downloaded',
+      'item': {
+        'id': id,
+        'trackName': id,
+        'artistName': artist,
+        'albumName': 'Album',
+        'filePath': '/$id.flac',
+        'service': 'extension',
+        'downloadedAt': added,
+      },
+    };
+    final runtime = _runtime(
+      settings: const AppSettings(pauseOnMute: false),
+      libraryDatabase: _QueueLibrary([
+        row('solo', 'First Artist'),
+        row('duet', 'Second Artist, first artist'),
+        row('other', 'Second Artist'),
+      ]),
+    );
+    final container = ProviderContainer(
+      overrides: [musicPlayerRuntimeProvider.overrideWithValue(runtime)],
+    );
+    addTearDown(container.dispose);
+    final controller = container.read(musicPlayerControllerProvider);
+
+    expect(await controller.shuffleLibrary(artist: 'Missing Artist'), isFalse);
+    expect(await controller.shuffleLibrary(artist: 'First Artist'), isTrue);
+    expect(runtime.handler!.queue.value.map((item) => item.id).toSet(), {
+      'solo',
+      'duet',
+    });
+  });
 
   test('a media browser plays the album a song was chosen from', () async {
     final runtime = _runtime(
@@ -3327,6 +4070,53 @@ void main() {
         // Only the audio is resolved; the stored cover is not fetched again.
         expect(tokens, 2);
         expect(fetched, isEmpty);
+      },
+    );
+
+    test(
+      'scanned Library covers survive shuffled skips and restored order',
+      () async {
+        final songs = [
+          for (var i = 0; i < 4; i++)
+            playableFromLocal(
+              LocalLibraryItem(
+                id: 'scanned-$i',
+                trackName: 'Song $i',
+                artistName: 'Artist',
+                albumName: 'Album',
+                filePath: 'network://nas/Album/$i.flac',
+                coverPath: 'network://nas/Album/$i.jpg',
+                scannedAt: DateTime(2026),
+              ),
+            ),
+        ];
+        for (final media in songs) {
+          await covers.file(media.coverReference!);
+        }
+        final handler = await _runtime(
+          coverStore: covers,
+          resolveNetworkSource: resolve,
+          readNetworkMetadata: (_) async => {},
+        ).initialize();
+        await handler.setQueueAndPlay(songs, shuffle: true);
+        for (var i = 0; i < songs.length; i++) {
+          await handler.skipToQueueItem(i);
+          final item = handler.mediaItem.value!;
+          final reference = item.extras!['artworkRef'] as String;
+          expect(item.artUri!.toFilePath(), covers.indexedFile(reference));
+          expect(handler.queue.value[i].artUri, item.artUri);
+        }
+        await handler.setShuffleMode(AudioServiceShuffleMode.none);
+        expect(
+          handler.queue.value.map((item) => item.id),
+          songs.map((s) => s.id),
+        );
+        for (final item in handler.queue.value) {
+          expect(
+            item.artUri!.toFilePath(),
+            covers.indexedFile(item.extras!['artworkRef'] as String),
+          );
+        }
       },
     );
 

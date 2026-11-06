@@ -27,7 +27,7 @@ Future<void> toggleDesktopMiniPlayer() =>
     setDesktopMiniPlayer(open: !desktopMiniPlayerOpen.value);
 
 /// Shrinks the window into a small panel that floats above other windows,
-/// like Music's MiniPlayer, or returns it to its full size and place.
+/// or returns it to its full size and place.
 Future<void> setDesktopMiniPlayer({required bool open}) async {
   if (!desktopMiniPlayerSupported ||
       _miniPlayerBusy ||
@@ -37,6 +37,7 @@ Future<void> setDesktopMiniPlayer({required bool open}) async {
   _miniPlayerBusy = true;
   try {
     if (open) {
+      desktopPlayerDismissed.value = false;
       desktopMiniPlayerOpen.value = true;
       final opened = await openDesktopMiniPlayerWindow(desktopMiniPlayerSize);
       if (!opened) desktopMiniPlayerOpen.value = false;

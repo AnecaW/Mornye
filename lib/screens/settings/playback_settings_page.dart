@@ -21,6 +21,7 @@ import 'package:mornye/theme/mornye_theme.dart';
 import 'package:mornye/utils/desktop_platform.dart';
 import 'package:mornye/utils/exclusive_output_labels.dart';
 import 'package:mornye/utils/nav_bar_inset.dart';
+import 'package:mornye/utils/usb_output_status_label.dart';
 import 'package:mornye/widgets/animation_utils.dart';
 import 'package:mornye/widgets/app_alert_dialog.dart';
 import 'package:mornye/widgets/app_progress_indicator.dart';
@@ -31,6 +32,7 @@ import 'package:mornye/widgets/beta_badge.dart';
 import 'package:mornye/widgets/player_volume_control.dart';
 import 'package:mornye/widgets/settings_group.dart';
 import 'package:mornye/widgets/discord_presence_settings.dart';
+import 'package:mornye/widgets/lastfm_settings.dart';
 import 'package:mornye/widgets/automix_settings.dart';
 import 'package:mornye/widgets/music_haptics_settings.dart';
 import 'package:mornye/widgets/playback_normalization_settings.dart';
@@ -43,7 +45,17 @@ class PlaybackSettingsPage extends ConsumerStatefulWidget {
       _PlaybackSettingsPageState();
 }
 
-class _PlaybackSettingsPageState extends ConsumerState<PlaybackSettingsPage> {
+class _PlaybackSettingsPageState extends ConsumerState<PlaybackSettingsPage>
+    with WidgetsBindingObserver {
+  void _refreshOutputStatus() {
+    ref.read(musicPlayerRuntimeProvider).handler?.refreshOutputStatus();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _refreshOutputStatus();
+  }
+
   late final SongAnalysis _songAnalysis = ref
       .read(musicPlayerRuntimeProvider)
       .songAnalysis;
@@ -89,6 +101,8 @@ class _PlaybackSettingsPageState extends ConsumerState<PlaybackSettingsPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _refreshOutputStatus();
     _songAnalysis.progress.addListener(_onAnalysisProgress);
     _rankEvaluation.addListener(_onAnalysisProgress);
     unawaited(_songAnalysis.refreshProgress());
@@ -96,6 +110,7 @@ class _PlaybackSettingsPageState extends ConsumerState<PlaybackSettingsPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _songAnalysis.progress.removeListener(_onAnalysisProgress);
     _rankEvaluation.removeListener(_onAnalysisProgress);
     super.dispose();
@@ -133,6 +148,8 @@ class _PlaybackSettingsPageState extends ConsumerState<PlaybackSettingsPage> {
   @override
   Widget build(BuildContext context) {
     final settings = ref.watch(settingsProvider);
+    final autoMixActive =
+        settings.autoMix && !(isDesktopPlatform && settings.exclusiveOutput);
     // Linux opens a chosen ALSA device; the other desktops use the default.
     final linuxDevice =
         settings.exclusiveOutput &&
@@ -225,12 +242,11 @@ class _PlaybackSettingsPageState extends ConsumerState<PlaybackSettingsPage> {
                 icon: Icons.linear_scale,
                 title: context.l10n.gaplessPlayback,
                 subtitle: context.l10n.gaplessPlaybackDescription,
-                value: settings.gaplessPlayback && !settings.autoMix,
+                value: settings.gaplessPlayback && !autoMixActive,
                 enabled:
                     settings.playerMode == 'internal' &&
-                    !settings.autoMix &&
-                    !settings.usbBitPerfect &&
-                    !(isDesktopPlatform && settings.exclusiveOutput),
+                    !autoMixActive &&
+                    !settings.usbBitPerfect,
                 onChanged: (value) => ref
                     .read(settingsProvider.notifier)
                     .setGaplessPlayback(value),
@@ -239,7 +255,7 @@ class _PlaybackSettingsPageState extends ConsumerState<PlaybackSettingsPage> {
                 icon: Icons.compare_arrows,
                 title: 'AutoMix',
                 subtitle: context.l10n.autoMixDescription,
-                value: settings.autoMix,
+                value: autoMixActive,
                 enabled:
                     !settings.usbBitPerfect &&
                     !(isDesktopPlatform && settings.exclusiveOutput),
@@ -249,7 +265,7 @@ class _PlaybackSettingsPageState extends ConsumerState<PlaybackSettingsPage> {
               ),
             ],
           ),
-          if (settings.autoMix) ...[
+          if (autoMixActive) ...[
             SliverToBoxAdapter(
               child: SettingsSectionHeader(
                 title: context.l10n.autoMixSettingsTitle,
@@ -401,6 +417,17 @@ class _PlaybackSettingsPageState extends ConsumerState<PlaybackSettingsPage> {
                     .read(settingsProvider.notifier)
                     .setLandscapeLyricsArtwork(value),
               ),
+              if (!isDesktopPlatform)
+                SettingsSwitchItem(
+                  key: const ValueKey('auto-hide-lyrics-controls'),
+                  icon: Icons.fullscreen,
+                  title: context.l10n.autoHideLyricsControls,
+                  subtitle: context.l10n.autoHideLyricsControlsDescription,
+                  value: settings.autoHideLyricsControls,
+                  onChanged: ref
+                      .read(settingsProvider.notifier)
+                      .setAutoHideLyricsControls,
+                ),
               SettingsSwitchItem(
                 icon: Icons.short_text,
                 title: context.l10n.compactPlayer,
@@ -433,6 +460,16 @@ class _PlaybackSettingsPageState extends ConsumerState<PlaybackSettingsPage> {
               child: SettingsSectionHeader(title: 'Discord'),
             ),
             const SliverToBoxAdapter(child: DiscordPresenceSettings()),
+          ],
+          if (isDesktopPlatform) ...[
+            const SliverToBoxAdapter(
+              child: SettingsSectionHeader(title: 'Last.fm'),
+            ),
+            SliverToBoxAdapter(
+              child: LastfmSettings(
+                service: ref.read(musicPlayerRuntimeProvider).lastfm,
+              ),
+            ),
           ],
           if (isDesktopPlatform)
             ...settingsSectionSlivers(
@@ -483,28 +520,7 @@ class _PlaybackSettingsPageState extends ConsumerState<PlaybackSettingsPage> {
                     subtitle: [
                       context.l10n.usbBitPerfectDescription,
                       if (settings.usbBitPerfect)
-                        switch (status.reason) {
-                          'active' =>
-                            '${status.device} · ${status.transport == 'pcm'
-                                ? '${status.bitDepth}-bit PCM'
-                                : status.transport == 'dop'
-                                ? 'DSD (DoP)'
-                                : 'DSD (Native)'} · ${(status.sampleRate! / 1000).toStringAsFixed(1)} kHz',
-                          'dsd_unsupported' => context.l10n.usbDsdUnsupported,
-                          'volume_unavailable' =>
-                            context.l10n.usbVolumeUnavailable,
-                          'exclusive_unavailable' =>
-                            context.l10n.dapExclusiveUnavailable,
-                          'permission_denied' =>
-                            context.l10n.usbPermissionDenied,
-                          'no_usb' => context.l10n.usbBitPerfectNoDevice,
-                          'route_changed' =>
-                            context.l10n.usbBitPerfectRouteChanged,
-                          'android_version' ||
-                          'unsupported' ||
-                          'format' => context.l10n.usbBitPerfectFallback,
-                          _ => context.l10n.usbBitPerfectPending,
-                        },
+                        usbOutputStatusLabel(context.l10n, status),
                     ].join('\n\n'),
                     value: settings.usbBitPerfect,
                     onChanged: (value) async {

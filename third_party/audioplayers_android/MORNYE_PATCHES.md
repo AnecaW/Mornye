@@ -9,6 +9,23 @@ version is the one in this folder's `pubspec.yaml` (5.3.0, unchanged).
 
 ## Patches
 
+### Playback thread
+
+`AudioplayersPlugin` serializes method calls on an owned `HandlerThread` with a
+Looper. MediaPlayer construction, source changes, reset, release and transport
+commands stay on that thread. A slow media-service reset therefore does not
+hold Android's input/UI thread. Audio focus and SoundPool load callbacks return
+to the same owner; Flutter event-channel registration and delivery stay on the
+main thread. `create` replies only after that registration: Dart listens as
+soon as the reply lands, and a stream with no handler then loses every event,
+which left playback loading forever. Method errors carry serializable details.
+
+Detaching removes channel handlers immediately and queues cleanup without
+waiting on the UI thread. The retired worker exits after cleanup, and its
+captured callbacks cannot enter a replacement engine. Instrumentation tests
+hold a real wrapper's reset, verify the main Looper still runs and later player
+commands wait, and exercise native prepare, seek and transport callbacks.
+
 ### Proc descriptor sources
 
 `UrlSource` duplicates app-owned `/proc/self/fd/<fd>` sources and passes the
@@ -41,6 +58,20 @@ Dart caller is `lib/services/music_playback_deck.dart` in the app.
 - `start()` always calls `MediaPlayer.start()` after `setRate`, instead of
   relying on `setPlaybackParams` (or, before API 23, `setRate(1.0)`) to start
   output.
+
+### Mixed output
+
+On Android 9 (API 28) and later, `MediaPlayerWrapper` enables a
+`DynamicsProcessing` effect with no stage in use on the player's own session
+(player/MixedOutput.kt) before each `start()`, and disables it on `pause()`,
+`stop()` and `reset()`; `release()` frees it. Without it, MediaPlayer may
+send long local tracks to a compressed offload output, where the audio DSP
+decodes them outside the platform mixer. Features that read the mixed output
+then get silence, for example the music-synced lights on Nothing phones
+(Mornye issue 802). An enabled effect without offload support makes the
+platform choose PCM through the mixer, which ExoPlayer-based players use by
+default. The effect leaves the sound unchanged. If the device refuses it,
+playback continues and the plugin logs the reason.
 
 ### Next player
 
@@ -81,6 +112,7 @@ Compared against the pub.dev 5.3.0 package in the local pub cache:
 - `android/build.gradle`
 - `android/src/main/kotlin/xyz/luan/audioplayers/AudioplayersPlugin.kt`
 - `android/src/main/kotlin/xyz/luan/audioplayers/player/MediaPlayerWrapper.kt`
+- `android/src/main/kotlin/xyz/luan/audioplayers/player/MixedOutput.kt` (new)
 - `android/src/main/kotlin/xyz/luan/audioplayers/player/PlaybackEqualizer.kt` (new)
 - `android/src/main/kotlin/xyz/luan/audioplayers/player/WrappedPlayer.kt`
 - `android/src/main/kotlin/xyz/luan/audioplayers/source/UrlSource.kt`

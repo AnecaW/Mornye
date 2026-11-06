@@ -1,3 +1,4 @@
+import 'package:mornye/screens/network_storage_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:mornye/widgets/app_loading_indicator.dart';
 import 'package:mornye/widgets/app_alert_dialog.dart';
@@ -156,90 +157,102 @@ class LibrarySourceSelector extends ConsumerWidget {
     ],
   );
 
-  Future<void> _manageSources(BuildContext context, WidgetRef ref) async {
-    final connections = await ref.read(
-      savedLibrarySourceConnectionsProvider.future,
-    );
-    if (!context.mounted) return;
-    await showAppDialog<void>(
-      context: context,
-      builder: (context) => Consumer(
-        builder: (context, ref, _) {
-          final local = ref.watch(
-            settingsProvider.select((s) => s.localLibraryEnabled),
-          );
-          final sources = ref.watch(
-            localLibraryProvider.select((s) => s.sources),
-          );
-          return AppAlertDialog(
-            title: Text(context.l10n.libraryManageSources),
-            content: SizedBox(
-              width: 360,
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      secondary: const Icon(Icons.smartphone_outlined),
-                      title: Text(context.l10n.libraryDeviceSource),
-                      value: local,
-                      onChanged: (value) => ref
-                          .read(settingsProvider.notifier)
-                          .setLocalLibraryEnabled(value),
-                    ),
-                    for (final connection in connections)
-                      Builder(
-                        builder: (context) {
-                          final source = sources
-                              .where(
-                                (s) =>
-                                    s.path ==
-                                    NetworkStorageService.source(
-                                      connection.id,
-                                      '',
-                                    ),
-                              )
-                              .firstOrNull;
-                          return SwitchListTile(
-                            contentPadding: EdgeInsets.zero,
-                            secondary: const Icon(Icons.dns_outlined),
-                            title: Text(connection.name),
-                            value: source?.enabled ?? true,
-                            onChanged: (value) async {
-                              final library = ref.read(
-                                localLibraryProvider.notifier,
-                              );
-                              final existing =
-                                  source ??
-                                  await library.addSource(
-                                    path: NetworkStorageService.source(
-                                      connection.id,
-                                      '',
-                                    ),
-                                    displayName: connection.name,
-                                  );
-                              await library.setSourceEnabled(
-                                existing.id,
-                                value,
-                              );
-                            },
-                          );
-                        },
-                      ),
-                  ],
-                ),
-              ),
+  Future<void> _manageSources(BuildContext context, WidgetRef ref) =>
+      showAppDialog<void>(
+        context: context,
+        builder: (context) => AppAlertDialog(
+          title: Text(context.l10n.libraryManageSources),
+          content: const SizedBox(
+            width: 360,
+            child: SingleChildScrollView(child: LibrarySourceSettingsList()),
+          ),
+          actions: [
+            AppDialogAction(
+              onPressed: () => Navigator.pop(context),
+              child: Text(MaterialLocalizations.of(context).closeButtonLabel),
             ),
-            actions: [
-              AppDialogAction(
-                onPressed: () => Navigator.pop(context),
-                child: Text(MaterialLocalizations.of(context).closeButtonLabel),
-              ),
-            ],
-          );
-        },
-      ),
+          ],
+        ),
+      );
+}
+
+/// The same saved connections and enable flags in Library and Settings.
+/// Disabled servers remain available for management without starting a scan.
+class LibrarySourceSettingsList extends ConsumerWidget {
+  const LibrarySourceSettingsList({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final saved = ref.watch(savedLibrarySourceConnectionsProvider);
+    final sources = ref.watch(localLibraryProvider.select((s) => s.sources));
+    final local = ref.watch(
+      settingsProvider.select((s) => s.localLibraryEnabled),
+    );
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SwitchListTile(
+          secondary: const Icon(Icons.smartphone_outlined),
+          title: Text(context.l10n.libraryDeviceSource),
+          value: local,
+          onChanged: (value) =>
+              ref.read(settingsProvider.notifier).setLocalLibraryEnabled(value),
+        ),
+        for (final connection in saved.value ?? const <NetworkConnection>[])
+          Builder(
+            builder: (context) {
+              final source = sources.where((s) {
+                final uri = Uri.tryParse(s.path);
+                return uri?.scheme == 'network' &&
+                    uri?.host == connection.id &&
+                    const ['', '/'].contains(uri?.path);
+              }).firstOrNull;
+              return Row(
+                children: [
+                  Expanded(
+                    child: SwitchListTile(
+                      secondary: const Icon(Icons.dns_outlined),
+                      title: Text(connection.name),
+                      value: source?.enabled ?? true,
+                      onChanged: (value) async {
+                        final library = ref.read(localLibraryProvider.notifier);
+                        final existing =
+                            source ??
+                            await library.addSource(
+                              path: NetworkStorageService.source(
+                                connection.id,
+                                '',
+                              ),
+                              displayName: connection.name,
+                            );
+                        await library.setSourceEnabled(existing.id, value);
+                      },
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: context.l10n.libraryManageSources,
+                    icon: const Icon(Icons.settings_outlined),
+                    onPressed: () => pushPage(
+                      context,
+                      (_) => NetworkStorageScreen(
+                        connection: connection,
+                        service: ref.read(librarySourceStorageProvider),
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        if (saved.isLoading) const AppLoadingIndicator(size: 20),
+        if (saved.hasError)
+          TextButton.icon(
+            onPressed: () =>
+                ref.invalidate(savedLibrarySourceConnectionsProvider),
+            icon: const Icon(Icons.refresh),
+            label: Text(context.l10n.dialogRetry),
+          ),
+      ],
     );
   }
 }

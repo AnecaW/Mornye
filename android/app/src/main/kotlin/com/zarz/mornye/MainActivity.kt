@@ -11,6 +11,8 @@ import android.os.Build
 import android.os.Bundle
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.android.FlutterActivityLaunchConfigs.BackgroundMode
 import io.flutter.embedding.android.FlutterFragment
@@ -56,6 +58,7 @@ class MainActivity: FlutterFragmentActivity() {
     private val CHANNEL = "com.zarz.mornye/backend"
     private val LARGE_JSON_RESULT_FILE_KEY = "__json_file"
     private val LARGE_JSON_RESULT_FILE_THRESHOLD_BYTES = 256 * 1024
+    private var keyboardDismissalPending = false
     internal val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     internal var backendChannel: MethodChannel? = null
     internal var audioOutputChannel: MethodChannel? = null
@@ -98,6 +101,7 @@ class MainActivity: FlutterFragmentActivity() {
         "processPendingExtensionCallbacks",
         "safExists",
         "safExistsBatch",
+        "listSafAudioFiles",
         "isSafTreeAccessible",
         "probeSafTreeReadAccess",
         "safDelete",
@@ -340,9 +344,8 @@ class MainActivity: FlutterFragmentActivity() {
         }
     }
 
-    // Disable Flutter's built-in deep linking so that incoming ACTION_VIEW URLs
-    // (Spotify, Deezer, Tidal, YouTube Music) are NOT forwarded to GoRouter.
-    // We handle these URLs ourselves via receive_sharing_intent + ShareIntentService.
+    // Keep incoming ACTION_VIEW URLs out of GoRouter. The sharing-intent
+    // handler and ShareIntentService resolve them before navigation.
     override fun shouldHandleDeeplinking(): Boolean = false
 
     // Bridge spill files and SAF temp copies are deleted after use on the
@@ -368,10 +371,14 @@ class MainActivity: FlutterFragmentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        requestedOrientation = if (isTelevisionDevice()) {
-            ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-        } else {
-            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        AudioOpenBridge.consume(this, intent)
+        // Phones start in portrait and tablets follow the device until
+        // setAppOrientation in app_orientation.dart applies its own rule.
+        requestedOrientation = when {
+            isTelevisionDevice() -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            resources.configuration.smallestScreenWidthDp >= 600 ->
+                ActivityInfo.SCREEN_ORIENTATION_FULL_USER
+            else -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         }
         // Ensure the shared audio_service engine exists before the activity
         // delegate looks it up by cached id (see getCachedEngineId above).
@@ -387,7 +394,29 @@ class MainActivity: FlutterFragmentActivity() {
             packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK) ||
             packageManager.hasSystemFeature(PackageManager.FEATURE_TELEVISION)
 
+    override fun onStop() {
+        keyboardDismissalPending = !isTelevisionDevice()
+        super.onStop()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            if (keyboardDismissalPending) {
+                keyboardDismissalPending = false
+                // An IME hide sent while stopped can be rejected because
+                // the window is no longer served by the input method.
+                WindowCompat.getInsetsController(window, window.decorView)
+                    .hide(WindowInsetsCompat.Type.ime())
+            }
+            // The IME can disappear while the activity is stopped. Refresh
+            // Flutter's viewport from Android's current insets on return.
+            window.decorView.requestApplyInsets()
+        }
+    }
+
     override fun onNewIntent(intent: Intent) {
+        AudioOpenBridge.consume(this, intent)
         super.onNewIntent(intent)
         setIntent(intent)
         handleVerificationNotificationIntent(intent)
@@ -434,6 +463,7 @@ class MainActivity: FlutterFragmentActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        AudioOpenBridge.attach(flutterEngine.dartExecutor.binaryMessenger)
         // Select and initialize the runtime before Flutter can dispatch a call.
         val selectedBackend = coreBackend
         sweepStaleCacheFiles()
@@ -502,6 +532,7 @@ class MainActivity: FlutterFragmentActivity() {
                         }
                         "safExists" -> handleSafExists(call, result)
                         "safExistsBatch" -> handleSafExistsBatch(call, result)
+                        "listSafAudioFiles" -> handleListSafAudioFiles(call, result)
                         "probeSafTreeReadAccess" -> handleProbeSafTreeReadAccess(call, result)
                         "isSafTreeAccessible" -> handleIsSafTreeAccessible(call, result)
                         "safDelete" -> handleSafDelete(call, result)

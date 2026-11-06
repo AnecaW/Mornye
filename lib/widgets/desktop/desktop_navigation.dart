@@ -14,6 +14,7 @@ import 'package:mornye/theme/material_expressive.dart';
 import 'package:mornye/theme/mornye_theme.dart';
 import 'package:mornye/widgets/app_icon.dart';
 import 'package:mornye/widgets/app_icon_button.dart';
+import 'package:mornye/widgets/cached_cover_image.dart';
 import 'package:mornye/widgets/desktop/desktop_commands.dart';
 import 'package:mornye/widgets/desktop/desktop_inspector.dart';
 import 'package:mornye/widgets/desktop/desktop_now_playing.dart';
@@ -68,7 +69,8 @@ final desktopSidebarLink = ValueNotifier<String?>(null);
 
 /// The user's playlists listed in the Mornye sidebar.
 final desktopSidebarPlaylistsProvider = Provider<List<UserPlaylistCollection>>(
-  (ref) => ref.watch(scopedLibraryCollectionsProvider.select((s) => s.playlists)),
+  (ref) =>
+      ref.watch(scopedLibraryCollectionsProvider.select((s) => s.playlists)),
 );
 
 /// The profile in the Mornye sidebar's account row, once it has loaded.
@@ -96,9 +98,10 @@ class DesktopDestination {
 /// The desktop shell: navigation on the leading edge, the content pane and
 /// the trailing inspector.
 ///
-/// Material uses [DesktopNavigationRail] and the player bar docked across the bottom. Mornye follows Music: the
-/// [DesktopSidebar] runs the full window height, and the player floats as a
-/// glass capsule at the bottom of the content pane, which pads its pages so
+/// Material uses [DesktopNavigationRail] and the player bar docked across
+/// the bottom. With Mornye, [DesktopSidebar] runs the full window height, and
+/// the player floats as a glass capsule at the bottom of the content pane,
+/// which pads its pages so
 /// their last rows scroll clear of it.
 ///
 /// On macOS the window content reaches under a transparent title bar
@@ -147,8 +150,17 @@ class DesktopShellLayout extends ConsumerWidget {
   /// the last full window size, so its pages keep their layout and state
   /// while the window is small.
   @override
-  Widget build(BuildContext context, WidgetRef ref) =>
-      _window(ref.watch(playerUiEnabledProvider));
+  Widget build(BuildContext context, WidgetRef ref) {
+    final enabled = ref.watch(playerUiEnabledProvider);
+    final hasTrack = ref.watch(
+      currentMediaItemProvider.select((state) => state.value != null),
+    );
+    return ValueListenableBuilder<bool>(
+      valueListenable: desktopPlayerDismissed,
+      builder: (context, dismissed, _) =>
+          _window(enabled && (!dismissed || hasTrack)),
+    );
+  }
 
   Widget _window(bool show) => ValueListenableBuilder<bool>(
     valueListenable: desktopMiniPlayerOpen,
@@ -229,9 +241,8 @@ class DesktopShellLayout extends ConsumerWidget {
   /// The window's size before the mini player shrank it.
   static Size? _fullWindowSize;
 
-  /// Now Playing covers the whole window, as Music's player does. The
-  /// destinations keep their state underneath, but stop painting and
-  /// ticking.
+  /// Now Playing covers the whole window. The destinations keep their state
+  /// underneath, but stop painting and ticking.
   Widget _nowPlayingOrShell(BuildContext context, bool showPlayer) =>
       ValueListenableBuilder<bool>(
         valueListenable: desktopNowPlayingOpen,
@@ -259,8 +270,7 @@ class DesktopShellLayout extends ConsumerWidget {
   Widget _shell(BuildContext context, bool showPlayer) {
     final width = MediaQuery.sizeOf(context).width;
     if (context.isMornye) {
-      // The sidebar always shows; the page background shows around the
-      // inset panel.
+      // The sidebar always shows, full height against the window's edges.
       return ColoredBox(
         color: Theme.of(context).colorScheme.surface,
         child: Row(
@@ -277,7 +287,7 @@ class DesktopShellLayout extends ConsumerWidget {
             Expanded(
               key: const ValueKey('desktop-content'),
               child: _DesktopContentArea(
-                overlayInspector: desktopInspectorOverlays(width),
+                windowWidth: width,
                 body: body,
                 floatingPlayer: showPlayer ? playerBar : null,
                 showPlayer: showPlayer,
@@ -333,7 +343,7 @@ class DesktopShellLayout extends ConsumerWidget {
               ),
               Expanded(
                 child: _DesktopContentArea(
-                  overlayInspector: desktopInspectorOverlays(width),
+                  windowWidth: width,
                   body: body,
                   showPlayer: showPlayer,
                   titleBarDrag: true,
@@ -376,19 +386,22 @@ class _PaneMediaQuery extends StatelessWidget {
   );
 }
 
+/// The narrowest pane that fits the Mornye capsule beside the glass inspector.
+const double _capsuleBesideInspectorWidth = mornyeGlassInspectorWidth + 520;
+
 /// The content pane, the trailing inspector and, in Mornye, the floating
 /// player. Pages bring their own search fields (Home, Library), so there is
 /// no shell search bar above them.
 class _DesktopContentArea extends StatelessWidget {
   const _DesktopContentArea({
-    required this.overlayInspector,
+    required this.windowWidth,
     required this.body,
     this.floatingPlayer,
     this.showPlayer = true,
     this.titleBarDrag = false,
   });
 
-  final bool overlayInspector;
+  final double windowWidth;
   final Widget body;
 
   /// The Mornye player capsule, floating over the bottom of the pane.
@@ -403,61 +416,93 @@ class _DesktopContentArea extends StatelessWidget {
   Widget build(BuildContext context) {
     final player = floatingPlayer;
     final playerInset = player == null ? 0.0 : DesktopPlayerBar.floatingInset;
-    return ValueListenableBuilder<DesktopInspectorPanel?>(
-      valueListenable: desktopInspectorPanel,
-      builder: (context, panel, _) {
-        if (!showPlayer) panel = null;
-        final content = Stack(
-          fit: StackFit.expand,
-          children: [
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+    final mornye = context.isMornye;
+    return ListenableBuilder(
+      listenable: Listenable.merge([
+        desktopInspectorPanel,
+        desktopWindowFullScreen,
+      ]),
+      builder: (context, _) {
+        final panel = showPlayer ? desktopInspectorPanel.value : null;
+        final overlayInspector = desktopInspectorOverlays(
+          windowWidth,
+          mornye: mornye,
+        );
+        final content = LayoutBuilder(
+          builder: (context, pane) {
+            // Mornye's glass runs the window's height and the capsule moves
+            // beside it, while the pane has room for the two.
+            final beside =
+                mornye &&
+                overlayInspector &&
+                pane.maxWidth >= _capsuleBesideInspectorWidth;
+            final motion = desktopInspectorMotion(context);
+            return Stack(
+              fit: StackFit.expand,
               children: [
-                // A semantics container keeps the tab navigators'
-                // modal barriers from hiding the sidebar.
-                Expanded(
-                  key: const ValueKey('desktop-pages'),
-                  child: Semantics(
-                    container: true,
-                    child: _PaneMediaQuery(
-                      bottomInset: playerInset,
-                      child: body,
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // A semantics container keeps the tab navigators'
+                    // modal barriers from hiding the sidebar.
+                    Expanded(
+                      key: const ValueKey('desktop-pages'),
+                      child: Semantics(
+                        container: true,
+                        child: _PaneMediaQuery(
+                          bottomInset: playerInset,
+                          child: body,
+                        ),
+                      ),
                     ),
+                  ],
+                ),
+                if (player != null)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: DesktopPlayerBar.floatingMargin,
+                    child: AnimatedPadding(
+                      duration: MediaQuery.disableAnimationsOf(context)
+                          ? Duration.zero
+                          : motion.duration,
+                      curve: motion.curve,
+                      padding: EdgeInsetsDirectional.only(
+                        end: beside && panel != null
+                            ? mornyeGlassInspectorWidth
+                            : 0,
+                      ),
+                      child: LayoutBuilder(
+                        builder: (context, constraints) => Center(
+                          child: SizedBox(
+                            width: DesktopPlayerBar.floatingWidth(
+                              constraints.maxWidth,
+                            ),
+                            child: player,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                // A narrow window's inspector floats above the player.
+                PositionedDirectional(
+                  top: 0,
+                  bottom: beside ? 0 : playerInset,
+                  end: 0,
+                  width: mornye
+                      ? mornyeGlassInspectorWidth
+                      : desktopInspectorWidth,
+                  child: DesktopInspectorTransition(
+                    key: const ValueKey('desktop-inspector-overlay'),
+                    panel: overlayInspector ? panel : null,
+                    overlay: true,
+                    builder: (context, panel) =>
+                        DesktopInspector(panel: panel, overlay: true),
                   ),
                 ),
               ],
-            ),
-            if (player != null)
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: DesktopPlayerBar.floatingMargin,
-                child: LayoutBuilder(
-                  builder: (context, constraints) => Center(
-                    child: SizedBox(
-                      width: DesktopPlayerBar.floatingWidth(
-                        constraints.maxWidth,
-                      ),
-                      child: player,
-                    ),
-                  ),
-                ),
-              ),
-            // A narrow window's inspector floats above the player.
-            PositionedDirectional(
-              top: 0,
-              bottom: playerInset,
-              end: 0,
-              width: desktopInspectorWidth,
-              child: DesktopInspectorTransition(
-                key: const ValueKey('desktop-inspector-overlay'),
-                panel: overlayInspector ? panel : null,
-                overlay: true,
-                builder: (context, panel) =>
-                    DesktopInspector(panel: panel, overlay: true),
-              ),
-            ),
-          ],
+            );
+          },
         );
         // One structure for every state, so opening the inspector never
         // remounts the destinations.
@@ -986,7 +1031,7 @@ class _RailDestination extends StatelessWidget {
   }
 }
 
-/// The Mornye source-list sidebar, laid out like Music's: a rounded panel
+/// The Mornye source-list sidebar: a rounded panel
 /// inset from the window edges, with the window controls and the sidebar
 /// button on top, then Search and the top-level destinations, the Library
 /// pages and the user's playlists under section headings, and the account
@@ -1008,16 +1053,7 @@ class DesktopSidebar extends ConsumerWidget {
   });
 
   /// Width of the panel.
-  static const double width = 210;
-
-  /// Space between the panel and the window edges and content pane.
-  static const double margin = 8;
-
-  /// Width the sidebar takes from the window.
-  static const double footprint = width + 2 * margin;
-
-  /// Corner radius of the panel.
-  static const double radius = 12;
+  static const double width = 226;
 
   final List<DesktopDestination> destinations;
   final ShellTab? selected;
@@ -1076,7 +1112,7 @@ class DesktopSidebar extends ConsumerWidget {
       );
     }
 
-    // Search leads the list, as in Music.
+    // Search leads the list.
     final topLevel = [
       for (final tab in [ShellTab.search, ShellTab.home, ShellTab.repository])
         ...destinations.where((destination) => destination.tab == tab),
@@ -1104,10 +1140,10 @@ class DesktopSidebar extends ConsumerWidget {
               tooltip: tooltip ?? link.label,
               onTap: () => openLink!(link.id),
             );
-        // A source list scrolls without a bar, as in Music's sidebar.
+        // The source list scrolls without a scrollbar.
         return NoScrollbars(
           child: ListView(
-            padding: const EdgeInsets.fromLTRB(6, 0, 6, 8),
+            padding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
             children: [
               for (final destination in topLevel) destinationRow(destination),
               if (links.isNotEmpty) ...[
@@ -1150,60 +1186,166 @@ class DesktopSidebar extends ConsumerWidget {
     final panel = ValueListenableBuilder<Color?>(
       valueListenable: ShellNavigationService.chromeSurface,
       builder: (context, tint, child) => DecoratedBox(
+        // One piece with the window: only a hairline parts it
+        // from the content, and the window's own corners are its corners.
         decoration: BoxDecoration(
           color: panelColor(context, tint),
-          borderRadius: BorderRadius.circular(radius),
-          border: Border.all(
-            color: Theme.of(
-              context,
-            ).colorScheme.onSurface.withValues(alpha: 0.08),
-            width: 0.5,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.10),
-              blurRadius: 12,
-              offset: const Offset(0, 2),
+          border: BorderDirectional(
+            end: BorderSide(
+              color: Theme.of(
+                context,
+              ).colorScheme.onSurface.withValues(alpha: 0.1),
+              width: 0.5,
             ),
-          ],
+          ),
         ),
         child: child,
       ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(radius),
-        child: Material(
-          type: MaterialType.transparency,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const _SidebarHeader(),
-              Expanded(child: list),
-              if (settings != null)
-                _SidebarAccountRow(
-                  settings: settings,
-                  settingsSelected: selected == ShellTab.settings,
-                  settingsTooltip: desktopDestinationTooltip(
-                    context,
-                    settings.label,
-                    _positionOf(destinations, ShellTab.settings),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          const _SidebarBackdrop(),
+          Material(
+            type: MaterialType.transparency,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const _SidebarHeader(),
+                Expanded(child: list),
+                if (settings != null)
+                  _SidebarAccountRow(
+                    settings: settings,
+                    settingsSelected: selected == ShellTab.settings,
+                    settingsTooltip: desktopDestinationTooltip(
+                      context,
+                      settings.label,
+                      _positionOf(destinations, ShellTab.settings),
+                    ),
+                    onOpenSettings: () => onSelected(ShellTab.settings),
+                    onOpenProfile:
+                        onOpenProfile ?? () => onSelected(ShellTab.settings),
                   ),
-                  onOpenSettings: () => onSelected(ShellTab.settings),
-                  onOpenProfile:
-                      onOpenProfile ?? () => onSelected(ShellTab.settings),
-                ),
-            ],
+              ],
+            ),
           ),
-        ),
+        ],
       ),
     );
-    return SizedBox(
-      width: footprint,
-      child: Padding(padding: const EdgeInsets.all(margin), child: panel),
+    return SizedBox(width: width, child: panel);
+  }
+}
+
+/// Extends the page's hero beneath the sidebar's backdrop blur.
+///
+/// The sidebar and the page are separate panes, so this paints the artwork
+/// again rather than sampling the page: a tiny decode, enlarged and mirrored
+/// at the seam. The enlargement is the blur, with no filter to rerun on each
+/// scroll frame, and the mirror meets the hero's edge with the same colors.
+class _SidebarBackdrop extends StatelessWidget {
+  const _SidebarBackdrop();
+
+  /// Decoded width; the fewer pixels, the softer the enlarged image.
+  static const int _decodeWidth = 48;
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<String?>(
+    valueListenable: ShellNavigationService.chromeBackdrop,
+    builder: (context, source, _) {
+      final image = source == null
+          ? null
+          : coverImageProvider(source, cacheWidth: _decodeWidth);
+      return AnimatedSwitcher(
+        duration: MediaQuery.disableAnimationsOf(context)
+            ? Duration.zero
+            : const Duration(milliseconds: 300),
+        layoutBuilder: (current, previous) =>
+            Stack(fit: StackFit.expand, children: [...previous, ?current]),
+        child: image == null
+            ? const SizedBox.expand()
+            : ClipRect(
+                key: ValueKey(source),
+                child: _SidebarArtwork(image: image),
+              ),
+      );
+    },
+  );
+}
+
+class _SidebarArtwork extends StatelessWidget {
+  const _SidebarArtwork({required this.image});
+
+  final ImageProvider image;
+
+  @override
+  Widget build(BuildContext context) {
+    final window = MediaQuery.sizeOf(context);
+    final hero = Size(
+      window.width - DesktopSidebar.width,
+      // MornyeArtistHeader's hero height on the desktop.
+      (window.height * 0.82).clamp(420.0, 820.0),
+    );
+    return ValueListenableBuilder<Color?>(
+      valueListenable: ShellNavigationService.chromeSurface,
+      builder: (context, tint, _) {
+        final fill = DesktopSidebar.panelColor(context, tint);
+        return AnimatedBuilder(
+          animation: ShellNavigationService.chromeBackdropOffset,
+          builder: (context, child) => Transform.translate(
+            offset: Offset(
+              0,
+              -ShellNavigationService.chromeBackdropOffset.value,
+            ),
+            child: child,
+          ),
+          child: RepaintBoundary(
+            child: OverflowBox(
+              alignment: AlignmentDirectional.topEnd,
+              minWidth: hero.width,
+              maxWidth: hero.width,
+              minHeight: hero.height,
+              maxHeight: hero.height,
+              child: Stack(
+                key: const ValueKey('desktop-sidebar-backdrop'),
+                fit: StackFit.expand,
+                children: [
+                  Transform.flip(
+                    flipX: true,
+                    child: Image(
+                      image: image,
+                      fit: BoxFit.cover,
+                      alignment: Alignment.topCenter,
+                      filterQuality: FilterQuality.high,
+                      gaplessPlayback: true,
+                      excludeFromSemantics: true,
+                      errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                    ),
+                  ),
+                  // The sidebar glass fades out where the hero ends.
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        stops: const [0, 0.6, 1],
+                        colors: [
+                          fill.withValues(alpha: 0.42),
+                          fill.withValues(alpha: 0.62),
+                          fill,
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }
 
-/// The account row pinned under the sidebar's list, as in Music: the
+/// The account row pinned under the sidebar's list: the
 /// profile picture and name, which open the profile, then Settings.
 class _SidebarAccountRow extends ConsumerWidget {
   const _SidebarAccountRow({
@@ -1240,7 +1382,7 @@ class _SidebarAccountRow extends ConsumerWidget {
         ),
       ),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
+        padding: const EdgeInsets.fromLTRB(10, 6, 10, 8),
         child: Row(
           children: [
             Expanded(
@@ -1324,9 +1466,8 @@ class _SidebarHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => SizedBox(
-    // The panel starts [DesktopSidebar.margin] below the window top.
     height: desktopTitleBarInContentFor(context)
-        ? desktopTitleBarHeight - DesktopSidebar.margin
+        ? desktopTitleBarHeight
         : height,
     child: const DesktopWindowDragArea(
       zoomOnDoubleClick: true,
@@ -1359,7 +1500,7 @@ class _SidebarSectionHeader extends StatelessWidget {
   );
 }
 
-/// One source-list row, measured from Music: a 32pt row inset 6pt from the
+/// One source-list row: a 32pt row inset 6pt from the
 /// panel, an 18pt accent icon and a 13pt label, and an optional count. The
 /// selected row gets a rounded translucent fill and a semibold label.
 class _SidebarRow extends StatelessWidget {

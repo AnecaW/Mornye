@@ -27,6 +27,24 @@
 	<string>Mornye</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Audio</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.audio</string>
+				<string>org.xiph.flac</string>
+				<string>org.xiph.ogg-audio</string>
+				<string>org.xiph.opus</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleIdentifier</key>
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -85,12 +103,13 @@
 	<true/>
 	
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Connect to your music servers and network storage to browse and play your music.</string>
+	<string>Connect to your music servers, network storage and Google Cast speakers and TVs to browse and play your music.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Listen to music playing nearby to identify the song. Only a sound fingerprint leaves your device.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_mornye._tcp</string>
+		<string>_googlecast._tcp</string>
 	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>

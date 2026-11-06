@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:mornye/services/network_download_staging.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
@@ -27,12 +28,17 @@ import 'package:mornye/services/download_metadata_resolver.dart';
 import 'package:mornye/services/download_metadata_embedding.dart';
 import 'package:mornye/services/download_saf_file_replacer.dart';
 import 'package:mornye/services/download_connectivity_policy.dart';
+import 'package:mornye/services/connectivity_monitor.dart';
 import 'package:mornye/services/download_keep_awake.dart';
 import 'package:mornye/services/download_scheduler.dart';
+import 'package:mornye/services/download_retry_backoff.dart';
 import 'package:mornye/services/source_deletion_events.dart';
 import 'package:mornye/services/platform_bridge.dart';
 import 'package:mornye/services/download_request_payload.dart';
 import 'package:mornye/services/folder_path_template.dart';
+import 'package:mornye/services/history_database.dart';
+import 'package:mornye/services/library_reorganizer.dart';
+import 'package:mornye/services/library_database.dart';
 import 'package:mornye/services/download_motion_artwork_source.dart';
 import 'package:mornye/services/ffmpeg_conversion.dart';
 import 'package:mornye/services/ffmpeg_decryption.dart';
@@ -47,6 +53,7 @@ import 'package:mornye/utils/logger.dart';
 import 'package:mornye/utils/desktop_folders.dart';
 import 'package:mornye/utils/desktop_platform.dart';
 import 'package:mornye/utils/file_access.dart';
+import 'package:mornye/utils/saf_display_path.dart';
 import 'package:mornye/utils/string_utils.dart';
 import 'package:mornye/utils/audio_format_utils.dart';
 import 'package:mornye/utils/audio_conversion_utils.dart';
@@ -71,6 +78,11 @@ export 'package:mornye/services/download_queue_persistence.dart'
 
 export 'package:mornye/services/history_database.dart'
     show HistoryLookupRequest, HistoryBatchLookupRequest;
+export 'package:mornye/services/library_reorganizer.dart'
+    show
+        LibraryReorganizationMove,
+        LibraryReorganizationPlan,
+        LibraryReorganizationResult;
 
 part 'download_queue_provider_paths.dart';
 part 'download_queue_provider_progress.dart';
@@ -82,6 +94,7 @@ part 'download_queue_provider_replaygain.dart';
 part 'download_queue_provider_embedding.dart';
 part 'download_queue_provider_single_item.dart';
 part 'download_queue_provider_hires_check.dart';
+part 'download_queue_provider_reorganize.dart';
 
 final _log = AppLogger('DownloadQueue');
 
@@ -202,10 +215,13 @@ class DownloadQueueNotifier extends Notifier<DownloadQueueState> {
   final Set<String> _locallyCancelledItemIds = {};
   final Set<String> _pausePendingItemIds = {};
   final Map<String, Future<void>> _nativeCancelRequests = {};
+  final Map<String, Future<void>> _activeDownloadAttempts = {};
+  final Set<String> _retryingItemIds = {};
   final DownloadVerificationRetryGuard _verificationRetryGuard =
       DownloadVerificationRetryGuard();
   final DownloadVerificationWaitCoordinator _verificationWaitCoordinator =
       DownloadVerificationWaitCoordinator();
+  final DownloadRetryBackoff _rateLimitBackoff = DownloadRetryBackoff();
   final Set<String> _rateLimitRetriedItemIds = {};
   String? _activeNativeWorkerRunId;
   bool get _hasActiveAndroidNativeWorker =>
@@ -243,6 +259,7 @@ class DownloadQueueNotifier extends Notifier<DownloadQueueState> {
     ref.onDispose(() {
       if (!_queueRestored.isCompleted) _queueRestored.complete();
       _verificationWaitCoordinator.cancelAll();
+      _rateLimitBackoff.cancelAll();
       _progressPoller.stop();
       _connectivitySub?.cancel();
       _connectivitySub = null;
@@ -1021,6 +1038,7 @@ class DownloadQueueNotifier extends Notifier<DownloadQueueState> {
 
   void _requestNativeCancel(String id) {
     _verificationWaitCoordinator.cancelItem(id);
+    _rateLimitBackoff.cancelItem(id);
     final previous = _nativeCancelRequests[id] ?? Future<void>.value();
     final request = previous
         .then((_) => PlatformBridge.cancelDownload(id))
@@ -1136,6 +1154,7 @@ class DownloadQueueNotifier extends Notifier<DownloadQueueState> {
       _locallyCancelledItemIds.addAll(activeIds);
       for (final id in activeIds) {
         _verificationWaitCoordinator.cancelItem(id);
+        _rateLimitBackoff.cancelItem(id);
       }
       unawaited(PlatformBridge.cancelDownloads(activeIds));
     }
@@ -1188,6 +1207,7 @@ class DownloadQueueNotifier extends Notifier<DownloadQueueState> {
             // A second cancel can arrive after it unwinds and leave a flag
             // that aborts the resumed download before it starts.
             _verificationWaitCoordinator.cancelItem(id);
+            _rateLimitBackoff.cancelItem(id);
           } else {
             _requestNativeCancel(id);
           }
@@ -1244,7 +1264,25 @@ class DownloadQueueNotifier extends Notifier<DownloadQueueState> {
       return;
     }
 
+    if (!_retryingItemIds.add(id)) return;
+    try {
+      await _retryItem(item);
+    } finally {
+      _retryingItemIds.remove(id);
+    }
+  }
+
+  Future<void> _retryItem(DownloadItem item) async {
+    final id = item.id;
     _log.i('Retrying item: ${item.track.name} (id: $id)');
+    await _waitForCancelledDownloadAttempts([id]);
+    if (!ref.mounted) return;
+    final pending = _findItemById(id);
+    if (pending == null ||
+        (pending.status != DownloadStatus.failed &&
+            pending.status != DownloadStatus.skipped)) {
+      return;
+    }
     // A cancel issued while the item never started leaves a pre-registered
     // flag in the backend that the next attempt would consume and abort
     // instantly; the user asked for a retry, so drop it first.
@@ -1254,6 +1292,7 @@ class DownloadQueueNotifier extends Notifier<DownloadQueueState> {
       _log.w('Failed to reset cancel flag for $id: $e');
       return;
     }
+    if (!ref.mounted) return;
     final current = state.items.where((i) => i.id == id).firstOrNull;
     if (current == null ||
         (current.status != DownloadStatus.failed &&
@@ -1270,9 +1309,7 @@ class DownloadQueueNotifier extends Notifier<DownloadQueueState> {
 
     final items = state.items.map((i) {
       if (i.id == id) {
-        return i.copyWith(
-          status: DownloadStatus.queued,
-          progress: 0,
+        return i.resetToQueued().copyWith(
           error: null,
           errorType: null,
           filePath: null,
@@ -1297,6 +1334,7 @@ class DownloadQueueNotifier extends Notifier<DownloadQueueState> {
           (item) =>
               (item.status == DownloadStatus.failed ||
                   item.status == DownloadStatus.skipped) &&
+              !_retryingItemIds.contains(item.id) &&
               (!networkOnly || item.errorType == DownloadErrorType.network),
         )
         .map((item) => item.id)
@@ -1306,8 +1344,26 @@ class DownloadQueueNotifier extends Notifier<DownloadQueueState> {
       return;
     }
 
+    _retryingItemIds.addAll(failedIds);
+    try {
+      await _retryFailedItems(failedIds);
+    } finally {
+      _retryingItemIds.removeAll(failedIds);
+    }
+  }
+
+  Future<void> _retryFailedItems(Set<String> failedIds) async {
     _log.i('Retrying ${failedIds.length} failed download(s)');
-    final retryableIds = await PlatformBridge.resetDownloadCancels(failedIds);
+    await _waitForCancelledDownloadAttempts(failedIds);
+    if (!ref.mounted) return;
+    final pendingIds = failedIds.where((id) {
+      final item = _findItemById(id);
+      return item != null &&
+          (item.status == DownloadStatus.failed ||
+              item.status == DownloadStatus.skipped);
+    }).toSet();
+    if (pendingIds.isEmpty) return;
+    final retryableIds = await PlatformBridge.resetDownloadCancels(pendingIds);
     if (!ref.mounted || retryableIds.isEmpty) return;
     _locallyCancelledItemIds.removeAll(retryableIds);
     _pausePendingItemIds.removeAll(retryableIds);
@@ -1340,6 +1396,23 @@ class DownloadQueueNotifier extends Notifier<DownloadQueueState> {
 
     if (!state.isProcessing) {
       Future.microtask(() => _processQueue());
+    }
+  }
+
+  Future<void> _waitForCancelledDownloadAttempts(Iterable<String> ids) async {
+    // A cancelled row becomes retryable before its writer and native cancel
+    // finish. Both must settle before resetting the flag or publishing a new
+    // attempt, otherwise the old result can overwrite the retried row.
+    while (true) {
+      final pending = <Future<void>>{
+        for (final id in ids) ...[
+          ?_nativeCancelRequests[id],
+          ?_activeDownloadAttempts[id],
+        ],
+      };
+      if (pending.isEmpty) return;
+      await Future.wait(pending);
+      if (!ref.mounted) return;
     }
   }
 
@@ -1716,7 +1789,6 @@ class DownloadQueueNotifier extends Notifier<DownloadQueueState> {
       }
     }
 
-    // iOS: request a background execution window (no foreground service).
     if (Platform.isIOS && _totalQueuedAtStart > 0) {
       await PlatformBridge.beginBackgroundDownloadTask();
     }

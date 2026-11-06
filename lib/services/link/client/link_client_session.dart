@@ -68,7 +68,7 @@ typedef LinkTimerFactory = Timer Function(Duration delay, void Function() run);
 
 class _WebSocketLinkSocket implements LinkSocket {
   _WebSocketLinkSocket(this._socket) {
-    // The desktop pings every 20 s; pinging back finds a vanished desktop.
+    // Pinging every 20 s finds a vanished desktop, even while paused.
     _socket.pingInterval = const Duration(seconds: 20);
   }
 
@@ -179,7 +179,10 @@ class LinkClientSession implements LinkSession {
   @override
   LinkSessionIssue? get issue => _issue;
 
-  HttpClient get _client => _http ??= _createHttpClient(_server);
+  HttpClient get _client {
+    _ensureOpen();
+    return _http ??= _createHttpClient(_server);
+  }
 
   Uri get _origin => Uri.parse(_server.address);
 

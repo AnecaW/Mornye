@@ -80,8 +80,12 @@ class _SearchProviderDropdown extends ConsumerWidget {
             if (iconPath != null && iconPath.isNotEmpty)
               ClipRRect(
                 borderRadius: BorderRadius.circular(4),
-                child: Image.file(
-                  File(iconPath),
+                child: Image(
+                  image: ExtensionIconImage(
+                    FileImage(File(iconPath)),
+                    extent: (20 * MediaQuery.devicePixelRatioOf(context))
+                        .ceil(),
+                  ),
                   width: 20,
                   height: 20,
                   fit: BoxFit.cover,
@@ -114,8 +118,12 @@ class _SearchProviderDropdown extends ConsumerWidget {
               leading: ext.iconPath != null && ext.iconPath!.isNotEmpty
                   ? ClipRRect(
                       borderRadius: BorderRadius.circular(4),
-                      child: Image.file(
-                        File(ext.iconPath!),
+                      child: Image(
+                        image: ExtensionIconImage(
+                          FileImage(File(ext.iconPath!)),
+                          extent: (20 * MediaQuery.devicePixelRatioOf(context))
+                              .ceil(),
+                        ),
                         width: 20,
                         height: 20,
                         fit: BoxFit.cover,

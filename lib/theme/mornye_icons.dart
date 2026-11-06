@@ -52,7 +52,8 @@ IconData _cupertinoFor(IconData icon) {
     Icons.folder_outlined ||
     Icons.folder_open ||
     Icons.folder_special ||
-    Icons.folder_special_outlined => CupertinoIcons.folder,
+    Icons.folder_special_outlined ||
+    Icons.drive_file_move_outlined => CupertinoIcons.folder,
     Icons.create_new_folder_outlined => CupertinoIcons.folder_badge_plus,
     Icons.storage_outlined ||
     Icons.sd_storage_outlined ||
@@ -138,6 +139,7 @@ IconData _cupertinoFor(IconData icon) {
     Icons.wifi => CupertinoIcons.wifi,
     Icons.signal_cellular_alt => CupertinoIcons.antenna_radiowaves_left_right,
     Icons.cloud || Icons.cloud_outlined => CupertinoIcons.cloud,
+    Icons.cloud_upload_outlined => CupertinoIcons.cloud_upload,
     Icons.high_quality => CupertinoIcons.hifispeaker,
     Icons.four_k => CupertinoIcons.waveform,
     Icons.dynamic_feed_outlined ||

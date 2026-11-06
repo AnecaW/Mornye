@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:material_3_expressive/material_3_expressive.dart'
     show M3EButton;
 import 'package:mornye/models/settings.dart';
+import 'package:mornye/providers/extension_provider.dart';
 import 'package:mornye/utils/adaptive_layout.dart';
 import 'package:mornye/widgets/animation_utils.dart';
 import 'package:mornye/widgets/desktop/desktop_scroll_arrows.dart';
@@ -69,6 +70,104 @@ Future<void> _dismissSnackBars(WidgetTester tester) async {
 }
 
 void main() {
+  testWidgets('Mornye desktop results move between kinds without chips', (
+    tester,
+  ) async {
+    final results = SearchFixtureResults(count: 3, songCount: 8);
+    await pumpSearchFixture(
+      tester,
+      size: _desktop,
+      mornye: true,
+      desktop: true,
+      settings: _grid,
+      results: results,
+      filters: searchFixtureAllFilters,
+    );
+    expect(find.text('Albums filter'), findsNothing);
+    expect(find.text('All'), findsNothing);
+
+    await tester.tap(find.text('Albums'));
+    await tester.pumpAndSettle();
+    expect(results.requestedFilters.last, 'album');
+
+    await tester.tap(find.text('All'));
+    await tester.pumpAndSettle();
+    expect(find.text('All'), findsNothing);
+    expect(find.byKey(const ValueKey('top-album-album-0')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final view in ['list', 'grid']) {
+    testWidgets('Mornye $view keeps custom and empty filters reachable', (
+      tester,
+    ) async {
+      final results = SearchFixtureResults(count: 0, songCount: 2);
+      await pumpSearchFixture(
+        tester,
+        size: _desktop,
+        mornye: true,
+        desktop: true,
+        settings: _grid.copyWith(searchViewMode: view),
+        results: results,
+        filters: const [
+          SearchFilter(id: 'all', label: 'All entries'),
+          ...searchFixtureAllFilters,
+          SearchFilter(id: 'spoken', label: 'Spoken audio'),
+        ],
+      );
+      expect(find.text('Albums'), findsNothing);
+      await tester.tap(find.byTooltip('Filters'));
+      await tester.pumpAndSettle();
+      expect(find.text('All'), findsOneWidget);
+      expect(find.text('All entries'), findsNothing);
+      await tester.tap(find.text('Albums filter'));
+      await tester.pumpAndSettle();
+      expect(results.requestedFilters.last, 'album');
+
+      // The previous search has no results, but other filters remain usable.
+      await tester.tap(find.byTooltip('Filters'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Spoken audio'));
+      await tester.pumpAndSettle();
+      expect(results.requestedFilters.last, 'spoken');
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('Mornye All view opens with Search Results cards', (
+    tester,
+  ) async {
+    await pumpSearchFixture(
+      tester,
+      size: const Size(1000, 1800),
+      mornye: true,
+      desktop: true,
+      settings: _grid,
+      results: SearchFixtureResults(count: 3, songCount: 8),
+      filters: searchFixtureAllFilters,
+    );
+    // A song first, then the album, more songs and the playlist.
+    Finder card(String key) => find.byKey(ValueKey(key));
+    expect(card('top-album-album-0'), findsOneWidget);
+    expect(card('top-playlist-playlist-0'), findsOneWidget);
+    final album = tester.getRect(card('top-album-album-0'));
+    final playlist = tester.getRect(card('top-playlist-playlist-0'));
+    expect(album.height, searchTopResultHeight);
+    expect(album.top, lessThan(playlist.top));
+    expect(playlist.left, greaterThan(album.left));
+    final segments = find.textContaining(' · ');
+    expect(segments.evaluate().length, 6);
+    // Artists go by name alone, bigger than a phone's list row.
+    final artist = tester.getSize(
+      find.byKey(const ValueKey('artist-artist-0')),
+    );
+    final albumCell = tester.getSize(
+      find.byKey(const ValueKey('album-album-0')),
+    );
+    expect(artist.width, lessThan(albumCell.width));
+    expect(tester.takeException(), isNull);
+  });
+
   for (final mornye in [false, true]) {
     final style = mornye ? 'Mornye' : 'Material';
 
@@ -120,7 +219,9 @@ void main() {
           results: results,
           filters: searchFixtureAllFilters,
         );
-        await tester.tap(find.text('Albums filter'));
+        await tester.tap(
+          find.text(mornye && desktop ? 'Albums' : 'Albums filter'),
+        );
         await tester.pumpAndSettle();
         expect(results.requestedFilters.last, 'album');
 
@@ -195,7 +296,7 @@ void main() {
         results: SearchFixtureResults(count: 4),
         filters: searchFixtureAllFilters,
       );
-      await tester.tap(find.text('Artists filter'));
+      await tester.tap(find.text(mornye ? 'Artists' : 'Artists filter'));
       await tester.pumpAndSettle();
       final cell = find.byKey(const ValueKey('artist-artist-0'));
       expect(cell, findsOneWidget);
@@ -229,19 +330,35 @@ void main() {
       );
       expect(results.requestedFilters, [null]);
 
-      // Songs come first, as covers like every other kind.
+      // Material opens with songs, as covers like every other kind. Mornye
+      // opens with a mixed preview, and songs follow the albums.
       final headers = [
-        for (final title in ['Songs', 'Artists', 'Albums', 'Playlists'])
+        for (final title in [
+          if (mornye) ...[
+            'Search Results',
+            'Artists',
+            'Albums',
+            'Songs',
+            'Playlists',
+          ] else ...[
+            'Songs',
+            'Artists',
+            'Albums',
+            'Playlists',
+          ],
+        ])
           tester.getTopLeft(find.text(title)).dy,
       ];
       expect(headers, orderedEquals([...headers]..sort()));
       // Sort ends the filter row, so each Show all ends its own header.
       final sortTop = tester.getCenter(find.text('Sort').hitTestable()).dy;
       expect(sortTop, lessThan(headers.first));
-      expect(
-        tester.getCenter(find.text('All')).dy,
-        moreOrLessEquals(sortTop, epsilon: 12),
-      );
+      if (!mornye) {
+        expect(
+          tester.getCenter(find.text('All')).dy,
+          moreOrLessEquals(sortTop, epsilon: 12),
+        );
+      }
       final songShelf = find.byKey(const ValueKey('search-shelf-track'));
       expect(songShelf, findsOneWidget);
       expect(
@@ -266,7 +383,8 @@ void main() {
         );
       }
       expect(find.byType(DesktopScrollArrows), findsNWidgets(4));
-      expect(find.byType(SliverGrid), findsNothing);
+      // Only Mornye's mixed preview cards form a grid.
+      expect(find.byType(SliverGrid), mornye ? findsOneWidget : findsNothing);
 
       // Show all switches to that kind's filter.
       await tester.tap(find.bySemanticsLabel('Show all Albums'));
@@ -339,7 +457,7 @@ void main() {
         settings: settings,
         filters: searchFixtureAllFilters,
       );
-      await tester.tap(find.text('Songs filter'));
+      await tester.tap(find.text(mornye ? 'Songs' : 'Songs filter'));
       await tester.pumpAndSettle();
       expect(find.byType(SliverGrid), findsOneWidget);
       expect(_songCell(0), findsOneWidget);
@@ -428,7 +546,21 @@ void main() {
         results: SearchFixtureResults(holdLoading: true),
       );
       expect(find.byType(TrackListSkeleton), findsNothing);
-      expect(largestBox(), searchCoverShelfExtent);
+      final shelfCover = largestBox();
+      if (!mornye) expect(shelfCover, searchCoverShelfExtent);
+      await pumpSearchFixture(
+        tester,
+        size: _desktop,
+        mornye: mornye,
+        desktop: true,
+        settings: _grid,
+        filters: searchFixtureAllFilters,
+        results: SearchFixtureResults(count: 3, songCount: 8),
+      );
+      expect(
+        tester.getSize(find.byKey(const ValueKey('album-album-0'))).width,
+        shelfCover,
+      );
       expect(tester.takeException(), isNull);
     });
 
@@ -446,7 +578,7 @@ void main() {
         filters: searchFixtureAllFilters,
         results: SearchFixtureResults(count: 3),
       );
-      await tester.tap(find.text('Albums filter'));
+      await tester.tap(find.text(mornye ? 'Albums' : 'Albums filter'));
       await tester.pumpAndSettle();
       expect(
         tester.getCenter(find.byKey(const ValueKey('album-album-0'))).dx,

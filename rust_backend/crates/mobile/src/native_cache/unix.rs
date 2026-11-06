@@ -129,6 +129,18 @@ fn modified(stat: &Stat) -> i128 {
     i128::from(stat.st_mtime) * 1_000_000_000 + i128::from(stat.st_mtime_nsec)
 }
 
+/// When a Library cover name appeared. A hard link shares its inode's mtime,
+/// so a thumbnail linked moments ago (desktop and iOS) counts from the ctime
+/// that linking updates; a file with one name keeps its mtime.
+fn named(stat: &Stat) -> i128 {
+    let changed = i128::from(stat.st_ctime) * 1_000_000_000 + i128::from(stat.st_ctime_nsec);
+    if stat.st_nlink > 1 {
+        modified(stat).max(changed)
+    } else {
+        modified(stat)
+    }
+}
+
 fn unchanged(before: &Stat, after: &Stat) -> bool {
     regular(after)
         && before.st_dev == after.st_dev
@@ -375,9 +387,9 @@ fn prune(request: &Value, check: Check<'_>) -> Result<Value, String> {
         let version: i64 = db
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .map_err(|e| e.to_string())?;
-        if version != 17 {
+        if version != 17 && version != 18 {
             return Err(format!(
-                "Cover reference schema v{version} is incompatible with native v17"
+                "Cover reference schema v{version} is incompatible with native v17/v18"
             ));
         }
         Some(db)
@@ -401,7 +413,7 @@ fn prune(request: &Value, check: Check<'_>) -> Result<Value, String> {
         }
         if retained.contains(&entry.display)
             || retained.contains(&entry.canonical)
-            || modified(&entry.stat) > cutoff
+            || named(&entry.stat) > cutoff
         {
             continue;
         }

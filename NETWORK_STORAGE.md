@@ -32,8 +32,17 @@ from the server.
 Connections are stored in the platform secure store. Playback sessions contain
 opaque connection IDs and relative paths instead of server credentials. A
 random-token loopback proxy handles GET, HEAD and byte ranges. Files stream on
-demand without making a full local copy; HTTP seeking depends on the server's
-range support. Requests have a 20-second connection/read-inactivity timeout.
+demand; HTTP seeking depends on the server's range support. Requests have a
+20-second connection/read-inactivity timeout.
+
+While a network song plays, the player downloads the whole files of the next
+two songs in queue order, then the current one, one at a time into the app
+cache (at most 1 GB and 32 files, least recently played first, 256 MB per
+file). A song opens from its copy only once the copy is complete, so the next
+song starts without waiting for the server and gapless playback holds; until
+then it streams. Copies are checked against the server's size and modification
+time or entity tag, and an edit or deletion made in the app drops its copy.
+Saved offline copies take priority, and Mornye Link songs are not cached.
 
 Browsing alone does not add anything to the Library. Inside an SMB or WebDAV
 folder, choose **Add folder to Library** to index that folder and its subfolders.
@@ -99,10 +108,28 @@ cover caches. Playback and Lyrics share in-flight reads and cache results for
 five minutes. Large HTTP files require server byte-range support; a tag read
 failure leaves playback available with filename/folder artwork fallbacks.
 
-Remote metadata editing, separate sidecar lyric files, offline downloads,
+Library songs can be saved for offline playback from their song menu, selection
+toolbar, album, playlist or folder. This copies the original audio file into the
+device's normal download folder, preserving the relative server folder and file
+name (Subsonic uses its original path when supplied, otherwise artist/album).
+No conversion or quality selection is applied. A stable network origin links
+the independent local History file to the retained scanned server row. Library
+shows one preferred local entry and offers an On this device filter, availability
+status, and separate removal of the local and server copies. A later scan that
+finds the server file gone leaves the offline copy alone. Playback prefers an
+available local copy even for network songs already queued. This does not change
+the network destination for new provider downloads or synchronize later edits.
+
+Remote metadata editing, separate sidecar lyric files,
 AutoMix and direct USB/DAP bit-perfect output are not part of this browser.
 Normal playback uses the platform audio decoder, so codec support follows the
-device.
+device. On iOS and macOS, formats AVPlayer cannot open (APE, WavPack, DSD and
+others) are converted with FFmpeg to a temporary lossless copy first; a song
+that still cannot play is named in a notice and skipped.
+
+Songs already in the local Library can be uploaded to a writable SMB or WebDAV
+connection from the track menu, the Library selection and album headers. Files
+land in `<folder>/<Album Artist>/<Album>/` and never replace a remote file.
 
 ## Validation
 

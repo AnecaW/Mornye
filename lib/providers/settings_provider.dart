@@ -715,6 +715,9 @@ class SettingsNotifier extends Notifier<AppSettings> {
   void setLandscapeLyricsArtwork(bool enabled) =>
       _commit(state.copyWith(landscapeLyricsArtwork: enabled));
 
+  void setAutoHideLyricsControls(bool enabled) =>
+      _commit(state.copyWith(autoHideLyricsControls: enabled));
+
   void setCompactPlayer(bool enabled) =>
       _commit(state.copyWith(compactPlayer: enabled));
 
@@ -844,6 +847,9 @@ class SettingsNotifier extends Notifier<AppSettings> {
   void setLyricsAiRomanize(bool enabled) =>
       _commit(state.copyWith(lyricsAiRomanize: enabled));
 
+  void setLyricsAiWordSync(bool enabled) =>
+      _commit(state.copyWith(lyricsAiWordSync: enabled));
+
   Future<void> setFirstLaunchComplete() async {
     // The router leaves setup as soon as this flag changes. Persist the final
     // folder settings first so a restart cannot send the user back to setup.
@@ -920,6 +926,9 @@ class SettingsNotifier extends Notifier<AppSettings> {
 
   void setHistoryFilterMode(String mode) =>
       _commit(state.copyWith(historyFilterMode: mode));
+
+  void setHistorySortMode(String mode) =>
+      _commit(state.copyWith(historySortMode: librarySortModeFromJson(mode)));
 
   void setAskQualityBeforeDownload(bool enabled) =>
       _commit(state.copyWith(askQualityBeforeDownload: enabled));

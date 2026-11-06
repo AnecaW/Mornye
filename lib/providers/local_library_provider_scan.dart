@@ -38,7 +38,9 @@ extension _LocalLibraryScan on LocalLibraryNotifier {
         NotificationService.libraryScanWorkKind,
       );
       await _cancelScanPausedNotification();
-      await _showScanFailedNotification(message);
+      if (prefs.getBool(localLibraryActiveScanNotifyKey) ?? true) {
+        await _showScanFailedNotification(message);
+      }
       // Keep the checkpoint marker so enabled auto-scan can resume it. This
       // recovery also runs when auto-scan is off and never deletes tracks.
       await _db.updateSourceState(sourceId, lastScanError: message);
@@ -219,6 +221,10 @@ extension _LocalLibraryScan on LocalLibraryNotifier {
           DateTime.now().millisecondsSinceEpoch,
         );
         await prefs.setString(localLibraryActiveScanSourceKey, activeSourceId);
+        await prefs.setBool(
+          localLibraryActiveScanNotifyKey,
+          _scanNotificationsEnabled,
+        );
         await prefs.remove(localLibraryRecoveredScanKey);
       } catch (e) {
         _log.w('Failed to persist active library scan marker: $e');
@@ -579,6 +585,7 @@ extension _LocalLibraryScan on LocalLibraryNotifier {
             activeSourceId) {
           await prefs.remove(localLibraryActiveScanSourceKey);
           await prefs.remove(localLibraryActiveScanStartedAtKey);
+          await prefs.remove(localLibraryActiveScanNotifyKey);
           await prefs.remove(localLibraryRecoveredScanKey);
         }
       } catch (e) {
@@ -778,6 +785,7 @@ extension _LocalLibraryScan on LocalLibraryNotifier {
     required int totalFiles,
     required bool isComplete,
   }) {
+    if (!_scanNotificationsEnabled) return false;
     final now = DateTime.now();
     final percent = progress.round().clamp(0, 100);
     final percentChanged = percent != _lastScanNotificationPercent;
@@ -903,6 +911,7 @@ extension _LocalLibraryScan on LocalLibraryNotifier {
   }
 
   Future<void> _queueScanNotification(Future<void> Function() notify) {
+    if (!_scanNotificationsEnabled) return Future<void>.value();
     final next = _scanNotificationTail.then((_) => notify());
     // A failed notification must not prevent the terminal notice or cleanup.
     _scanNotificationTail = next.catchError((Object _) {});

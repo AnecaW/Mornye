@@ -1,6 +1,5 @@
 import 'package:mornye/services/music_library_capabilities.dart';
 import 'dart:async';
-import 'package:mornye/utils/logger.dart';
 import 'package:mornye/services/playback_load.dart';
 import 'package:mornye/services/playback_buffer_policy.dart';
 import 'dart:convert';
@@ -22,12 +21,15 @@ import 'package:mornye/services/network_smb_client.dart';
 import 'package:mornye/services/platform_bridge.dart';
 import 'package:mornye/services/secure_storage_options.dart';
 import 'package:mornye/services/source_deletion_events.dart';
+import 'package:mornye/utils/logger.dart';
 import 'package:xml/xml.dart';
 
 part 'network_storage_upload.dart';
 part 'network_storage_delete.dart';
+part 'network_storage_edit.dart';
 part 'network_storage_subsonic.dart';
 part 'network_storage_playback.dart';
+part 'network_storage_download.dart';
 
 typedef _SmbListingInput = ({
   List<({String name, bool directory, int size, int modifiedTime})> files,
@@ -88,6 +90,11 @@ List<NetworkEntry> _hydrateNetworkEntriesInBackground(List<dynamic> entries) =>
     ];
 
 enum NetworkProtocol { smb, webdav, http, subsonic }
+
+class NetworkListingException extends HttpException {
+  const NetworkListingException()
+    : super('Server folder listing could not be read');
+}
 
 enum SubsonicAuth { saltedToken, password, apiKey }
 
@@ -240,6 +247,25 @@ Uri networkTarget(NetworkConnection connection, String path) {
   return (start: start, end: end);
 }
 
+/// Bytes [start] to [end] (inclusive) of a whole representation's [bytes].
+/// Stops reading [bytes] after [end].
+Stream<List<int>> networkByteWindow(
+  Stream<List<int>> bytes,
+  int start,
+  int end,
+) async* {
+  var offset = 0;
+  await for (final chunk in bytes) {
+    final from = max(0, start - offset);
+    final to = min(chunk.length, end + 1 - offset);
+    if (from < to) {
+      yield from == 0 && to == chunk.length ? chunk : chunk.sublist(from, to);
+    }
+    offset += chunk.length;
+    if (offset > end) break;
+  }
+}
+
 /// One song of a [NetworkVirtualSources] host for a Library scan: its
 /// `path` under the host, its `tags` (the keys
 /// [NetworkVirtualSources.metadata] answers), its local cover file and file
@@ -286,6 +312,15 @@ abstract interface class NetworkLocalCopies implements NetworkVirtualSources {
   Future<String?> recover(String path);
 }
 
+/// Virtual sources that can delete a shared file on its owning device.
+abstract interface class NetworkVirtualFileDeletion
+    implements NetworkVirtualSources {
+  Future<bool> canDeleteFile(String id, String path);
+
+  /// True only after the owner confirms the file is absent.
+  Future<bool> deleteFile(String id, String path);
+}
+
 /// A server's answer that the media at a network source is missing or not
 /// what was asked for, such as a 404 or a song where a cover was asked.
 /// Asking again soon gets the same answer.
@@ -294,6 +329,7 @@ class NetworkMediaUnavailable extends HttpException {
 }
 
 class NetworkStorageService {
+  static final _log = AppLogger('NetworkStorage');
   NetworkStorageService({
     Future<String?> Function()? read,
     Future<void> Function(String)? write,
@@ -339,7 +375,6 @@ class NetworkStorageService {
 
   /// Saved connection changes, without publishing credentials.
   final connectionRevision = ValueNotifier<int>(0);
-  static const timeout = Duration(seconds: 20);
   static const _probeTimeout = Duration(seconds: 3);
   static const _probeReuse = Duration(seconds: 10);
 
@@ -351,6 +386,26 @@ class NetworkStorageService {
 
   /// Connections known to be out of reach, with when a probe last failed.
   final _unreachable = <String, DateTime?>{};
+
+  /// Default timeout for general network operations, listings, and downloads.
+  static const timeout = Duration(seconds: 20);
+
+  /// Maximum socket backpressure wait time per chunk during file uploads.
+  /// Prevents false stall failures on slow or fluctuating mobile networks.
+  static const uploadChunkTimeout = Duration(minutes: 2);
+
+  /// Maximum wait time for the server to commit and return response headers
+  /// after all upload bytes have been flushed. Accommodates slow NAS disk I/O.
+  static const uploadResponseTimeout = Duration(minutes: 30);
+
+  @visibleForTesting
+  static Duration? debugTimeoutOverride;
+
+  @visibleForTesting
+  static Duration? debugUploadChunkTimeoutOverride;
+
+  @visibleForTesting
+  static Duration? debugUploadResponseTimeoutOverride;
   Future<List<NetworkConnection>>? _loading;
   List<NetworkConnection>? _connections;
   Future<HttpServer>? _server;
@@ -672,7 +727,7 @@ class NetworkStorageService {
       // Caching is best effort and must never prevent ordinary streaming.
       // Playback reads progressively; it must not launch a competing full-file download.
     }
-    await _readyConnection(host, path);
+    final c = await _readyConnection(host, path);
     _server ??= HttpServer.bind(InternetAddress.loopbackIPv4, 0).then((server) {
       server.listen((request) => unawaited(_serve(request)));
       return server;
@@ -684,11 +739,14 @@ class NetworkStorageService {
       _server = null;
       rethrow;
     }
-    // AVPlayer uses the path suffix as well as MIME to select its decoder.
-    final suffix = path.split('.').last.toLowerCase();
+    final name = _networkFileName(c, path);
+    final dot = name.lastIndexOf('.');
+    final suffix = dot < 0 ? '' : name.substring(dot + 1).toLowerCase();
+    // AVPlayer needs a file-type hint even when a NAS serves generic bytes.
+    // Keep names and credentials private behind the unguessable route.
     final opaque = newId();
-    final token = forPlayback
-        ? '$opaque.${RegExp(r'^[a-z0-9]{1,8}$').hasMatch(suffix) ? suffix : 'audio'}'
+    final token = forPlayback && RegExp(r'^[a-z0-9]{1,10}$').hasMatch(suffix)
+        ? '$opaque.$suffix'
         : opaque;
     while (_routes.length >= 256) {
       _routes.remove(_routes.keys.first);
@@ -864,7 +922,7 @@ class NetworkStorageService {
             domain: c.domain,
             timeout: timeout,
           )
-        : NetworkSmbClient.connect(
+        : _smbSessions.connect(
             target,
             username: c.username,
             password: c.password,
@@ -1005,10 +1063,17 @@ class NetworkStorageService {
       request.contentLength = await upload.length();
       var sent = 0;
       try {
+        final chunkTimeout =
+            debugUploadChunkTimeoutOverride ?? uploadChunkTimeout;
         await for (final chunk in upload.openRead()) {
           checkpoint?.call();
           request.add(chunk);
-          await request.flush().timeout(timeout);
+          await _waitForUpload(
+            request.flush(),
+            request,
+            chunkTimeout,
+            checkpoint: checkpoint,
+          );
           sent += chunk.length;
           progress?.call(sent);
         }
@@ -1032,18 +1097,30 @@ class NetworkStorageService {
     }
     final HttpClientResponse response;
     try {
-      response = await request.close().timeout(
-        timeout,
-        onTimeout: () {
-          request.abort();
-          throw TimeoutException('Network response timed out');
-        },
-      );
+      final effectiveTimeout = upload != null
+          ? (debugUploadResponseTimeoutOverride ?? uploadResponseTimeout)
+          : (debugTimeoutOverride ?? timeout);
+      response = upload != null
+          ? await _waitForUpload(
+              request.close(),
+              request,
+              effectiveTimeout,
+              checkpoint: checkpoint,
+            )
+          : await request.close().timeout(
+              effectiveTimeout,
+              onTimeout: () {
+                request.abort();
+                throw TimeoutException('Network response timed out');
+              },
+            );
     } on HandshakeException {
       if (rejectedCertificate != null) throw rejectedCertificate!;
       rethrow;
     }
-    if ([301, 302, 307, 308].contains(response.statusCode)) {
+    if ([301, 302, 307, 308].contains(response.statusCode) ||
+        (response.statusCode == HttpStatus.seeOther &&
+            (method == 'GET' || method == 'HEAD'))) {
       // Never replay a mutating request to an unselected path.
       if (!['GET', 'HEAD', 'PROPFIND'].contains(method)) {
         await _discardResponse(response);
@@ -1162,6 +1239,9 @@ class NetworkStorageService {
     );
     if (response.statusCode < 200 || response.statusCode >= 300) {
       await _discardResponse(response);
+      _log.w(
+        'Directory request failed: protocol=${c.protocol.name}, status=${response.statusCode}',
+      );
       throw HttpException('Server returned ${response.statusCode}');
     }
     final bytes = BytesBuilder();
@@ -1171,7 +1251,40 @@ class NetworkStorageService {
       }
       bytes.add(chunk);
     }
-    return await parseListingInBackground(c, path, bytes.takeBytes());
+    final contentType = response
+        .headers[HttpHeaders.contentTypeHeader]
+        ?.firstOrNull
+        ?.split(';')
+        .first
+        .trim()
+        .toLowerCase();
+    final bodyType = switch (contentType) {
+      'text/html' || 'application/xhtml+xml' => 'html',
+      'application/xml' || 'text/xml' => 'xml',
+      'application/json' => 'json',
+      _ => 'other',
+    };
+    _log.d(
+      'Directory response received: protocol=${c.protocol.name}, status=${response.statusCode}, body=$bodyType, bytes=${bytes.length}',
+    );
+    try {
+      final entries = await parseListingInBackground(
+        c,
+        path,
+        bytes.takeBytes(),
+      );
+      _log.d(
+        'Directory listing parsed: protocol=${c.protocol.name}, entries=${entries.length}',
+      );
+      return entries;
+    } on TimeoutException {
+      rethrow;
+    } catch (error) {
+      _log.w(
+        'Directory listing parse failed: protocol=${c.protocol.name}, type=${error.runtimeType}',
+      );
+      throw const NetworkListingException();
+    }
   }
 
   /// Large SMB listings arrive from native I/O as plain stat objects. Transfer
@@ -1729,9 +1842,56 @@ class NetworkStorageService {
           ? HttpStatus.badGateway
           : read.status;
       read.headers.forEach(request.response.headers.set);
+      final mime = read.headers[HttpHeaders.contentTypeHeader]
+          ?.split(';')
+          .first
+          .trim()
+          .toLowerCase();
+      if (read.status >= 200 &&
+          read.status < 300 &&
+          (mime == null ||
+              mime == 'application/octet-stream' ||
+              mime == 'binary/octet-stream')) {
+        request.response.headers.set(
+          HttpHeaders.contentTypeHeader,
+          networkContentType(_networkFileName(c, route.path)),
+        );
+      }
+      var bytes = read.bytes;
+      final length = int.tryParse(
+        read.headers[HttpHeaders.contentLengthHeader] ?? '',
+      );
+      if (read.status == HttpStatus.ok && length != null) {
+        // AVPlayer refuses every song but MP3 from a server that answers a
+        // range request with the whole file, so the proxy cuts the range.
+        request.response.headers.set(HttpHeaders.acceptRangesHeader, 'bytes');
+        if (range != null) {
+          final ({int start, int end}) part;
+          try {
+            part = networkByteRange(range, length);
+          } on FormatException {
+            request.response
+              ..statusCode = HttpStatus.requestedRangeNotSatisfiable
+              ..headers.set(HttpHeaders.contentRangeHeader, 'bytes */$length')
+              ..headers.set(HttpHeaders.contentLengthHeader, '0');
+            return;
+          }
+          request.response
+            ..statusCode = HttpStatus.partialContent
+            ..headers.set(
+              HttpHeaders.contentRangeHeader,
+              'bytes ${part.start}-${part.end}/$length',
+            )
+            ..headers.set(
+              HttpHeaders.contentLengthHeader,
+              '${part.end - part.start + 1}',
+            );
+          bytes = networkByteWindow(bytes, part.start, part.end);
+        }
+      }
       consumed = true;
       if (request.method == 'GET') {
-        await request.response.addStream(read.bytes);
+        await request.response.addStream(bytes);
       } else {
         await read.discard();
       }
@@ -1754,6 +1914,58 @@ class NetworkStorageService {
     }
   }
 
+  /// Long upload waits still observe the caller's cancellation checkpoint.
+  Future<T> _waitForUpload<T>(
+    Future<T> operation,
+    HttpClientRequest request,
+    Duration limit, {
+    void Function()? checkpoint,
+  }) async {
+    Timer? timer;
+    var pending = operation;
+    if (checkpoint != null) {
+      final cancelled = Completer<T>();
+      pending = Future.any([operation, cancelled.future]);
+      timer = Timer.periodic(const Duration(milliseconds: 250), (_) {
+        if (cancelled.isCompleted) return;
+        try {
+          checkpoint();
+        } catch (error, stack) {
+          cancelled.completeError(error, stack);
+          request.abort();
+        }
+      });
+    }
+    try {
+      return await pending.timeout(
+        limit,
+        onTimeout: () {
+          request.abort();
+          throw TimeoutException('Network response timed out');
+        },
+      );
+    } finally {
+      timer?.cancel();
+    }
+  }
+
+  @visibleForTesting
+  Future<HttpClientResponse> debugRequest({
+    required HttpClient client,
+    required NetworkConnection connection,
+    required String method,
+    required Uri uri,
+    File? upload,
+    void Function()? checkpoint,
+  }) => _request(
+    client,
+    connection,
+    method,
+    uri,
+    upload: upload,
+    checkpoint: checkpoint,
+  );
+
   Future<void> dispose() async {
     final server = _server;
     _server = null;
@@ -1772,6 +1984,9 @@ class NetworkStorageService {
     await _smbSessions.close();
   }
 }
+
+String _networkFileName(NetworkConnection connection, String path) =>
+    networkTarget(connection, path).pathSegments.lastOrNull ?? '';
 
 String networkContentType(String name) =>
     switch (name.split('.').last.toLowerCase()) {

@@ -1,7 +1,5 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:mornye/providers/runtime_profile_provider.dart';
 import 'package:mornye/theme/app_tokens.dart';
 import 'package:mornye/theme/cover_palette.dart';
 import 'package:mornye/theme/mornye_theme.dart';
@@ -11,7 +9,6 @@ import 'package:mornye/widgets/album_detail_header.dart';
 import 'package:mornye/widgets/app_icon.dart';
 import 'package:mornye/widgets/app_icon_button.dart';
 import 'package:mornye/widgets/desktop/context_menu.dart';
-import 'package:mornye/widgets/mornye_chrome.dart';
 import 'package:mornye/widgets/sliver_layout_info_builder.dart';
 
 /// Space below a desktop detail page, so its last rows clear the floating
@@ -25,8 +22,7 @@ const double _toolbarHeight = 52;
 double desktopDetailArtworkSize(double contentWidth) =>
     (contentWidth * 0.32).clamp(200.0, 300.0);
 
-/// The artist line under a desktop detail title: large and in the accent
-/// color, like the album pages of Apple Music.
+/// The artist line under a desktop detail title, large and in the accent color.
 ///
 /// Pass a [context] inside the header (a `Builder` around the subtitle), so
 /// a Material header takes the accent of its artwork scheme.
@@ -76,7 +72,7 @@ List<Widget> desktopDetailHeaderSlivers(
   final mornye = context.isMornye;
   // Lines the artwork up with the description and track table below.
   final inset = wideListInset(context) + 20;
-  final more = moreMenu == null ? null : _MoreButton(groups: moreMenu);
+  final more = moreMenu == null ? null : HeaderMoreButton(groups: moreMenu);
   final trailing = [...?appBarActions, ?more];
 
   Widget details(BuildContext context, BoxConstraints constraints) {
@@ -87,7 +83,7 @@ List<Widget> desktopDetailHeaderSlivers(
       double.infinity,
     );
     final radius = circularArtwork ? side / 2 : (mornye ? 12.0 : 20.0);
-    // Mornye draws Apple's continuous corner, as Music does on its covers.
+    // Mornye uses continuous corners on rectangular covers.
     final continuous = mornye && !circularArtwork;
     final corners = BorderRadius.circular(radius);
     final shadows = [
@@ -205,7 +201,7 @@ List<Widget> desktopDetailHeaderSlivers(
           pinned: true,
           automaticallyImplyLeading: false,
           toolbarHeight: _toolbarHeight,
-          // Mornye controls float over the pane, as in Apple Music.
+          // Mornye controls float over the pane.
           backgroundColor: mornye
               ? Colors.transparent
               : backgroundColor ?? theme.colorScheme.surface,
@@ -235,7 +231,7 @@ List<Widget> desktopDetailHeaderSlivers(
           actions: trailing.isEmpty
               ? null
               : mornye
-              ? [_ActionCapsule(children: trailing)]
+              ? [MornyeActionCapsule(children: trailing)]
               : trailing,
         );
       },
@@ -259,51 +255,4 @@ List<Widget> desktopDetailHeaderSlivers(
       ),
     ),
   ];
-}
-
-/// Mornye page actions grouped in one glass capsule.
-class _ActionCapsule extends ConsumerWidget {
-  const _ActionCapsule({required this.children});
-
-  final List<Widget> children;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    return Center(
-      widthFactor: 1,
-      child: MornyeGlass.navigation(
-        radius: 18,
-        tintColor: dark ? Colors.black : Colors.white,
-        tintOpacity: dark ? 0.45 : 0.55,
-        blurEnabled: ref.watch(mornyeBlurEnabledProvider),
-        child: HeaderActionGroup(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 2),
-            child: Row(mainAxisSize: MainAxisSize.min, children: children),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _MoreButton extends StatelessWidget {
-  const _MoreButton({required this.groups});
-
-  final List<List<ContextMenuAction>> Function() groups;
-
-  @override
-  Widget build(BuildContext context) => HeaderCircleButton(
-    icon: context.isMornye ? CupertinoIcons.ellipsis : Icons.more_horiz,
-    tooltip: MaterialLocalizations.of(context).showMenuTooltip,
-    onPressed: () => showContextMenu(
-      context,
-      position:
-          contextMenuPositionBelow(context) ??
-          contextMenuOriginOf(context) ??
-          Offset.zero,
-      groups: groups(),
-    ),
-  );
 }

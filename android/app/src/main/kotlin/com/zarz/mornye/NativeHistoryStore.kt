@@ -14,7 +14,7 @@ import java.util.Locale
 internal object NativeHistoryStore {
     private const val TAG = "NativeFinalizer"
     // Keep this schema contract in sync with Dart HistoryDatabase before bumping either side.
-    const val HISTORY_SCHEMA_VERSION = 15
+    const val HISTORY_SCHEMA_VERSION = 18
 
     // One guarded native writer prevents interleaved transactions. Flutter/sqflite
     // uses its own WAL connection, so configure the busy timeout once per connection.
@@ -31,6 +31,7 @@ internal object NativeHistoryStore {
         "album_artist" to "TEXT",
         "cover_url" to "TEXT",
         "file_path" to "TEXT NOT NULL",
+        "origin_file_path" to "TEXT",
         "storage_mode" to "TEXT",
         "download_tree_uri" to "TEXT",
         "saf_relative_dir" to "TEXT",
@@ -80,6 +81,10 @@ internal object NativeHistoryStore {
         "sort_album", "sort_album_artist", "sort_genre", "sort_release", "sort_added",
         "explicit", "has_lyrics", "lyrics_metadata_scan_version", "has_replaygain",
         "replaygain_metadata_scan_version",
+        "origin_file_path",
+    )
+    private val unusedHistoryIndexes = listOf(
+        "idx_downloaded_at", "idx_album", "idx_history_track_artist",
     )
     private val androidStoragePathAliases = listOf(
         "/storage/emulated/0",
@@ -120,9 +125,9 @@ internal object NativeHistoryStore {
                     validateHistorySchema(db)
                     db.execSQL("CREATE INDEX IF NOT EXISTS idx_spotify_id ON history(spotify_id)")
                     db.execSQL("CREATE INDEX IF NOT EXISTS idx_isrc ON history(isrc)")
-                    db.execSQL("CREATE INDEX IF NOT EXISTS idx_downloaded_at ON history(downloaded_at DESC)")
-                    db.execSQL("CREATE INDEX IF NOT EXISTS idx_album ON history(album_name, album_artist)")
-                    db.execSQL("CREATE INDEX IF NOT EXISTS idx_history_track_artist ON history(track_name, artist_name)")
+                    db.execSQL("CREATE INDEX IF NOT EXISTS idx_history_origin ON history(origin_file_path)")
+                    // v16 dropped these unused indexes; an older writer may have recreated them.
+                    for (index in unusedHistoryIndexes) db.execSQL("DROP INDEX IF EXISTS $index")
                     db.execSQL("CREATE INDEX IF NOT EXISTS idx_history_spotify_id_norm ON history(spotify_id_norm)")
                     db.execSQL("CREATE INDEX IF NOT EXISTS idx_history_isrc_norm ON history(isrc_norm)")
                     db.execSQL("CREATE INDEX IF NOT EXISTS idx_history_match_key ON history(match_key)")
@@ -133,6 +138,7 @@ internal object NativeHistoryStore {
                     db.execSQL("CREATE INDEX IF NOT EXISTS idx_history_queue_album ON history(sort_album, sort_track, id)")
                     db.execSQL("CREATE INDEX IF NOT EXISTS idx_history_queue_genre ON history(sort_genre, sort_track, id)")
                     db.execSQL("CREATE INDEX IF NOT EXISTS idx_history_queue_release ON history(sort_release, sort_track, id)")
+                    db.execSQL("CREATE INDEX IF NOT EXISTS idx_history_sort_album_artist ON history(sort_album_artist)")
                     if (db.version < HISTORY_SCHEMA_VERSION) db.version = HISTORY_SCHEMA_VERSION
                 }
                 if (deduplicateTrack) deleteDuplicateHistoryRows(db, values)

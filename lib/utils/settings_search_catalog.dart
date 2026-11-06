@@ -227,10 +227,28 @@ class SettingsSearchCatalog {
           keywords: const ['rescan all'],
         ),
         SettingsSearchEntry(
+          icon: Icons.travel_explore,
+          title: l10n.libraryReEnrichAll,
+          subtitle: l10n.libraryReEnrichAllSubtitle,
+          keywords: const [
+            're-enrich',
+            'reenrich',
+            'metadata',
+            'tags',
+            'retag',
+          ],
+        ),
+        SettingsSearchEntry(
           icon: Icons.cleaning_services_outlined,
           title: l10n.libraryCleanupMissingFiles,
           subtitle: l10n.libraryCleanupMissingFilesSubtitle,
           keywords: const ['remove missing'],
+        ),
+        SettingsSearchEntry(
+          icon: Icons.manage_search,
+          title: l10n.libraryFindMovedDownloads,
+          subtitle: l10n.libraryFindMovedDownloadsSubtitle,
+          keywords: const ['moved files', 'relink', 'resync', 'missing files'],
         ),
         SettingsSearchEntry(
           icon: Icons.delete_outline,
@@ -240,6 +258,13 @@ class SettingsSearchCatalog {
         ),
       ],
       playback = [
+        if (isDesktopPlatform)
+          SettingsSearchEntry(
+            icon: Icons.history_rounded,
+            title: 'Last.fm',
+            subtitle: l10n.lastfmDescription,
+            keywords: const ['lastfm', 'scrobble', 'scrobbling', 'now playing'],
+          ),
         SettingsSearchEntry(
           icon: Icons.equalizer,
           title: l10n.equalizerTitle,
@@ -321,6 +346,19 @@ class SettingsSearchCatalog {
           subtitle: l10n.landscapeLyricsArtworkDescription,
           keywords: const ['landscape', 'lyrics', 'album art', 'details'],
         ),
+        if (!isDesktopPlatform)
+          SettingsSearchEntry(
+            icon: Icons.fullscreen,
+            title: l10n.autoHideLyricsControls,
+            subtitle: l10n.autoHideLyricsControlsDescription,
+            keywords: const [
+              'lyrics',
+              'fullscreen',
+              '5 seconds',
+              'controls',
+              'idle',
+            ],
+          ),
         SettingsSearchEntry(
           icon: Icons.short_text,
           title: l10n.compactPlayer,
@@ -676,6 +714,17 @@ class SettingsSearchCatalog {
           icon: Icons.group_remove_outlined,
           title: l10n.downloadFilterContributing,
           keywords: const ['featured artist folder'],
+        ),
+        SettingsSearchEntry(
+          icon: Icons.drive_file_move_outlined,
+          title: l10n.reorganizeLibraryTitle,
+          subtitle: l10n.reorganizeLibrarySubtitle,
+          keywords: const [
+            'reorganize library',
+            'move files',
+            'rename files',
+            'existing downloads',
+          ],
         ),
         SettingsSearchEntry(
           icon: Icons.folder_special_outlined,

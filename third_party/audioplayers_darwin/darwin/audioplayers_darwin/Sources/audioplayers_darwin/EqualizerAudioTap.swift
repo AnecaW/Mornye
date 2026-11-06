@@ -16,7 +16,8 @@ final class EqualizerAudioTap {
       "inputRms": sqrt(inputEnergy / frames), "outputRms": sqrt(outputEnergy / frames)]
   }
 
-  @MainActor static func attach(to item: AVPlayerItem, processor: EqualizerAudioTap) async throws {
+  @MainActor static func attach(to item: AVPlayerItem, processor: EqualizerAudioTap,
+    shouldAttach: () -> Bool = { true }) async throws {
     let protected: Bool
     if #available(iOS 15.0, macOS 12.0, *) {
       protected = try await item.asset.load(.hasProtectedContent)
@@ -78,6 +79,7 @@ final class EqualizerAudioTap {
     input.audioTapProcessor = tap
     let mix = AVMutableAudioMix()
     mix.inputParameters = [input]
+    guard shouldAttach() else { return }
     item.audioMix = mix
   }
 

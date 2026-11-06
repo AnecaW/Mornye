@@ -15,6 +15,8 @@ import 'package:mornye/providers/music_player_provider.dart';
 import 'package:mornye/providers/settings_provider.dart';
 import 'package:mornye/providers/system_volume_provider.dart';
 import 'package:mornye/services/playback_deck.dart';
+import 'package:mornye/services/link/desktop/link_desktop_host.dart';
+import 'package:mornye/services/remote_playback.dart';
 import 'package:mornye/services/shell_navigation_service.dart';
 import 'package:mornye/services/user_profile_store.dart';
 import 'package:mornye/theme/app_theme.dart';
@@ -37,6 +39,13 @@ import 'support/fixed_settings.dart';
 
 class _FakeController implements MusicPlayerController {
   final calls = <String>[];
+  VoidCallback? onDismiss;
+
+  @override
+  Future<void> dismiss() async {
+    calls.add('dismiss');
+    onDismiss?.call();
+  }
 
   @override
   Future<void> togglePlayPause(bool isPlaying) async =>
@@ -50,6 +59,20 @@ class _FakeController implements MusicPlayerController {
 
   @override
   Future<void> seek(Duration position) async => calls.add('seek');
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _RemotePlayback implements RemotePlayback {
+  @override
+  String get name => 'Phone';
+
+  @override
+  Stream<RemoteTransfer?> get transfers => const Stream.empty();
+
+  @override
+  Stream<double> get volumes => Stream.value(0.5);
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
@@ -102,6 +125,7 @@ void main() {
     debugDesktopTitleBarInContentOverride = false;
     desktopSidebarCollapsed.value = false;
     desktopSidebarLink.value = null;
+    desktopPlayerDismissed.value = false;
     controller = _FakeController();
     volumeWrites = [];
     selections = [];
@@ -112,11 +136,16 @@ void main() {
     debugDesktopTitleBarInContentOverride = null;
     desktopSidebarCollapsed.value = false;
     desktopSidebarLink.value = null;
+    desktopPlayerDismissed.value = false;
   });
 
   List<Override> overrides({
     MediaItem? item = _track,
+    Stream<MediaItem?>? mediaItems,
     bool playing = false,
+    bool loading = false,
+    bool linkAvailable = false,
+    RemotePlayback? remote,
     String playerMode = 'internal',
     UserProfile profile = const UserProfile(name: 'Ada Lovelace'),
   }) => [
@@ -124,11 +153,20 @@ void main() {
       () => FixedSettingsNotifier(AppSettings(playerMode: playerMode)),
     ),
     currentMediaItemProvider.overrideWithBuild(
-      (ref, notifier) => Stream.value(item),
+      (ref, notifier) => mediaItems ?? Stream.value(item),
     ),
     playbackStateProvider.overrideWith(
-      (ref) => Stream.value(PlaybackState(playing: playing)),
+      (ref) => Stream.value(
+        PlaybackState(
+          playing: playing,
+          processingState: loading
+              ? AudioProcessingState.buffering
+              : AudioProcessingState.ready,
+        ),
+      ),
     ),
+    activeRemotePlaybackProvider.overrideWithValue(remote),
+    linkDevicesAvailableProvider.overrideWithValue(linkAvailable),
     musicPlayerControllerProvider.overrideWithValue(controller),
     systemVolumeProvider.overrideWith((ref) => Stream.value(0.5)),
     systemVolumeWriterProvider.overrideWithValue((value) async {
@@ -144,6 +182,11 @@ void main() {
     required double width,
     ShellTab selected = ShellTab.home,
     MediaItem? item = _track,
+    Stream<MediaItem?>? mediaItems,
+    bool playing = false,
+    bool loading = false,
+    bool linkAvailable = false,
+    RemotePlayback? remote,
     String playerMode = 'internal',
     List<DesktopSidebarLink> libraryLinks = const [],
     ValueChanged<String>? onOpenLibraryLink,
@@ -158,6 +201,11 @@ void main() {
       ProviderScope(
         overrides: overrides(
           item: item,
+          mediaItems: mediaItems,
+          playing: playing,
+          loading: loading,
+          linkAvailable: linkAvailable,
+          remote: remote,
           profile: profile,
           playerMode: playerMode,
         ),
@@ -181,7 +229,12 @@ void main() {
         ),
       ),
     );
-    await tester.pumpAndSettle();
+    if (loading) {
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+    } else {
+      await tester.pumpAndSettle();
+    }
   }
 
   /// The page shown in the content pane.
@@ -197,6 +250,64 @@ void main() {
   }
 
   for (final mornye in [false, true]) {
+    testWidgets('paused desktop player dismisses and returns for a new song '
+        '($mornye)', (tester) async {
+      final items = StreamController<MediaItem?>();
+      addTearDown(items.close);
+      controller.onDismiss = () => items.add(null);
+      await pumpShell(
+        tester,
+        mornye: mornye,
+        width: 900,
+        mediaItems: items.stream,
+      );
+      items.add(_track);
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Dismiss'), findsOneWidget);
+      desktopInspectorPanel.value = DesktopInspectorPanel.upNext;
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('desktop-player-dismiss')));
+      await tester.pumpAndSettle();
+
+      expect(controller.calls, ['dismiss']);
+      expect(find.byType(DesktopPlayerBar), findsNothing);
+      expect(desktopInspectorPanel.value, isNull);
+      expect(desktopNowPlayingOpen.value, isFalse);
+      expect(tester.getSize(contentPage()).height, 800);
+      expect(
+        MediaQuery.paddingOf(tester.element(find.text('content'))).bottom,
+        0,
+      );
+
+      items.add(_track.copyWith(id: 'next', title: 'Another song'));
+      await tester.pumpAndSettle();
+      expect(find.byType(DesktopPlayerBar), findsOneWidget);
+      expect(find.text('Another song'), findsWidgets);
+      expect(tester.takeException(), isNull);
+    });
+
+    for (final state in ['playing', 'loading', 'remote', 'idle']) {
+      testWidgets('desktop player cannot dismiss $state playback ($mornye)', (
+        tester,
+      ) async {
+        await pumpShell(
+          tester,
+          mornye: mornye,
+          width: 900,
+          item: state == 'idle' ? null : _track,
+          playing: state == 'playing',
+          loading: state == 'loading',
+          remote: state == 'remote' ? _RemotePlayback() : null,
+        );
+        expect(
+          find.byKey(const ValueKey('desktop-player-dismiss')),
+          findsNothing,
+        );
+        expect(controller.calls, isEmpty);
+        expect(tester.takeException(), isNull);
+      });
+    }
+
     testWidgets('external mode removes desktop player surfaces ($mornye)', (
       tester,
     ) async {
@@ -226,6 +337,52 @@ void main() {
   }
 
   group('Material shell', () {
+    for (final width in [800.0, 900.0]) {
+      for (final playing in [false, true]) {
+        for (final link in [false, true]) {
+          testWidgets(
+            'player controls fit at $width (playing: $playing, Link: $link)',
+            (tester) async {
+              await pumpShell(
+                tester,
+                mornye: false,
+                width: width,
+                playing: playing,
+                linkAvailable: link,
+              );
+              expect(tester.takeException(), isNull);
+              final bar = tester.getRect(find.byType(DesktopPlayerBar));
+              for (final key in [
+                'desktop-player-lyrics',
+                'desktop-player-up-next',
+                'desktop-player-mini',
+                if (link) 'desktop-link-devices-button',
+                'desktop-downloads-button',
+                if (!playing) 'desktop-player-dismiss',
+              ]) {
+                final button = find.byKey(ValueKey(key));
+                expect(button, findsOneWidget);
+                final rect = tester.getRect(button);
+                expect(rect.left, greaterThanOrEqualTo(bar.left));
+                expect(rect.right, lessThanOrEqualTo(bar.right));
+                expect(rect.top, greaterThanOrEqualTo(bar.top));
+                expect(rect.bottom, lessThanOrEqualTo(bar.bottom));
+              }
+              await tester.tap(find.byTooltip('Next track (Ctrl+Right)'));
+              expect(controller.calls, ['next']);
+              if (!playing) {
+                await tester.tap(
+                  find.byKey(const ValueKey('desktop-player-dismiss')),
+                );
+                expect(controller.calls, ['next', 'dismiss']);
+              }
+              expect(tester.takeException(), isNull);
+            },
+          );
+        }
+      }
+    }
+
     testWidgets('collapses the rail at 900 and shows the player bar', (
       tester,
     ) async {
@@ -509,14 +666,15 @@ void main() {
         expect(find.byType(DesktopSidebar), findsOneWidget);
         expect(
           tester.getSize(find.byType(DesktopSidebar)).width,
-          DesktopSidebar.footprint,
+          DesktopSidebar.width,
         );
         // The Material rail must not appear in the Mornye style.
         expect(find.byType(DesktopNavigationRail), findsNothing);
         expect(find.byType(NavigationRail), findsNothing);
         expectNoTouchNavigation();
         expect(find.byType(DesktopPlayerBar), findsOneWidget);
-        expect(find.text('A song'), findsOneWidget);
+        // A title too long for the capsule also shows its marquee copy.
+        expect(find.text('A song'), findsWidgets);
         expect(find.byKey(const ValueKey('desktop-sidebar-search')), findsOne);
       });
     }
@@ -544,6 +702,33 @@ void main() {
       expect(DesktopPlayerBar.floatingWidth(500), 476);
       expect(DesktopPlayerBar.floatingWidth(2000), 900);
     });
+
+    testWidgets(
+      'capsule artwork grows and offers Now Playing under the mouse',
+      (tester) async {
+        await pumpShell(tester, mornye: true, width: 1400);
+
+        final overlay = find.byKey(
+          const ValueKey('desktop-player-artwork-overlay'),
+        );
+        expect(tester.widget<AnimatedOpacity>(overlay).opacity, 0);
+        final scale = find.ancestor(
+          of: overlay,
+          matching: find.byType(AnimatedScale),
+        );
+        expect(tester.widget<AnimatedScale>(scale).scale, 1);
+
+        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+        addTearDown(mouse.removePointer);
+        await mouse.addPointer(location: Offset.zero);
+        await mouse.moveTo(tester.getCenter(overlay));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 200));
+
+        expect(tester.widget<AnimatedOpacity>(overlay).opacity, 1);
+        expect(tester.widget<AnimatedScale>(scale).scale, 1.1);
+      },
+    );
 
     testWidgets('player capsule keeps volume in a popover', (tester) async {
       await pumpShell(tester, mornye: true, width: 1400);
@@ -600,8 +785,61 @@ void main() {
         find.ancestor(of: find.text('home'), matching: find.byType(InkWell)),
       );
       expect(home.height, 32);
-      // Music's measurements: rows inset 6pt in a panel inset 8pt.
-      expect(home.left, DesktopSidebar.margin + 6);
+      // The sidebar runs to the window's edge, so its rows bring the inset.
+      expect(home.left, 10);
+    });
+
+    testWidgets('the sidebar is one piece with the window', (tester) async {
+      await pumpShell(tester, mornye: true, width: 1400);
+
+      final window = tester.getRect(find.byType(MaterialApp));
+      final sidebar = tester.getRect(find.byType(DesktopSidebar));
+      expect(sidebar.left, window.left);
+      expect(sidebar.top, window.top);
+      expect(sidebar.bottom, window.bottom);
+      expect(
+        tester.getRect(find.byKey(const ValueKey('desktop-content'))).left,
+        sidebar.right,
+      );
+      expect(
+        find.descendant(
+          of: find.byType(DesktopSidebar),
+          matching: find.byWidgetPredicate(
+            (widget) =>
+                widget is DecoratedBox &&
+                switch (widget.decoration) {
+                  BoxDecoration(:final borderRadius, :final boxShadow) =>
+                    borderRadius != null || boxShadow != null,
+                  _ => false,
+                },
+          ),
+        ),
+        findsNothing,
+        reason: 'the panel has no corners or shadow of its own',
+      );
+    });
+
+    testWidgets('the sidebar shows the page hero under its tint', (
+      tester,
+    ) async {
+      addTearDown(() => ShellNavigationService.chromeBackdrop.value = null);
+      await pumpShell(tester, mornye: true, width: 1400);
+      const backdrop = ValueKey('desktop-sidebar-backdrop');
+      expect(find.byKey(backdrop), findsNothing);
+
+      ShellNavigationService.chromeBackdrop.value = '/tmp/artist.jpg';
+      await tester.pumpAndSettle();
+      final top = tester.getRect(find.byKey(backdrop)).top;
+      expect(top, 0);
+
+      ShellNavigationService.chromeBackdropOffset.value = 120;
+      await tester.pump();
+      expect(tester.getRect(find.byKey(backdrop)).top, top - 120);
+      ShellNavigationService.chromeBackdropOffset.value = 0;
+
+      ShellNavigationService.chromeBackdrop.value = null;
+      await tester.pumpAndSettle();
+      expect(find.byKey(backdrop), findsNothing);
     });
 
     testWidgets('sidebar lists Library pages and playlists', (tester) async {
@@ -681,11 +919,11 @@ void main() {
       );
       expect(
         tester.getSize(find.byType(DesktopSidebar)).width,
-        DesktopSidebar.footprint,
+        DesktopSidebar.width,
       );
       expect(
         tester.getRect(find.byKey(const ValueKey('desktop-content'))).left,
-        DesktopSidebar.footprint,
+        DesktopSidebar.width,
       );
     });
   });

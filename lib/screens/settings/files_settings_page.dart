@@ -10,6 +10,7 @@ import 'package:mornye/widgets/app_switch.dart';
 import 'package:mornye/widgets/app_text_field.dart';
 import 'package:mornye/widgets/app_bottom_sheet.dart';
 import 'package:mornye/widgets/app_choice_chip.dart';
+import 'package:mornye/theme/mornye_icons.dart' show mornyeArrowForward;
 import 'package:mornye/theme/mornye_theme.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
@@ -19,6 +20,11 @@ import 'package:mornye/controllers/clickable_metadata.dart';
 import 'package:mornye/l10n/l10n.dart';
 import 'package:mornye/screens/network_storage_screen.dart';
 import 'package:mornye/models/settings.dart';
+import 'package:mornye/providers/download_queue_provider.dart';
+import 'package:mornye/providers/local_library_provider.dart';
+import 'package:mornye/providers/library_collections_provider.dart';
+import 'package:mornye/providers/music_player_provider.dart'
+    show playbackResumeProvider;
 import 'package:mornye/providers/settings_provider.dart';
 import 'package:mornye/services/platform_bridge.dart';
 import 'package:mornye/services/folder_path_template.dart';
@@ -32,8 +38,11 @@ import 'package:mornye/widgets/settings_group.dart';
 import 'package:mornye/widgets/app_icon.dart';
 import 'package:mornye/widgets/expressive_button.dart';
 import 'package:mornye/widgets/app_sliver_header.dart';
+import 'package:mornye/widgets/app_loading_indicator.dart';
+import 'package:mornye/widgets/batch_progress_dialog.dart';
 
 part 'files_settings_page_widgets.dart';
+part 'files_settings_page_reorganize.dart';
 
 class FilesSettingsPage extends ConsumerStatefulWidget {
   const FilesSettingsPage({super.key});
@@ -350,6 +359,19 @@ class _FilesSettingsPageState extends ConsumerState<FilesSettingsPage> {
                     showDivider: false,
                   ),
                 ],
+              ],
+            ),
+
+            ...settingsSectionSlivers(
+              title: context.l10n.sectionExistingDownloads,
+              children: [
+                SettingsItem(
+                  icon: Icons.drive_file_move_outlined,
+                  title: context.l10n.reorganizeLibraryTitle,
+                  subtitle: context.l10n.reorganizeLibrarySubtitle,
+                  onTap: () => _reorganizeExistingDownloads(context, ref),
+                  showDivider: false,
+                ),
               ],
             ),
 

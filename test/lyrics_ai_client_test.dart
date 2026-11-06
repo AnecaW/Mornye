@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:mornye/services/lyrics_ai_client.dart';
+import 'package:mornye/services/lyrics_translation_alignment.dart';
 
 const _items = [LyricsAiItem(0, 'First line'), LyricsAiItem(1, 'Second line')];
 
@@ -29,7 +30,55 @@ String _openAiReply(String content, {String finish = 'stop'}) => jsonEncode({
 });
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   group('request building', () {
+    test(
+      'all providers keep song context separate from requested line ids',
+      () {
+        const context = [
+          'Before this line',
+          'Requested line',
+          'After this line',
+        ];
+        const items = [
+          LyricsAiItem(1, 'Requested line', words: ['Requested', 'line']),
+        ];
+        for (final provider in LyricsAiProvider.values) {
+          final request = buildLyricsTranslationRequest(
+            _config(provider, baseUrl: 'https://example.test/v1'),
+            items,
+            systemPrompt: 'system',
+            context: context,
+          );
+          final String sourceContext;
+          final String requested;
+          if (provider == LyricsAiProvider.gemini) {
+            final parts =
+                ((request.body['contents'] as List).single as Map)['parts']
+                    as List;
+            sourceContext = (parts.first as Map)['text'] as String;
+            requested = (parts.last as Map)['text'] as String;
+          } else {
+            final messages = request.body['messages'] as List;
+            final users = messages.cast<Map<Object?, Object?>>().where(
+              (message) => message['role'] == 'user',
+            );
+            sourceContext = users.first['content'] as String;
+            requested = users.last['content'] as String;
+          }
+          expect(
+            sourceContext,
+            contains(jsonEncode(context)),
+            reason: provider.name,
+          );
+          expect(jsonDecode(requested), [
+            items.single.toJson(),
+          ], reason: provider.name);
+        }
+      },
+    );
+
     test('OpenAI classic models send temperature and JSON mode', () {
       final request = buildLyricsTranslationRequest(
         _config(LyricsAiProvider.openAi, model: 'gpt-4.1-mini'),
@@ -230,9 +279,24 @@ void main() {
           ids,
         ),
         {
-          0: (text: 'Love', romanization: 'ai'),
-          1: (text: 'Hi', romanization: null),
-          2: (text: 'Yes', romanization: null),
+          0: (
+            text: 'Love',
+            romanization: 'ai',
+            alignment: const <LyricsTranslationChunk>[],
+            romanizationAlignment: const <LyricsTranslationChunk>[],
+          ),
+          1: (
+            text: 'Hi',
+            romanization: null,
+            alignment: const <LyricsTranslationChunk>[],
+            romanizationAlignment: const <LyricsTranslationChunk>[],
+          ),
+          2: (
+            text: 'Yes',
+            romanization: null,
+            alignment: const <LyricsTranslationChunk>[],
+            romanizationAlignment: const <LyricsTranslationChunk>[],
+          ),
         },
       );
     });
@@ -481,7 +545,12 @@ void main() {
         delay: (wait) async => waits.add(wait),
       );
       expect(await client.translate(_items, systemPrompt: 's'), {
-        0: (text: 'Uno', romanization: null),
+        0: (
+          text: 'Uno',
+          romanization: null,
+          alignment: const <LyricsTranslationChunk>[],
+          romanizationAlignment: const <LyricsTranslationChunk>[],
+        ),
       });
       expect(waits, [const Duration(seconds: 2)]);
     });
@@ -523,7 +592,12 @@ void main() {
         }),
       );
       expect(await client.translate(_items, systemPrompt: 's'), {
-        1: (text: 'Dos', romanization: null),
+        1: (
+          text: 'Dos',
+          romanization: null,
+          alignment: const <LyricsTranslationChunk>[],
+          romanizationAlignment: const <LyricsTranslationChunk>[],
+        ),
       });
       expect(bodies, hasLength(2));
       expect(bodies.last.containsKey('max_completion_tokens'), isTrue);

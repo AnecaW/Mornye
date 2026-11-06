@@ -23,6 +23,7 @@ class MornyeLandscapePlayer extends StatefulWidget {
     required this.onPageChanged,
     this.lyricsOptions,
     this.controlsHeldOpen = false,
+    this.autoHideLyricsControls = true,
     this.live = false,
   });
 
@@ -37,6 +38,7 @@ class MornyeLandscapePlayer extends StatefulWidget {
   final int page;
   final bool isPlaying;
   final bool controlsHeldOpen;
+  final bool autoHideLyricsControls;
   final bool live;
   final ValueChanged<int> onPageChanged;
   final Widget? lyricsOptions;
@@ -53,7 +55,9 @@ class _MornyeLandscapePlayerState extends State<MornyeLandscapePlayer> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (isAndroidTv || MediaQuery.accessibleNavigationOf(context)) {
+    if (!widget.autoHideLyricsControls ||
+        isAndroidTv ||
+        MediaQuery.accessibleNavigationOf(context)) {
       _actionsVisible = true;
       _hideTimer?.cancel();
     } else {
@@ -65,7 +69,8 @@ class _MornyeLandscapePlayerState extends State<MornyeLandscapePlayer> {
   void didUpdateWidget(MornyeLandscapePlayer oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.page != widget.page ||
-        oldWidget.isPlaying != widget.isPlaying) {
+        oldWidget.isPlaying != widget.isPlaying ||
+        oldWidget.autoHideLyricsControls != widget.autoHideLyricsControls) {
       _actionsVisible = true;
       _scheduleHide();
     } else if (oldWidget.controlsHeldOpen != widget.controlsHeldOpen) {
@@ -76,6 +81,7 @@ class _MornyeLandscapePlayerState extends State<MornyeLandscapePlayer> {
   void _scheduleHide() {
     _hideTimer?.cancel();
     if (widget.page != 1 ||
+        !widget.autoHideLyricsControls ||
         isAndroidTv ||
         !widget.isPlaying ||
         widget.controlsHeldOpen ||
@@ -107,135 +113,153 @@ class _MornyeLandscapePlayerState extends State<MornyeLandscapePlayer> {
 
   @override
   Widget build(BuildContext context) => Listener(
-    onPointerDown: (_) {
-      _hideTimer?.cancel();
-      if (!_actionsVisible) setState(() => _actionsVisible = true);
-    },
+    onPointerDown: (_) => _hideTimer?.cancel(),
     onPointerUp: (_) => _scheduleHide(),
     onPointerCancel: (_) => _scheduleHide(),
     child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
       child: Row(
         children: [
-          Expanded(child: widget.artwork),
           Expanded(
-            child: Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
-                  child: widget.header,
-                ),
-                const SizedBox(height: 8),
-                Expanded(
-                  child: LayoutBuilder(
-                    builder: (context, constraints) => Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        AnimatedSwitcher(
-                          duration: MediaQuery.disableAnimationsOf(context)
-                              ? Duration.zero
-                              : const Duration(milliseconds: 180),
-                          layoutBuilder: (current, previous) => Stack(
-                            fit: StackFit.expand,
-                            children: [
-                              for (final child in [...previous, ?current])
-                                IgnorePointer(
-                                  key: child.key,
-                                  ignoring: child != current,
-                                  child: ExcludeSemantics(
-                                    excluding: child != current,
-                                    child: child,
-                                  ),
-                                ),
-                            ],
-                          ),
-                          child: widget.page == 0
-                              ? SingleChildScrollView(
-                                  key: const ValueKey('landscape-controls'),
-                                  child: ConstrainedBox(
-                                    constraints: BoxConstraints(
-                                      minHeight: constraints.maxHeight,
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap:
+                  widget.page == 1 &&
+                      !isAndroidTv &&
+                      !MediaQuery.accessibleNavigationOf(context)
+                  ? () {
+                      setState(() => _actionsVisible = !_actionsVisible);
+                      _scheduleHide();
+                    }
+                  : null,
+              child: widget.artwork,
+            ),
+          ),
+          Expanded(
+            child: Listener(
+              behavior: HitTestBehavior.translucent,
+              onPointerDown: (_) {
+                if (!_actionsVisible) {
+                  setState(() => _actionsVisible = true);
+                }
+              },
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+                    child: widget.header,
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: LayoutBuilder(
+                      builder: (context, constraints) => Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          AnimatedSwitcher(
+                            duration: MediaQuery.disableAnimationsOf(context)
+                                ? Duration.zero
+                                : const Duration(milliseconds: 180),
+                            layoutBuilder: (current, previous) => Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                for (final child in [...previous, ?current])
+                                  IgnorePointer(
+                                    key: child.key,
+                                    ignoring: child != current,
+                                    child: ExcludeSemantics(
+                                      excluding: child != current,
+                                      child: child,
                                     ),
-                                    child: Column(
-                                      mainAxisAlignment:
-                                          MainAxisAlignment.spaceEvenly,
-                                      children: [
-                                        widget.controls,
-                                        ?widget.volume,
-                                        const SizedBox(height: 48),
-                                      ],
+                                  ),
+                              ],
+                            ),
+                            child: widget.page == 0
+                                ? SingleChildScrollView(
+                                    key: const ValueKey('landscape-controls'),
+                                    child: ConstrainedBox(
+                                      constraints: BoxConstraints(
+                                        minHeight: constraints.maxHeight,
+                                      ),
+                                      child: Column(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.spaceEvenly,
+                                        children: [
+                                          widget.controls,
+                                          ?widget.volume,
+                                          const SizedBox(height: 48),
+                                        ],
+                                      ),
                                     ),
-                                  ),
-                                )
-                              : Padding(
-                                  key: ValueKey(widget.page),
-                                  padding: EdgeInsets.only(
-                                    bottom: widget.page == 2 ? 48 : 0,
-                                  ),
-                                  child: widget.page == 2
-                                      ? widget.queue
-                                      : Stack(
-                                          fit: StackFit.expand,
-                                          children: [
-                                            _LandscapeLyricsViewport(
-                                              controlsVisible: _actionsVisible,
-                                              child: widget.lyrics,
-                                            ),
-                                            if (widget.lyricsOptions != null)
-                                              PositionedDirectional(
-                                                start: 20,
-                                                bottom: 52,
-                                                child: IgnorePointer(
-                                                  ignoring: !_actionsVisible,
-                                                  child: AnimatedOpacity(
-                                                    opacity: _actionsVisible
-                                                        ? 1
-                                                        : 0,
-                                                    duration:
-                                                        MediaQuery.disableAnimationsOf(
-                                                          context,
-                                                        )
-                                                        ? Duration.zero
-                                                        : const Duration(
-                                                            milliseconds: 180,
-                                                          ),
-                                                    child:
-                                                        widget.lyricsOptions!,
+                                  )
+                                : Padding(
+                                    key: ValueKey(widget.page),
+                                    padding: EdgeInsets.only(
+                                      bottom: widget.page == 2 ? 48 : 0,
+                                    ),
+                                    child: widget.page == 2
+                                        ? widget.queue
+                                        : Stack(
+                                            fit: StackFit.expand,
+                                            children: [
+                                              _LandscapeLyricsViewport(
+                                                controlsVisible:
+                                                    _actionsVisible,
+                                                child: widget.lyrics,
+                                              ),
+                                              if (widget.lyricsOptions != null)
+                                                PositionedDirectional(
+                                                  start: 20,
+                                                  bottom: 52,
+                                                  child: IgnorePointer(
+                                                    ignoring: !_actionsVisible,
+                                                    child: AnimatedOpacity(
+                                                      opacity: _actionsVisible
+                                                          ? 1
+                                                          : 0,
+                                                      duration:
+                                                          MediaQuery.disableAnimationsOf(
+                                                            context,
+                                                          )
+                                                          ? Duration.zero
+                                                          : const Duration(
+                                                              milliseconds: 180,
+                                                            ),
+                                                      child:
+                                                          widget.lyricsOptions!,
+                                                    ),
                                                   ),
                                                 ),
-                                              ),
-                                          ],
-                                        ),
-                                ),
-                        ),
-                        Positioned(
-                          left: 0,
-                          right: 0,
-                          bottom: 0,
-                          height: 48,
-                          child: GestureDetector(
-                            key: const ValueKey('landscape-actions-reveal'),
-                            behavior: HitTestBehavior.opaque,
-                            onTap: _reveal,
-                            child: IgnorePointer(
-                              ignoring: !_actionsVisible,
-                              child: ExcludeSemantics(
-                                excluding: !_actionsVisible,
-                                child: AnimatedOpacity(
-                                  opacity: _actionsVisible ? 1 : 0,
-                                  duration:
-                                      MediaQuery.disableAnimationsOf(context)
-                                      ? Duration.zero
-                                      : const Duration(milliseconds: 180),
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 20,
-                                    ),
-                                    child: Row(
-                                      mainAxisAlignment:
-                                          MainAxisAlignment.spaceBetween,
-                                      children: [
-                                        if (!widget.live)
+                                            ],
+                                          ),
+                                  ),
+                          ),
+                          Positioned(
+                            left: 0,
+                            right: 0,
+                            bottom: 0,
+                            height: 48,
+                            child: GestureDetector(
+                              key: const ValueKey('landscape-actions-reveal'),
+                              behavior: HitTestBehavior.opaque,
+                              onTap: _reveal,
+                              child: IgnorePointer(
+                                ignoring: !_actionsVisible,
+                                child: ExcludeSemantics(
+                                  excluding: !_actionsVisible,
+                                  child: AnimatedOpacity(
+                                    opacity: _actionsVisible ? 1 : 0,
+                                    duration:
+                                        MediaQuery.disableAnimationsOf(context)
+                                        ? Duration.zero
+                                        : const Duration(milliseconds: 180),
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 20,
+                                      ),
+                                      child: Row(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.spaceBetween,
+                                        children: [
                                           IconButton(
                                             tooltip: widget.page == 1
                                                 ? context
@@ -261,17 +285,16 @@ class _MornyeLandscapePlayerState extends State<MornyeLandscapePlayer> {
                                                   widget.page == 1 ? 0 : 1,
                                                 ),
                                           ),
-                                        AudioOutputButton(
-                                          color: Colors.white,
-                                          onPickerChanged: (open) {
-                                            if (!mounted) return;
-                                            setState(
-                                              () => _audioOutputOpen = open,
-                                            );
-                                            _scheduleHide();
-                                          },
-                                        ),
-                                        if (!widget.live)
+                                          AudioOutputButton(
+                                            color: Colors.white,
+                                            onPickerChanged: (open) {
+                                              if (!mounted) return;
+                                              setState(
+                                                () => _audioOutputOpen = open,
+                                              );
+                                              _scheduleHide();
+                                            },
+                                          ),
                                           IconButton(
                                             tooltip:
                                                 context.l10n.nowPlayingUpNext,
@@ -292,19 +315,20 @@ class _MornyeLandscapePlayerState extends State<MornyeLandscapePlayer> {
                                                   widget.page == 2 ? 0 : 2,
                                                 ),
                                           ),
-                                      ],
+                                        ],
+                                      ),
                                     ),
                                   ),
                                 ),
                               ),
                             ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ],

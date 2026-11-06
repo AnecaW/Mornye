@@ -38,6 +38,7 @@ class MusicLibraryScope {
       '$selection/$deviceEnabled/${(servers.toList()..sort()).join(',')}';
   QueueLibraryDbQuery apply(QueueLibraryDbQuery q) => QueueLibraryDbQuery(
     includeSingleTrackAlbums: q.includeSingleTrackAlbums,
+    excludeNetwork: q.excludeNetwork,
     albumArtist: q.albumArtist,
     limit: q.limit,
     offset: q.offset,

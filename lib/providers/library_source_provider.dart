@@ -51,8 +51,8 @@ final savedLibrarySourceConnectionsProvider =
       void changed() => ref.invalidateSelf();
       storage.connectionRevision.addListener(changed);
       ref.onDispose(() => storage.connectionRevision.removeListener(changed));
-      return storage.connections();
-    });
+      return storage.connections().timeout(const Duration(seconds: 10));
+    }, retry: (retryCount, error) => null);
 
 // Keep the saved connection and its indexed metadata when temporarily disabled.
 final librarySourceConnectionsProvider =

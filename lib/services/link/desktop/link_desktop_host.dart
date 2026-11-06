@@ -32,6 +32,7 @@ import 'package:mornye/services/link/sync/link_sync_handlers.dart';
 import 'package:mornye/services/lyrics_translation_sharing.dart';
 import 'package:mornye/services/network_storage_service.dart';
 import 'package:mornye/services/playable_media.dart';
+import 'package:mornye/services/source_deletion_events.dart';
 import 'package:mornye/utils/desktop_platform.dart';
 import 'package:mornye/utils/logger.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -180,6 +181,7 @@ class LinkDesktopHostState {
 /// [linkHostRouterProvider] and pushes the desktop player to phones.
 class LinkDesktopHost extends Notifier<LinkDesktopHostState> {
   static const exportDelay = Duration(seconds: 10);
+  static const deletionExportDelay = Duration(milliseconds: 300);
   static const stateDelay = Duration(milliseconds: 250);
   static const stateInterval = Duration(seconds: 15);
   static const downloadsDelay = Duration(seconds: 1);
@@ -189,6 +191,7 @@ class LinkDesktopHost extends Notifier<LinkDesktopHostState> {
   final _backendSubscriptions = <StreamSubscription<Object?>>[];
   final _appSubscriptions = <ProviderSubscription<Object?>>[];
   StreamSubscription<void>? _playerSubscription;
+  void Function()? _unsubscribeSourceDeletion;
   LinkPlayerPort? _player;
   LinkDesktopOps? _ops;
   LinkLibraryJobsHost? _libraryJobs;
@@ -206,9 +209,11 @@ class LinkDesktopHost extends Notifier<LinkDesktopHostState> {
   final _rescanAfterExport = <String>{};
   LinkPlayerState? _lastSentState;
   Timer? _exportTimer;
+  bool _urgentExportScheduled = false;
   Timer? _stateTimer;
   Timer? _heartbeat;
   Timer? _downloadsTimer;
+  LinkDownloadUpdates? _downloadUpdates;
   Future<void> _transition = Future.value();
   bool _exporting = false;
   bool _exportAgain = false;
@@ -322,7 +327,7 @@ class LinkDesktopHost extends Notifier<LinkDesktopHostState> {
   );
 
   /// `linkPaired` and `linkPairingEnded`, for the pairing dialog.
-  Stream<LinkPairingEvent> get pairingEvents => _pairingEvents.stream;
+  Stream<LinkPairingEvent> pairingEvents() => _pairingEvents.stream;
 
   Future<void> _restore() async {
     String? name;
@@ -583,6 +588,25 @@ class LinkDesktopHost extends Notifier<LinkDesktopHostState> {
     return ref.mounted && known();
   }
 
+  /// Reconciles stored phone songs on reconnect even when the catalog hash
+  /// matches. A failed or interrupted scan can leave old Library rows behind.
+  Future<void> _refreshPhoneLibrary(String deviceId) async {
+    final catalogs = _phoneCatalogs;
+    if (catalogs == null || !ref.mounted) return;
+    final sourceId = linkPhoneSourceId(deviceId);
+    try {
+      if (await catalogs.version(sourceId) == null ||
+          !ref.mounted ||
+          _phoneCatalogs != catalogs ||
+          _connectedPhone(sourceId) != deviceId) {
+        return;
+      }
+      await ref.read(linkPhoneLibraryProvider).rescan(sourceId);
+    } on Object catch (error) {
+      _log.w('Could not refresh the phone songs in Library: $error');
+    }
+  }
+
   /// Shows a phone's committed songs: adds its Library source the first
   /// time, then rescans it.
   Future<void> _onPhoneCommit(String deviceId) async {
@@ -645,6 +669,16 @@ class LinkDesktopHost extends Notifier<LinkDesktopHostState> {
   }
 
   void _listenApp() {
+    _unsubscribeSourceDeletion = SourceDeletionEvents.instance.subscribe((
+      source,
+    ) async {
+      if (linkLocalFilePath(source) != null) _scheduleExport(urgent: true);
+    });
+    final updates = _downloadUpdates = LinkDownloadUpdates(
+      items: () => ref.read(linkDownloadItemsProvider),
+      send: (message, id) => _send(message, deviceId: id),
+    )..keepConnected(state.clients);
+    unawaited(updates.publish(snapshotsOnly: true));
     _lyricsTranslations = LinkLyricsTranslations(
       sharing: ref.read(lyricsTranslationSharingProvider),
       send: (message, deviceId) async {
@@ -671,6 +705,11 @@ class LinkDesktopHost extends Notifier<LinkDesktopHostState> {
   }
 
   void _cancelApp() {
+    _unsubscribeSourceDeletion?.call();
+    _unsubscribeSourceDeletion = null;
+    _urgentExportScheduled = false;
+    _downloadUpdates?.dispose();
+    _downloadUpdates = null;
     _lyricsTranslations?.dispose();
     _lyricsTranslations = null;
     for (final subscription in _appSubscriptions) {
@@ -722,6 +761,13 @@ class LinkDesktopHost extends Notifier<LinkDesktopHostState> {
   }
 
   void _onMessage(LinkMessageEvent event) {
+    if (event.type == LinkMessageTypes.downloadsSubscribe) {
+      final updates = _downloadUpdates;
+      if (updates?.subscribe(event.deviceId, event.message['deltas']) == true) {
+        unawaited(updates!.publish(snapshotsOnly: true));
+      }
+      return;
+    }
     if (state.clients.any((client) => client.deviceId == event.deviceId) &&
         (_lyricsTranslations?.handle(event.message, deviceId: event.deviceId) ??
             false)) {
@@ -762,6 +808,7 @@ class LinkDesktopHost extends Notifier<LinkDesktopHostState> {
   void _onLocalPlaying(bool playing) {
     if (playing == _localPlaying) return;
     _localPlaying = playing;
+    _updateHeartbeat();
     if (playing) {
       if (state.followedPhone != null) {
         state = state.copyWith(followedPhone: null);
@@ -828,17 +875,19 @@ class LinkDesktopHost extends Notifier<LinkDesktopHostState> {
             ? null
             : await catalogs.coverPath(sourceId, coverKey)) ??
         song.coverUrl;
-    if (cover == null) return null;
+    final durationMs = ref.durationMs ?? song.durationMs;
     return PlayableMedia(
       id: 'link:${song.fileId}',
-      source: '',
+      source: NetworkStorageService.source(sourceId, song.name),
       title: ref.title,
       artist: ref.artist,
       album: ref.album ?? '',
-      artUri: normalizeArtUri(cover),
-      duration: ref.durationMs == null
-          ? null
-          : Duration(milliseconds: ref.durationMs!),
+      artUri: cover == null ? null : normalizeArtUri(cover),
+      duration: durationMs == null ? null : Duration(milliseconds: durationMs),
+      bitDepth: song.bitDepth,
+      sampleRate: song.sampleRate,
+      bitrate: song.bitRate,
+      format: song.suffix,
     );
   }
 
@@ -861,11 +910,15 @@ class LinkDesktopHost extends Notifier<LinkDesktopHostState> {
     );
     _phoneSources?.keepConnected(ids);
     _transfers?.keepConnected(ids);
+    final updates = _downloadUpdates;
+    updates?.keepConnected(clients);
+    if (updates != null) unawaited(updates.publish(snapshotsOnly: true));
     _updateHeartbeat();
     // A phone that just connected gets the desktop's state right away.
     if (!known.containsAll(ids)) {
       for (final id in ids.difference(known)) {
         _lyricsTranslations?.connected(id);
+        unawaited(_refreshPhoneLibrary(id));
       }
       _lastSentState = null;
       _onPlayerChanged();
@@ -910,7 +963,7 @@ class LinkDesktopHost extends Notifier<LinkDesktopHostState> {
   }
 
   void _updateHeartbeat() {
-    final wanted = state.running && state.clients.isNotEmpty;
+    final wanted = state.running && state.clients.isNotEmpty && _localPlaying;
     if (!wanted) {
       _heartbeat?.cancel();
       _heartbeat = null;
@@ -940,12 +993,8 @@ class LinkDesktopHost extends Notifier<LinkDesktopHostState> {
     _downloadsTimer = Timer(downloadsDelay, () {
       _downloadsTimer = null;
       if (!ref.mounted || !state.running || state.clients.isEmpty) return;
-      unawaited(
-        _send({
-          'type': LinkMessageTypes.downloadsChanged,
-          ...linkDownloadsPayload(ref.read(linkDownloadItemsProvider)),
-        }),
-      );
+      final updates = _downloadUpdates;
+      if (updates != null) unawaited(updates.publish());
     });
   }
 
@@ -958,10 +1007,18 @@ class LinkDesktopHost extends Notifier<LinkDesktopHostState> {
     }
   }
 
-  void _scheduleExport() {
-    if (!state.running) return;
+  void _scheduleExport({bool urgent = false}) {
+    if (!ref.mounted || !state.running) return;
+    // Index updates following a confirmed file deletion must not postpone
+    // its short refresh behind the normal Library debounce.
+    if (_urgentExportScheduled && (_exportTimer?.isActive ?? false)) return;
+    _urgentExportScheduled = urgent;
     _exportTimer?.cancel();
-    _exportTimer = Timer(exportDelay, () => unawaited(exportCatalog()));
+    _exportTimer = Timer(urgent ? deletionExportDelay : exportDelay, () {
+      _exportTimer = null;
+      _urgentExportScheduled = false;
+      unawaited(exportCatalog());
+    });
   }
 
   /// Writes the catalog and hands it to the server; runs on start and after
@@ -1102,10 +1159,7 @@ class LinkDesktopHost extends Notifier<LinkDesktopHostState> {
       0;
 
   /// Whether the desktop has a current song to continue on a phone.
-  bool get hasCurrentTrack => _player?.snapshot().current != null;
-
-  /// Whether the desktop's own player is playing.
-  bool get isPlaying => _player?.snapshot().playing ?? false;
+  bool hasCurrentTrack() => _player?.snapshot().current != null;
 
   /// Selects an already playing or paused phone without restarting it.
   bool followPhone(String deviceId) {

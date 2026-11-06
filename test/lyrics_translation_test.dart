@@ -75,6 +75,8 @@ LyricsAiClient _client(
 }
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   group('source', () {
     test('strips timing tags and skips instrumental lines', () {
       expect(
@@ -292,8 +294,12 @@ void main() {
     test('translates in sequential batches with progress', () async {
       final batches = <List<int>>[];
       final progress = <int>[];
-      final result = await LyricsTranslator(_client(batches), maxItems: 2)
-          .translate(
+      final result =
+          await LyricsTranslator(
+            _client(batches),
+            maxItems: 2,
+            maxConcurrentRequests: 1,
+          ).translate(
             texts,
             systemPrompt: 's',
             onProgress: (done, _) => progress.add(done),
@@ -308,20 +314,28 @@ void main() {
       expect(progress, [0, 2, 4, 5]);
     });
 
-    test('missing ids stay untranslated', () async {
-      final result = await LyricsTranslator(
-        _client(
-          [],
-          reply: (items, _) => jsonEncode({
-            'lines': [
-              {'id': items.first['id'], 'text': 'only'},
-            ],
-          }),
-        ),
-      ).translate(texts, systemPrompt: 's');
-      expect(result.translations.first, 'only');
-      expect(result.missing, 4);
-    });
+    test(
+      'unrepaired missing ids stay untranslated after one targeted retry',
+      () async {
+        final batches = <List<int>>[];
+        final result = await LyricsTranslator(
+          _client(
+            batches,
+            reply: (items, _) => jsonEncode({
+              'lines': [
+                {'id': items.first['id'], 'text': 'only'},
+              ],
+            }),
+          ),
+        ).translate(texts, systemPrompt: 's');
+        expect(result.translations.first, 'only');
+        expect(result.missing, 3);
+        expect(batches, [
+          [0, 1, 2, 3, 4],
+          [1, 2, 3, 4],
+        ]);
+      },
+    );
 
     test('keeps the romanizations the model returns', () async {
       final result = await LyricsTranslator(
@@ -449,7 +463,7 @@ void main() {
       );
     });
 
-    test('cancelling stops before the next batch', () async {
+    test('cancelling stops before the next queued batch', () async {
       final batches = <List<int>>[];
       final cancel = LyricsTranslationCancelToken();
       await expectLater(
@@ -463,7 +477,10 @@ void main() {
         ),
         throwsA(isA<LyricsTranslationCancelled>()),
       );
-      expect(batches, hasLength(1));
+      expect(batches, [
+        [0, 1],
+        [2, 3],
+      ]);
     });
   });
 

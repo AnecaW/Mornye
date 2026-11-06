@@ -4,6 +4,7 @@ import 'package:mornye/models/library_database_models.dart';
 import 'package:mornye/models/track.dart';
 import 'package:mornye/services/cover_store.dart';
 import 'package:mornye/services/music_player_runtime.dart';
+import 'package:mornye/services/playback_metadata.dart';
 import 'package:mornye/utils/file_access.dart' show isContentUri;
 import 'package:mornye/utils/int_utils.dart';
 import 'package:mornye/utils/ios_container_paths.dart';
@@ -12,6 +13,7 @@ import 'package:mornye/utils/string_utils.dart';
 class PlayableMedia {
   final String id;
   final String source;
+  final String? originSource;
   final String title;
   final String artist;
   final String album;
@@ -25,10 +27,12 @@ class PlayableMedia {
   final bool explicit;
   final String? genre;
   final bool autoplay;
+  final Map<String, dynamic> displayMetadata;
 
   const PlayableMedia({
     required this.id,
     required this.source,
+    this.originSource,
     required this.title,
     required this.artist,
     this.album = '',
@@ -42,6 +46,7 @@ class PlayableMedia {
     this.explicit = false,
     this.genre,
     this.autoplay = false,
+    this.displayMetadata = const {},
   });
 
   /// The `network://` cover the cover store keeps for this song:
@@ -57,6 +62,7 @@ class PlayableMedia {
   Map<String, dynamic> toJson() => {
     'id': id,
     'source': source,
+    if (originSource != null) 'originSource': originSource,
     'title': title,
     'artist': artist,
     'album': album,
@@ -72,6 +78,7 @@ class PlayableMedia {
     if (explicit) 'explicit': true,
     if (genre != null) 'genre': genre,
     if (autoplay) 'autoplay': true,
+    if (displayMetadata.isNotEmpty) 'displayMetadata': displayMetadata,
   };
 
   static PlayableMedia? fromJson(
@@ -100,6 +107,7 @@ class PlayableMedia {
     return PlayableMedia(
       id: id,
       source: source,
+      originSource: json['originSource'] as String?,
       title: json['title'] as String? ?? '',
       artist: json['artist'] as String? ?? '',
       album: json['album'] as String? ?? '',
@@ -115,6 +123,7 @@ class PlayableMedia {
       explicit: parseExplicitFlag(json['explicit']) == true,
       genre: json['genre'] as String?,
       autoplay: json['autoplay'] == true,
+      displayMetadata: playbackDisplayMetadata(json['displayMetadata']),
     );
   }
 
@@ -156,6 +165,8 @@ class PlayableMedia {
           : null,
       extras: {
         'source': source,
+        if (originSource != null) 'originSource': originSource,
+        if (displayMetadata.isNotEmpty) 'displayMetadata': displayMetadata,
         if (resolvedSource != null && resolvedSource.isNotEmpty)
           'resolvedSource': resolvedSource,
         'artworkRef': ?reference,
@@ -176,6 +187,7 @@ String? normalizeArtUri(String cover) {
   final value = cover.trim();
   if (value.isEmpty) return null;
   if (value.startsWith('http') ||
+      CoverStore.fetches(value) ||
       isContentUri(value) ||
       value.startsWith('file://')) {
     return value;
@@ -208,6 +220,7 @@ PlayableMedia playableFromHistory(DownloadHistoryItem item) {
   return PlayableMedia(
     id: item.id,
     source: item.filePath,
+    originSource: item.originFilePath,
     title: item.trackName,
     artist: item.artistName,
     album: item.albumName,
@@ -227,20 +240,13 @@ PlayableMedia playableFromHistory(DownloadHistoryItem item) {
 }
 
 PlayableMedia playableFromLocal(LocalLibraryItem item) {
-  String? art;
-  final cover = item.coverPath;
-  if (cover != null && cover.trim().isNotEmpty) {
-    art = cover.startsWith('http') || isContentUri(cover)
-        ? cover
-        : Uri.file(cover).toString();
-  }
   return PlayableMedia(
     id: item.id,
     source: item.filePath,
     title: item.trackName,
     artist: item.artistName,
     album: item.albumName,
-    artUri: art,
+    artUri: normalizeArtUri(item.coverPath ?? ''),
     duration: (item.duration != null && item.duration! > 0)
         ? Duration(seconds: item.duration!)
         : null,

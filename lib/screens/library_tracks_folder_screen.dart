@@ -31,6 +31,8 @@ import 'package:mornye/services/m3u_playlist_service.dart';
 import 'package:mornye/services/downloaded_embedded_cover_resolver.dart';
 import 'package:mornye/utils/file_access.dart';
 import 'package:mornye/providers/download_queue_provider.dart';
+import 'package:mornye/providers/collection_track_files_provider.dart';
+import 'package:mornye/providers/deleted_library_files.dart';
 import 'package:mornye/providers/extension_provider.dart';
 import 'package:mornye/providers/library_collections_provider.dart';
 import 'package:mornye/providers/music_player_provider.dart';
@@ -40,18 +42,22 @@ import 'package:mornye/providers/settings_provider.dart';
 import 'package:mornye/utils/adaptive_layout.dart';
 import 'package:mornye/utils/cover_art_utils.dart';
 import 'package:mornye/controllers/collapsing_header_scroll_mixin.dart';
+import 'package:mornye/controllers/confirm_and_delete_tracks.dart';
 import 'package:mornye/controllers/library_tracks_folder_data.dart';
 import 'package:mornye/controllers/selection_mode_mixin.dart';
 import 'package:mornye/widgets/collection_reorder_sliver.dart';
 import 'package:mornye/widgets/discard_changes_dialog.dart';
 import 'package:mornye/screens/track_metadata_screen.dart';
 import 'package:mornye/widgets/selection_action_button.dart';
+import 'package:mornye/widgets/destructive_selection_button.dart';
 import 'package:mornye/widgets/in_library_badge.dart';
 import 'package:mornye/widgets/link/link_actions.dart';
+import 'package:mornye/widgets/network_offline_actions.dart';
 import 'package:mornye/widgets/playlist_picker_sheet.dart';
 import 'package:mornye/widgets/collection_suggestions_section.dart';
 import 'package:mornye/widgets/animation_utils.dart';
 import 'package:mornye/widgets/track_detail_actions.dart';
+import 'package:mornye/services/playable_media.dart';
 
 export 'package:mornye/models/library_collections.dart'
     show LibraryTracksFolderMode;
@@ -93,6 +99,7 @@ class _LibraryTracksFolderScreenState
   bool _savingOrder = false;
   bool _draggingOrder = false;
   bool _confirmingDiscard = false;
+  bool _trackActionInProgress = false;
 
   bool get _editingOrder => _orderDraft != null;
   bool get _orderChanged =>
@@ -389,7 +396,6 @@ class _LibraryTracksFolderScreenState
         context.l10n.collectionPlaylistEmptySubtitle,
     };
     final folderTracks = _folderData.tracks;
-    final historyLookups = _folderData.historyRequest.tracks;
     final existingHistoryKeys = _editingOrder
         ? const <String>{}
         : ref.watch(
@@ -402,10 +408,7 @@ class _LibraryTracksFolderScreenState
         ? MediaQuery.paddingOf(context).bottom
         : 0.0;
 
-    final inHistory = [
-      for (final lookup in historyLookups)
-        existingHistoryKeys.contains(lookup.lookupKey),
-    ];
+    final inHistory = _folderData.inHistory(existingHistoryKeys);
     final ids = [for (final entry in entries) entry.key];
     final scaffold = CollectionScaffold(
       scrollController: scrollController,
@@ -486,9 +489,7 @@ class _LibraryTracksFolderScreenState
               delegate: SliverChildBuilderDelegate((context, index) {
                 final entry = entries[index];
                 final isSelected = selectedIds.contains(entry.key);
-                final isInHistory = existingHistoryKeys.contains(
-                  historyLookups[index].lookupKey,
-                );
+                final isInHistory = inHistory[index];
                 return KeyedSubtree(
                   key: ValueKey(entry.key),
                   child: StaggeredListItem(
@@ -520,12 +521,7 @@ class _LibraryTracksFolderScreenState
           CollectionSuggestionsSliver(
             collectionKey: 'playlist:${playlist.id}',
             // The newest additions say most about where the playlist goes.
-            tracks: [
-              for (final entry in [
-                ...playlist.tracks,
-              ]..sort((a, b) => b.addedAt.compareTo(a.addedAt)))
-                entry.track,
-            ],
+            tracks: _folderData.newestFirstTracks,
             playlistId: playlist.id,
           ),
       ],
@@ -587,6 +583,68 @@ class _LibraryTracksFolderScreenState
     }
   }
 
+  CollectionTrackFilesRequest _selectedTrackFiles(
+    List<CollectionTrackEntry> entries,
+  ) => CollectionTrackFilesRequest([
+    for (final entry in entries)
+      if (selectedIds.contains(entry.key)) entry.track,
+  ]);
+
+  Future<void> _playSelectedFiles(
+    List<PlayableMedia> media, {
+    bool? playNext,
+  }) async {
+    if (media.isEmpty || _trackActionInProgress) return;
+    setState(() => _trackActionInProgress = true);
+    try {
+      if (playNext == null) {
+        await ref
+            .read(playbackProvider.notifier)
+            .playMediaQueue(
+              media,
+              startIndex: 0,
+              externalPath: media.first.source,
+            );
+      } else {
+        await ref
+            .read(musicPlayerControllerProvider)
+            .enqueueMedia(media, playNext: playNext);
+      }
+      if (mounted) exitSelectionMode();
+    } catch (error) {
+      if (mounted) showCannotOpenFileSnackBar(context, error);
+    } finally {
+      if (mounted) setState(() => _trackActionInProgress = false);
+    }
+  }
+
+  Future<void> _deleteSelectedFiles(List<PlayableMedia> media) async {
+    final paths = {
+      for (final item in media)
+        if (!item.isNetwork && !isCueVirtualPath(item.source)) item.source,
+    }.toList();
+    if (paths.isEmpty || _trackActionInProgress) return;
+    final container = ProviderScope.containerOf(context, listen: false);
+    setState(() => _trackActionInProgress = true);
+    try {
+      await confirmAndDeleteTracks(
+        context: context,
+        ids: paths,
+        message: context.l10n.collectionDeleteFilesMessage(paths.length),
+        deleteItem: deleteFile,
+        persistDeletedItems: (deleted) =>
+            removeDeletedLibraryFileEntries(container, deleted),
+        onExitSelectionMode: () {
+          if (mounted) exitSelectionMode();
+        },
+      );
+    } catch (error) {
+      if (mounted) showCannotOpenFileSnackBar(context, error);
+    } finally {
+      if (mounted) setState(() => _trackActionInProgress = false);
+    }
+  }
+
   /// The right-click menu of a desktop row: the selection bar's actions for
   /// the selection the row joins, after the row's own Play and details, which
   /// end the selection.
@@ -597,10 +655,25 @@ class _LibraryTracksFolderScreenState
     List<bool> inHistory,
     int index,
     Offset position,
-  ) {
+  ) async {
     final l10n = context.l10n;
     final count = selectedIds.length;
     final isPlaylist = widget.mode == LibraryTracksFolderMode.playlist;
+    final request = _selectedTrackFiles(entries);
+    final media = await ref
+        .read(collectionTrackFilesProvider(request).future)
+        .catchError((Object _) => <PlayableMedia>[]);
+    if (!mounted ||
+        !context.mounted ||
+        request != _selectedTrackFiles(entries)) {
+      return false;
+    }
+    final showPlayer = ref.read(playerUiEnabledProvider);
+    final localCount = media
+        .where((item) => !item.isNetwork)
+        .map((item) => item.source)
+        .toSet()
+        .length;
     return showContextMenu(
       context,
       position: position,
@@ -626,6 +699,13 @@ class _LibraryTracksFolderScreenState
             ),
         ],
         [
+          if (showPlayer && media.isNotEmpty)
+            for (final next in [true, false])
+              ContextMenuAction(
+                icon: next ? Icons.playlist_play : Icons.queue_music,
+                label: next ? l10n.trackPlayNext : l10n.trackAddToQueue,
+                onSelected: () => _playSelectedFiles(media, playNext: next),
+              ),
           if (widget.mode == LibraryTracksFolderMode.wishlist)
             ContextMenuAction(
               icon: Icons.download,
@@ -651,6 +731,13 @@ class _LibraryTracksFolderScreenState
             destructive: true,
             onSelected: () => _removeSelected(entries),
           ),
+          if (localCount > 0)
+            ContextMenuAction(
+              icon: Icons.delete_outline,
+              label: l10n.selectionDeleteTracksCount(localCount),
+              destructive: true,
+              onSelected: () => _deleteSelectedFiles(media),
+            ),
         ],
       ],
     );
@@ -665,69 +752,100 @@ class _LibraryTracksFolderScreenState
   ) {
     final selectedCount = selectedIds.length;
     final isWishlist = widget.mode == LibraryTracksFolderMode.wishlist;
+    final files = selectedCount == 0
+        ? const <PlayableMedia>[]
+        : ref
+                  .watch(
+                    collectionTrackFilesProvider(_selectedTrackFiles(entries)),
+                  )
+                  .value ??
+              const <PlayableMedia>[];
+    final showPlayer = ref.watch(playerUiEnabledProvider);
+    final localCount = files
+        .where((item) => !item.isNetwork)
+        .map((item) => item.source)
+        .toSet()
+        .length;
+    final canPlay = files.isNotEmpty && !_trackActionInProgress;
+    final deleteLabel = context.l10n.selectionDeleteTracksCount(localCount);
 
     return buildSelectionBar(
       ids: ids,
       bottomPadding: bottomPadding,
       children: [
-        Row(
+        SelectionActionGrid(
           children: [
-            if (isWishlist)
-              Expanded(
-                child: SelectionActionButton(
-                  icon: Icons.download,
-                  label: '${context.l10n.settingsDownload} ($selectedCount)',
-                  onPressed: selectedCount > 0
-                      ? () => _downloadSelected(entries)
+            SelectionActionButton(
+              icon: Icons.play_arrow,
+              label: context.l10n.tooltipPlay,
+              onPressed: canPlay ? () => _playSelectedFiles(files) : null,
+              colorScheme: colorScheme,
+            ),
+            if (showPlayer)
+              for (final next in [true, false])
+                SelectionActionButton(
+                  icon: next ? Icons.playlist_play : Icons.queue_music,
+                  label: next
+                      ? context.l10n.trackPlayNext
+                      : context.l10n.trackAddToQueue,
+                  onPressed: canPlay
+                      ? () => _playSelectedFiles(files, playNext: next)
                       : null,
                   colorScheme: colorScheme,
                 ),
-              ),
-            if (isWishlist) const SizedBox(width: 8),
-            Expanded(
-              child: SelectionActionButton(
-                icon: Icons.playlist_add,
-                label:
-                    '${context.l10n.collectionAddToPlaylist} ($selectedCount)',
+            if (isWishlist)
+              SelectionActionButton(
+                icon: Icons.download,
+                label: '${context.l10n.settingsDownload} ($selectedCount)',
                 onPressed: selectedCount > 0
-                    ? () => _addSelectedToPlaylist(entries)
+                    ? () => _downloadSelected(entries)
                     : null,
                 colorScheme: colorScheme,
               ),
+            SelectionActionButton(
+              icon: Icons.playlist_add,
+              label: '${context.l10n.collectionAddToPlaylist} ($selectedCount)',
+              onPressed: selectedCount > 0
+                  ? () => _addSelectedToPlaylist(entries)
+                  : null,
+              colorScheme: colorScheme,
             ),
-          ],
-        ),
-
-        const SizedBox(height: 8),
-
-        SizedBox(
-          width: double.infinity,
-          child: ExpressiveButton(
-            onPressed: selectedCount > 0
-                ? () => _removeSelected(entries)
-                : null,
-            icon: const Icon(Icons.remove_circle_outline),
-            style: FilledButton.styleFrom(
-              backgroundColor: selectedCount > 0
-                  ? colorScheme.error
-                  : colorScheme.surfaceContainerHighest,
-              foregroundColor: selectedCount > 0
-                  ? colorScheme.onError
-                  : colorScheme.onSurfaceVariant,
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-            ),
-            child: Text(
-              selectedCount > 0
+            // Removing entries keeps the files, so it stays a plain action.
+            // Desktop keeps file deletion a toolbar button beside it, as in
+            // the Library selection bar.
+            SelectionActionButton(
+              onPressed: selectedCount > 0
+                  ? () => _removeSelected(entries)
+                  : null,
+              icon: Icons.remove_circle_outline,
+              colorScheme: colorScheme,
+              label: selectedCount > 0
                   ? '${widget.mode == LibraryTracksFolderMode.playlist ? context.l10n.collectionRemoveFromPlaylist : context.l10n.collectionRemoveFromFolder} ($selectedCount)'
                   : widget.mode == LibraryTracksFolderMode.playlist
                   ? context.l10n.collectionRemoveFromPlaylist
                   : context.l10n.collectionRemoveFromFolder,
             ),
-          ),
+            if (isDesktopPlatform && localCount > 0)
+              SelectionActionButton(
+                icon: Icons.delete_outline,
+                label: deleteLabel,
+                colorScheme: colorScheme,
+                destructive: true,
+                onPressed: _trackActionInProgress
+                    ? null
+                    : () => _deleteSelectedFiles(files),
+              ),
+          ],
         ),
+        if (!isDesktopPlatform && localCount > 0) ...[
+          const SizedBox(height: 8),
+          DestructiveSelectionButton(
+            count: _trackActionInProgress ? 0 : localCount,
+            colorScheme: colorScheme,
+            label: deleteLabel,
+            onPressed: () => _deleteSelectedFiles(files),
+          ),
+        ],
       ],
     );
   }
@@ -927,6 +1045,10 @@ class _LibraryTracksFolderScreenState
             child: Text(context.l10n.dialogSave),
           ),
         if (!_editingOrder) ...[
+          if (!isSelectionMode && entries.isNotEmpty)
+            NetworkOfflineTracksButton(
+              tracks: [for (final entry in entries) entry.track],
+            ),
           if (!isSelectionMode && entries.isNotEmpty)
             HeaderCircleButton(
               icon: Icons.ios_share,

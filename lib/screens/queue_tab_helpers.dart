@@ -193,71 +193,6 @@ class _QueueLibraryPageRequest
   );
 }
 
-class _QueueLibraryCountsRequest {
-  final String searchQuery;
-  final String? filterSource;
-  final String? filterQuality;
-  final String? filterFormat;
-  final String? filterMetadata;
-  final bool localLibraryEnabled;
-  final String librarySource;
-
-  const _QueueLibraryCountsRequest({
-    required this.searchQuery,
-    required this.filterSource,
-    required this.filterQuality,
-    required this.filterFormat,
-    required this.filterMetadata,
-    required this.localLibraryEnabled,
-    this.librarySource = allMusicSources,
-  });
-
-  QueueLibraryDbQuery toDbQuery({bool includeNetwork = true}) =>
-      queryForMusicSource(
-        QueueLibraryDbQuery(
-          searchQuery: searchQuery,
-          source: filterSource,
-          quality: filterQuality,
-          format: filterFormat,
-          metadata: filterMetadata,
-          includeLocal: localLibraryEnabled,
-        ),
-        librarySource,
-        includeNetwork: includeNetwork,
-      );
-
-  bool get allowsInMemoryHistoryFallback =>
-      librarySource == allMusicSources &&
-      searchQuery.trim().isEmpty &&
-      filterSource != 'local' &&
-      filterQuality == null &&
-      filterFormat == null &&
-      filterMetadata == null;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is _QueueLibraryCountsRequest &&
-          searchQuery == other.searchQuery &&
-          filterSource == other.filterSource &&
-          filterQuality == other.filterQuality &&
-          filterFormat == other.filterFormat &&
-          filterMetadata == other.filterMetadata &&
-          localLibraryEnabled == other.localLibraryEnabled &&
-          librarySource == other.librarySource;
-
-  @override
-  int get hashCode => Object.hash(
-    searchQuery,
-    filterSource,
-    filterQuality,
-    filterFormat,
-    filterMetadata,
-    localLibraryEnabled,
-    librarySource,
-  );
-}
-
 class _QueueLibraryPageData implements QueueLibraryPageContent {
   final List<UnifiedLibraryItem> items;
   final List<DownloadHistoryItem> historyItems;
@@ -519,25 +454,5 @@ final _queueLibraryPageProvider = FutureProvider.autoDispose
         historyItems: historyItems,
         localItems: localItems,
         nextCursor: page.nextCursor,
-      );
-    });
-
-final _queueLibraryCountsProvider = FutureProvider.autoDispose
-    .family<QueueLibraryCounts, _QueueLibraryCountsRequest>((
-      ref,
-      request,
-    ) async {
-      ref.watch(
-        downloadHistoryProvider.select((state) => state.loadedIndexVersion),
-      );
-      final scope = ref.watch(musicLibraryScopeProvider);
-      final includeNetwork = scope.activeServers.isNotEmpty;
-      if (request.localLibraryEnabled || includeNetwork) {
-        ref.watch(
-          localLibraryProvider.select((state) => state.loadedIndexVersion),
-        );
-      }
-      return LibraryDatabase.instance.getQueueCounts(
-        scope.apply(request.toDbQuery(includeNetwork: includeNetwork)),
       );
     });

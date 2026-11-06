@@ -1,4 +1,17 @@
 {
+  "libraryLyricsSearchDescription": "Cari lirik yang tersimpan di lagu. Pencarian pertama bisa memerlukan waktu; ganti filter untuk menghentikannya.",
+  "libraryLyricsIndexing": "Menyiapkan pencarian lirik: {count} lagu diperiksa",
+  "@libraryLyricsIndexing": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "libraryLyricsSearchIncomplete": "Beberapa lagu tidak dapat dibaca. Hasil mungkin belum lengkap.",
+  "libraryLyricsRefresh": "Perbarui pencarian lirik",
+  "networkErrorListing": "Server merespons, tetapi daftar foldernya tidak dapat dibaca. Untuk WebDAV, gunakan endpoint WebDAV. Untuk HTTP, gunakan daftar direktori atau URL audio langsung.",
+  "networkErrorStorage": "Server berhasil diakses, tetapi perangkat ini tidak dapat menyimpan koneksi. Periksa log aplikasi lalu coba lagi.",
   "extensionsUnsecuredStorage": "Gunakan penyimpanan extension tanpa keyring",
   "extensionsUnsecuredStorageDescription": "Jalankan extension tanpa keyring Linux. Kunci disimpan secara lokal, sehingga siapa pun yang dapat mengakses file aplikasi bisa membaca kredensial extension. Nonaktifkan untuk memakai keyring sistem.",
   "extensionsStorageKeyringRequired": "Data extension yang ada memerlukan kunci aslinya. Buka keyring sistem sekali, lalu aktifkan lagi penyimpanan tanpa keyring. Data kamu tetap tersimpan.",
@@ -242,6 +255,9 @@
   "usbDsdUnsupported": "Format DSD/DAC terhubung tidak didukung. Pemutaran berhenti.",
   "usbPermissionDenied": "Izin USB tidak diberikan. Menggunakan pemutaran normal.",
   "usbBitPerfectPending": "Menunggu lagu selanjutnya dan output USB yang didukung.",
+  "usbOutputReady": "Output USB siap. Mulai pemutaran untuk mengaktifkannya.",
+  "usbOutputPreparing": "Menyiapkan output audio USB...",
+  "usbOutputCancelled": "Persiapan USB dibatalkan. Pilih lagu untuk mencoba lagi.",
   "usbBitPerfectNoDevice": "Tiada DAC USB terhubung. Menggunakan pemutaran normal.",
   "usbBitPerfectFallback": "Perangkat atau format audio tidak mendukung output Bit-Perfect. Menggunakan pemutaran normal.",
   "usbBitPerfectRouteChanged": "Rute audio USB berubah. Pemutaran dijeda; pilih lagu untuk menghubungkan ulang.",
@@ -4219,6 +4235,15 @@
   "@collectionRemoveFromPlaylist": {
     "description": "Tooltip for removing track from playlist"
   },
+  "collectionDeleteFilesMessage": "Hapus permanen {count} file audio dari penyimpanan? Ini memengaruhi semua playlist yang menggunakan file tersebut.",
+  "@collectionDeleteFilesMessage": {
+    "description": "Konfirmasi penghapusan file fisik dari seleksi koleksi, berbeda dari menghapus entri playlist",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "collectionRemoveFromFolder": "Hapus dari folder",
   "@collectionRemoveFromFolder": {
     "description": "Tooltip for removing track from wishlist/loved folder"
@@ -7232,7 +7257,7 @@
   "@regionCountryID": {
     "description": "Country name for SongLink region picker"
   },
-  "regionCountryBR": "Brazil",
+  "regionCountryBR": "Brasil",
   "@regionCountryBR": {
     "description": "Country name for SongLink region picker"
   },
@@ -7420,6 +7445,14 @@
   "landscapeLyricsArtworkDescription": "Tampilkan cover album menggantikan detail lagu pada player Material dalam posisi landscape",
   "@landscapeLyricsArtworkDescription": {
     "description": "Subtitle explaining the Material landscape lyrics layout setting"
+  },
+  "autoHideLyricsControls": "Lirik layar penuh otomatis",
+  "@autoHideLyricsControls": {
+    "description": "Playback switch that lets lyrics take more screen space after five idle seconds"
+  },
+  "autoHideLyricsControlsDescription": "Sembunyikan kontrol player setelah 5 detik saat lirik terbuka. Nonaktifkan untuk mempertahankan tampilan saat ini",
+  "@autoHideLyricsControlsDescription": {
+    "description": "Subtitle explaining the five-second Now Playing lyrics timeout"
   },
   "playerCoverStyleDefault": "Default",
   "@playerCoverStyleDefault": {
@@ -8019,6 +8052,10 @@
   "audioInfoOutputFormat": "Format output",
   "audioInfoBluetoothFormat": "Format codec Bluetooth",
   "audioInfoAndroidNotReported": "Tidak dilaporkan oleh Android",
+  "audioInfoBluetoothUnavailable": "Tidak tersedia untuk aplikasi ini",
+  "audioInfoBluetoothUnavailableHint": "Android dapat menampilkan codec aktif di pengaturan Bluetooth tanpa menyediakan informasinya ke Mornye. Codec ini terpisah dari format file lagu.",
+  "audioAnalysisFileBitrate": "Bitrate file rata-rata",
+  "audioAnalysisFileBitrateHint": "Termasuk tag dan overhead container. Nilainya dapat berbeda dari bitrate stream audio dan bukan bitrate Bluetooth.",
   "audioInfoSystemDefaultRate": "Sample rate default sistem",
   "audioInfoAndroidPcmRates": "Sample rate PCM Android",
   "audioInfoAndroidPcmFormats": "Format PCM Android",
@@ -8203,6 +8240,10 @@
   "@desktopShortcutDismiss": {
     "description": "Keyboard Shortcuts row for Escape, which leaves a text field or closes the top dialog or page"
   },
+  "desktopShortcutForward": "Maju",
+  "@desktopShortcutForward": {
+    "description": "Keyboard Shortcuts row and View menu item that returns to the destination left with Back"
+  },
   "desktopShortcutToggleSidebar": "Tampilkan atau sembunyikan sidebar",
   "@desktopShortcutToggleSidebar": {
     "description": "Keyboard Shortcuts row for the shortcut that collapses or expands the desktop sidebar"
@@ -8384,6 +8425,53 @@
   "playlistImportResult": "{count, plural, =1{1 lagu} other{{count} lagu}} diimpor ke {name}, {matched} cocok dengan file di perangkat ini",
   "playlistImportNoTracks": "Tidak ada lagu di file ini",
   "playlistImportFailed": "File playlist ini tidak dapat dibaca",
+  "lastfmDescription": "Catat aktivitas mendengarkan dan tampilkan lagu yang diputar di Last.fm.",
+  "lastfmConnect": "Hubungkan Last.fm",
+  "lastfmConnecting": "Menghubungkan ke Last.fm...",
+  "lastfmFinishConnection": "Selesaikan koneksi",
+  "lastfmAuthorizeHelp": "Izinkan akses di browser, lalu kembali ke sini dan pilih Selesaikan koneksi.",
+  "lastfmScrobbling": "Scrobbling",
+  "lastfmScrobblingDescription": "Kirim lagu yang Anda dengarkan lewat pemutar bawaan ke Last.fm.",
+  "lastfmNowPlaying": "Tampilkan lagu yang diputar",
+  "lastfmNowPlayingDescription": "Tampilkan lagu saat ini di profil Last.fm Anda.",
+  "lastfmDisconnect": "Putuskan Last.fm",
+  "lastfmConnectionError": "Last.fm tidak dapat dihubungi. Scrobble yang tersimpan akan dikirim ulang secara otomatis.",
+  "lastfmStorageError": "Pengaturan Last.fm tidak dapat disimpan. Periksa akses penyimpanan aman perangkat ini lalu coba lagi.",
+  "lastfmAuthorizationPending": "Akses belum disetujui. Selesaikan izin Mornye di browser.",
+  "lastfmAuthorizationExpired": "Permintaan koneksi ini kedaluwarsa. Hubungkan kembali untuk melanjutkan.",
+  "lastfmReauthenticate": "Koneksi Last.fm Anda kedaluwarsa. Hubungkan kembali untuk melanjutkan scrobbling.",
+  "lastfmUnavailable": "Last.fm tidak tersedia pada build ini.",
+  "lastfmRejected": "Last.fm menolak scrobble. Periksa tag judul dan artis lagu tersebut.",
+  "lastfmPending": "{count, plural, =1{1 scrobble menunggu sinkronisasi} other{{count} scrobble menunggu sinkronisasi}}",
+  "audioOutputSystem": "Perangkat ini dan Bluetooth",
+  "audioOutputCast": "Cast ke TV",
+  "audioOutputCastDescription": "Perangkat Google Cast di jaringan Wi-Fi yang sama",
+  "audioOutputStopCasting": "Hentikan casting",
+  "audioOutputCastUnavailable": "Google Cast tidak dapat dibuka. Periksa Google Play services dan akses jaringan lokal.",
+  "lyricsAiMode": "Mode Terjemahan",
+  "lyricsAiModeFast": "Cepat",
+  "lyricsAiModeFastDescription": "Menerjemahkan per baris tanpa timing kata. Lebih cepat dengan keluaran lebih sedikit.",
+  "lyricsAiModeSynced": "Sinkron",
+  "lyricsAiModeSyncedDescription": "Menyelaraskan terjemahan dan romanisasi dengan kata serta frasa yang dinyanyikan. Lebih lama dan memerlukan lirik dengan timing kata.",
+  "offlineSave": "Simpan offline",
+  "offlineOnDevice": "Di perangkat ini",
+  "offlineOnIPhone": "Di iPhone",
+  "offlineOnPhone": "Di ponsel",
+  "offlineServerOnly": "Hanya server",
+  "offlineServerAndDevice": "Server + perangkat",
+  "offlineDeviceOnly": "Hanya perangkat",
+  "offlineRemove": "Hapus salinan offline",
+  "offlineRemoveMessage": "Hapus salinan offline dari perangkat ini? File di server tetap disimpan.",
+  "offlineDeleteServer": "Hapus salinan server",
+  "offlineServerReadOnly": "Koneksi server ini tidak mendukung penghapusan file.",
+  "offlineDeleteServerMessage": "Hapus file asli dari server? Salinan offline di perangkat ini tetap disimpan.",
+  "offlineSaving": "Menyimpan offline",
+  "offlineResult": "Disimpan {saved}, sudah tersedia {skipped}, gagal {failed}",
+  "offlineFailed": "Gagal menyimpan salinan offline. Periksa koneksi server dan izin folder download.",
+  "offlineNoSongs": "Tidak ada lagu Library jaringan dalam pilihan ini.",
+  "offlineCopyUnavailable": "Salinan offline tidak tersedia. Simpan kembali sebelum menghapus salinan server.",
+  "offlinePlayingLocal": "Memutar dari perangkat ini",
+  "offlineStreaming": "Streaming dari {server}",
   "liveBroadcastPaused": "Paused",
   "liveBroadcastConnecting": "Connecting…",
   "playbackServerSlow": "The music server is taking too long. Try again?"

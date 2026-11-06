@@ -5,6 +5,33 @@ import 'package:mornye/models/theme_settings.dart';
 import 'package:mornye/utils/artist_utils.dart';
 
 void main() {
+  test('AI translation defaults to Fast and remembers either mode', () {
+    expect(const AppSettings().lyricsAiWordSync, isFalse);
+    expect(AppSettings.fromJson({}).lyricsAiWordSync, isFalse);
+    for (final wordSync in [false, true]) {
+      final settings = const AppSettings().copyWith(lyricsAiWordSync: wordSync);
+      final restored = AppSettings.fromJson(settings.toJson());
+      expect(restored.lyricsAiWordSync, wordSync);
+      expect(restored.copyWith(locale: 'id').lyricsAiWordSync, wordSync);
+    }
+  });
+
+  test('Library sort restores every choice and tolerates old settings', () {
+    expect(AppSettings.fromJson({}).historySortMode, 'latest');
+    for (final invalid in [null, '', 'unsupported', 42]) {
+      expect(
+        AppSettings.fromJson({'historySortMode': invalid}).historySortMode,
+        'latest',
+      );
+    }
+    for (final sort in librarySortModes) {
+      final settings = const AppSettings().copyWith(historySortMode: sort);
+      final restored = AppSettings.fromJson(settings.toJson());
+      expect(restored.historySortMode, sort);
+      expect(restored.copyWith(historyViewMode: 'list').historySortMode, sort);
+    }
+  });
+
   test(
     'retired quality conversion settings do not enable automatic conversion',
     () {
@@ -204,10 +231,15 @@ void main() {
       expect(decoded.useSystemFont, isTrue);
       expect(copied.useSystemFont, isTrue);
       expect(ThemeSettings.fromJson({}).useSystemFont, isFalse);
-      expect(ThemeSettings.fromJson({}).mornyeAccent, MornyeAccent.red);
+      expect(ThemeSettings.fromJson({}).mornyeAccent, MornyeAccent.blue);
       expect(
         ThemeSettings.fromJson({kMornyeAccentKey: 'unknown'}).mornyeAccent,
+        MornyeAccent.blue,
+      );
+      expect(
+        ThemeSettings.fromJson({kMornyeAccentKey: 'red'}).mornyeAccent,
         MornyeAccent.red,
+        reason: 'a saved choice stays',
       );
       expect(
         ThemeSettings.fromJson({'theme_mode': 'invalid'}).themeMode,

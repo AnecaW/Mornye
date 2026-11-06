@@ -63,8 +63,17 @@ extension _SingleItemDownload on DownloadQueueNotifier {
     return null;
   }
 
-  Future<void> _downloadSingleItem(DownloadItem item) =>
-      _DownloadRun(this, item)._run();
+  Future<void> _downloadSingleItem(DownloadItem item) async {
+    final finished = Completer<void>();
+    final attempt = finished.future;
+    _activeDownloadAttempts[item.id] = attempt;
+    try {
+      await _DownloadRun(this, item)._run();
+    } finally {
+      _activeDownloadAttempts.remove(item.id);
+      finished.complete();
+    }
+  }
 }
 
 /// One download attempt for a single queue item.
@@ -865,8 +874,8 @@ class _DownloadRun {
     if (rgPath != null && !isNetworkDownload) {
       n._updateAlbumRgFilePath(trackToDownload, rgPath);
     }
-    await _persistCompletionAndNotify();
-    stageCompleted('quality probe, history and notification');
+    await _persistCompletionAndNotify(onStageCompleted: stageCompleted);
+    stageCompleted('completion cleanup');
     return true;
   }
 
@@ -1567,7 +1576,9 @@ class _DownloadRun {
     }
   }
 
-  Future<void> _persistCompletionAndNotify() async {
+  Future<void> _persistCompletionAndNotify({
+    void Function(String)? onStageCompleted,
+  }) async {
     final path = filePath;
     final historyNotifier = n.ref.read(downloadHistoryProvider.notifier);
     final existingInHistory = path == null
@@ -1614,6 +1625,7 @@ class _DownloadRun {
         probedMetadata: probedFinalMetadata,
         externalLrcWritten: externalLrcWritten,
       );
+      onStageCompleted?.call('final metadata and lyrics probe');
 
       if (isNetworkDownload) {
         final staging = NetworkDownloadStaging.instance;
@@ -1665,6 +1677,7 @@ class _DownloadRun {
         if (item.networkDownloadKeepLocal) {
           historyFilePath = await staging.retainLocal(item.id);
         }
+        onStageCompleted?.call('network upload');
       }
 
       await n._saveDownloadedMotionArtwork(
@@ -1673,6 +1686,7 @@ class _DownloadRun {
         trackToDownload,
         result,
       );
+      onStageCompleted?.call('optional motion artwork');
       await persistBeforePublishingDownloadCompletion(
         persist: () async {
           if (!settings.saveDownloadHistory) return;
@@ -1715,11 +1729,13 @@ class _DownloadRun {
           );
         },
       );
+      onStageCompleted?.call('durable history and completed state');
       // Only durable completions can unblock an album. Checking while this
       // item is still finalizing makes the final track block its own album.
       if (!isNetworkDownload) {
         await n._checkAndWriteAlbumReplayGain(trackToDownload);
       }
+      onStageCompleted?.call('album ReplayGain');
       try {
         await n._notificationService.showDownloadComplete(
           trackName: item.track.name,
@@ -1733,6 +1749,7 @@ class _DownloadRun {
         // must not roll back a valid replacement or its persisted history.
         _log.w('Download completed but notification failed: $e');
       }
+      onStageCompleted?.call('completion notification');
       if (isNetworkDownload) {
         n._purgeAlbumRgEntry(trackToDownload);
         try {

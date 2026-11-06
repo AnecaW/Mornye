@@ -58,8 +58,8 @@ extension _HomeTabExploreUI on _HomeTabState {
     }
     final sectionHeight = _exploreSectionHeight(context);
     final isTablet = MediaQuery.sizeOf(context).shortestSide >= 600;
-    if (section.isYTMusicQuickPicks) {
-      return _buildYTMusicQuickPicksSection(section, colorScheme);
+    if (section.isQuickPicks) {
+      return _buildQuickPicksSection(section, colorScheme);
     }
 
     // Titles and the first card line up with the centered column on tablets;
@@ -107,8 +107,8 @@ extension _HomeTabExploreUI on _HomeTabState {
     );
   }
 
-  /// Skeleton mirroring [_buildExploreSection]'s layout — album cards or
-  /// artist circles — shown while the home feed loads. Wrap in
+  /// Skeleton mirroring [_buildExploreSection]'s album cards or artist
+  /// circles while the home feed loads. Wrap in
   /// [ShimmerLoading] for the sweep effect.
   Widget _buildExploreSectionSkeleton({required bool isArtist}) {
     final cardSize = _exploreCardSize(context);
@@ -166,7 +166,7 @@ extension _HomeTabExploreUI on _HomeTabState {
     );
   }
 
-  Widget _buildYTMusicQuickPicksSection(
+  Widget _buildQuickPicksSection(
     ExploreSection section,
     ColorScheme colorScheme,
   ) {
@@ -562,8 +562,8 @@ extension _HomeTabExploreUI on _HomeTabState {
     }
   }
 
-  /// Music's Search page closes with Browse Categories. Mornye has no genre
-  /// catalog, so each section of the home feed stands in as one tile.
+  /// Each home-feed section becomes a browse tile without requiring the
+  /// provider to expose a separate genre catalog.
   Widget _buildBrowseSliver() {
     return Consumer(
       builder: (context, ref, _) {

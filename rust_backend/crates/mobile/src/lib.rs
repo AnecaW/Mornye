@@ -6,6 +6,7 @@
 //! contract.
 
 mod cancellation;
+mod cast;
 mod data_jobs;
 mod extensions;
 mod ffmpeg;
@@ -16,13 +17,16 @@ mod logging;
 mod lyrics;
 mod manager;
 mod metadata;
+mod native_autoplay_taste;
 mod native_backup;
 mod native_cache;
 mod native_collections;
+mod native_directory_stats;
 mod native_id3;
 mod native_library;
 mod native_listing;
 mod native_lyrics;
+mod native_lyrics_translation;
 mod native_playlist_write;
 mod native_playlists;
 mod native_recognition;

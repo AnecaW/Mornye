@@ -1,6 +1,55 @@
 // ignore_for_file: invalid_use_of_protected_member
 part of 'artist_screen.dart';
 
+/// Side margin of the artist page's desktop sections.
+const double _mornyeSectionInset = 24;
+
+/// Space between the columns of the artist page's desktop highlights.
+const double _mornyeHighlightGap = 16;
+
+/// Width of a highlight column: two fit the pane, and the right margin shows
+/// the edge of the next one.
+double _mornyeHighlightColumn(double paneWidth) => math.max(
+  (paneWidth - _mornyeSectionInset * 2 - _mornyeHighlightGap) / 2,
+  260,
+);
+
+/// Settles a sideways scroll on the nearest column of [extent].
+class _ColumnSnapPhysics extends ScrollPhysics {
+  const _ColumnSnapPhysics({required this.extent, super.parent});
+
+  final double extent;
+
+  @override
+  _ColumnSnapPhysics applyTo(ScrollPhysics? ancestor) =>
+      _ColumnSnapPhysics(extent: extent, parent: buildParent(ancestor));
+
+  @override
+  Simulation? createBallisticSimulation(
+    ScrollMetrics position,
+    double velocity,
+  ) {
+    if (position.outOfRange) {
+      return super.createBallisticSimulation(position, velocity);
+    }
+    final projected = position.pixels + velocity * 0.18;
+    final target = ((projected / extent).round() * extent).clamp(
+      position.minScrollExtent,
+      position.maxScrollExtent,
+    );
+    if ((target - position.pixels).abs() < toleranceFor(position).distance) {
+      return null;
+    }
+    return ScrollSpringSimulation(
+      spring,
+      position.pixels,
+      target,
+      velocity,
+      tolerance: toleranceFor(position),
+    );
+  }
+}
+
 extension _ArtistScreenSections on _ArtistScreenState {
   Widget _concertsButton() => ArtistConcertsButton(
     artistName: widget.artistName,
@@ -57,7 +106,7 @@ extension _ArtistScreenSections on _ArtistScreenState {
       ),
     );
 
-    // Mornye keeps its Apple Music hero on desktop, filling the pane.
+    // Mornye keeps the full-pane hero on desktop.
     if (isDesktopPlatform && !context.isMornye) {
       return _buildDesktopHeader(
         context,
@@ -96,19 +145,55 @@ extension _ArtistScreenSections on _ArtistScreenState {
         artwork: hasMotionBanner
             ? MotionHeaderBanner(videoUrl: headerVideoUrl, fallback: artwork)
             : artwork,
-        actions: isSelectionMode
+        toolbarActions: isSelectionMode
             ? const []
             : [
                 HeaderCircleButton(
                   icon: CupertinoIcons.square_arrow_up,
-                  buttonSize: 50,
-                  iconSize: 24,
-                  iconColor: colorScheme.primary,
-                  glassTintColor: Colors.white,
-                  glassTintOpacity: 0.10,
                   tooltip: context.l10n.openInOtherServices,
                   onPressed: () => _showShareSheet(context),
                 ),
+                HeaderMoreButton(
+                  groups: () => [
+                    [
+                      ContextMenuAction(
+                        icon: isFavoriteArtist
+                            ? CupertinoIcons.star_fill
+                            : CupertinoIcons.star,
+                        label: isFavoriteArtist
+                            ? context.l10n.artistOptionRemoveFromFavorites
+                            : context.l10n.artistOptionAddToFavorites,
+                        onSelected: () => _toggleFavoriteArtist(context),
+                      ),
+                      if (hasDiscography)
+                        ContextMenuAction(
+                          icon: CupertinoIcons.arrow_down,
+                          label: context.l10n.discographyDownload,
+                          onSelected: () => _showDiscographyOptions(
+                            context,
+                            colorScheme,
+                            albums,
+                          ),
+                        ),
+                    ],
+                  ],
+                ),
+              ],
+        actions: isSelectionMode
+            ? const []
+            : [
+                // Balances the star, keeping the larger button centered.
+                if (_isLoadingDiscography || hasDiscography)
+                  HeaderCircleButton(
+                    icon: CupertinoIcons.shuffle,
+                    buttonSize: 50,
+                    iconSize: 24,
+                    iconColor: colorScheme.primary,
+                    glassTintColor: Colors.white,
+                    glassTintOpacity: 0.10,
+                    tooltip: context.l10n.actionShuffle,
+                    onPressed: () => _shuffleArtist(context),
+                  ),
                 if (_isLoadingDiscography)
                   const ShimmerLoading(
                     child: SkeletonBox(width: 74, height: 74, borderRadius: 37),
@@ -576,6 +661,16 @@ extension _ArtistScreenSections on _ArtistScreenState {
     );
   }
 
+  Future<void> _shuffleArtist(BuildContext context) async {
+    final shuffled = await ref
+        .read(musicPlayerControllerProvider)
+        .shuffleLibrary(artist: widget.artistName);
+    if (shuffled || !context.mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(context.l10n.artistShuffleEmpty)));
+  }
+
   void _showShareSheet(BuildContext context) {
     CrossExtensionShareSheet.show(
       context,
@@ -586,76 +681,166 @@ extension _ArtistScreenSections on _ArtistScreenState {
     );
   }
 
-  Widget _buildMornyeFeaturedAlbum(BuildContext context, ArtistAlbum album) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 28, 20, 0),
-      child: Material(
-        color: Colors.white.withValues(alpha: 0.10),
-        borderRadius: BorderRadius.circular(14),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: () => _navigateToAlbum(album),
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Row(
-              children: [
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(5),
-                  child: SizedBox.square(
-                    dimension: 76,
-                    child: album.coverUrl != null
-                        ? CachedCoverImage(
-                            imageUrl: album.coverUrl!,
-                            fit: BoxFit.cover,
-                          )
-                        : const Icon(CupertinoIcons.square_stack, size: 32),
+  /// Latest Release and Top Songs share one row of equal
+  /// columns that scroll sideways together, each snapping to the left edge.
+  Widget _buildMornyeDesktopHighlights(
+    BuildContext context,
+    ColorScheme colorScheme,
+    ArtistAlbum? latest,
+  ) {
+    const rowsPerColumn = 3;
+    const rowExtent = 56.0;
+    const contentExtent = rowsPerColumn * rowExtent;
+    const headingExtent = 44.0;
+    final tracks = _topTracks ?? const <Track>[];
+    _historySnapshot.update(tracks);
+    final historyKeys = _historySnapshot.lookupKeys;
+    final existingHistoryKeys = ref.watch(
+      downloadHistoryVisibleBatchExistsProvider(_historySnapshot.request),
+    );
+    final titleStyle = Theme.of(
+      context,
+    ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold);
+    Widget column({required String? heading, required Widget child}) => Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          height: headingExtent,
+          child: heading == null
+              ? null
+              : Text(heading, maxLines: 1, style: titleStyle),
+        ),
+        SizedBox(height: contentExtent, child: child),
+      ],
+    );
+    final columns = [
+      if (latest != null)
+        column(
+          heading: context.l10n.artistLatestRelease,
+          child: _buildMornyeLatestRelease(context, latest, contentExtent),
+        ),
+      for (var start = 0; start < tracks.length; start += rowsPerColumn)
+        column(
+          heading: start == 0 ? context.l10n.artistTopSongs : null,
+          child: Column(
+            children: [
+              for (
+                var index = start;
+                index < math.min(start + rowsPerColumn, tracks.length);
+                index++
+              )
+                SizedBox(
+                  height: rowExtent,
+                  child: _buildPopularTrackItem(
+                    index + 1,
+                    tracks[index],
+                    colorScheme,
+                    existingHistoryKeys.contains(historyKeys[index]),
+                    compact: true,
+                    separated:
+                        index <
+                        math.min(start + rowsPerColumn, tracks.length) - 1,
                   ),
                 ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (album.releaseDate.isNotEmpty)
-                        Text(
-                          album.releaseDate.split('-').first,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.white.withValues(alpha: 0.7),
-                          ),
-                        ),
-                      const SizedBox(height: 4),
-                      Text(
-                        album.name,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      if (album.totalTracks > 0) ...[
-                        const SizedBox(height: 4),
-                        Text(
-                          context.l10n.tracksCount(album.totalTracks),
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.white.withValues(alpha: 0.7),
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Icon(
-                  CupertinoIcons.forward,
-                  size: 14,
-                  color: Colors.white.withValues(alpha: 0.7),
-                ),
-              ],
-            ),
+            ],
           ),
+        ),
+    ];
+    return Padding(
+      padding: const EdgeInsets.only(top: 28),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final width = _mornyeHighlightColumn(constraints.maxWidth);
+          return SizedBox(
+            height: headingExtent + contentExtent,
+            child: DesktopScrollArrows(
+              builder: (context, controller) => ListView.separated(
+                key: const ValueKey('artist-highlights'),
+                controller: controller,
+                scrollDirection: Axis.horizontal,
+                physics: _ColumnSnapPhysics(
+                  extent: width + _mornyeHighlightGap,
+                ),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: _mornyeSectionInset,
+                ),
+                itemCount: columns.length,
+                separatorBuilder: (_, _) =>
+                    const SizedBox(width: _mornyeHighlightGap),
+                itemBuilder: (context, index) =>
+                    SizedBox(width: width, child: columns[index]),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  /// The newest release, cover first with its details beside it.
+  Widget _buildMornyeLatestRelease(
+    BuildContext context,
+    ArtistAlbum album,
+    double extent,
+  ) {
+    final textTheme = Theme.of(context).textTheme;
+    final secondary = Theme.of(context).colorScheme.onSurfaceVariant;
+    final released = DateTime.tryParse(album.releaseDate);
+    final date = released == null
+        ? album.releaseDate
+        : DateFormat.yMMMd(
+            Localizations.localeOf(context).toLanguageTag(),
+          ).format(released);
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => _navigateToAlbum(album),
+        child: Row(
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: SizedBox.square(
+                dimension: extent,
+                child: album.coverUrl != null
+                    ? CachedCoverImage(
+                        imageUrl: album.coverUrl!,
+                        fit: BoxFit.cover,
+                      )
+                    : const Icon(CupertinoIcons.square_stack, size: 32),
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (date.isNotEmpty)
+                    Text(
+                      date,
+                      maxLines: 1,
+                      style: textTheme.bodySmall?.copyWith(
+                        color: secondary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  Text(
+                    album.name,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: textTheme.bodyLarge,
+                  ),
+                  if (album.totalTracks > 0)
+                    Text(
+                      context.l10n.tracksCount(album.totalTracks),
+                      maxLines: 1,
+                      style: textTheme.bodyMedium?.copyWith(color: secondary),
+                    ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -750,8 +935,10 @@ extension _ArtistScreenSections on _ArtistScreenState {
     int rank,
     Track track,
     ColorScheme colorScheme,
-    bool isInHistory,
-  ) {
+    bool isInHistory, {
+    bool compact = false,
+    bool separated = true,
+  }) {
     return Consumer(
       builder: (context, ref, child) {
         final queueItem = ref.watch(
@@ -803,12 +990,14 @@ extension _ArtistScreenSections on _ArtistScreenState {
                   hasLocalPlaybackCandidate: isInHistory || isInLocalLibrary,
                 ),
             child: Padding(
-              padding: EdgeInsetsDirectional.fromSTEB(
-                context.isMornye ? 20 : 16,
-                8,
-                10,
-                8,
-              ),
+              padding: compact
+                  ? const EdgeInsets.symmetric(vertical: 4)
+                  : EdgeInsetsDirectional.fromSTEB(
+                      context.isMornye ? 20 : 16,
+                      8,
+                      10,
+                      8,
+                    ),
               child: Row(
                 children: [
                   if (!context.isMornye) ...[
@@ -871,7 +1060,11 @@ extension _ArtistScreenSections on _ArtistScreenState {
                           track.name,
                           style: Theme.of(context).textTheme.bodyMedium
                               ?.copyWith(
-                                fontSize: context.isMornye ? 17 : null,
+                                fontSize: compact
+                                    ? 14
+                                    : context.isMornye
+                                    ? 17
+                                    : null,
                                 fontWeight: context.isMornye
                                     ? FontWeight.w400
                                     : FontWeight.w500,
@@ -895,7 +1088,9 @@ extension _ArtistScreenSections on _ArtistScreenState {
                                     style: Theme.of(context).textTheme.bodySmall
                                         ?.copyWith(
                                           color: colorScheme.onSurfaceVariant,
-                                          fontSize: context.isMornye
+                                          fontSize: compact
+                                              ? 13
+                                              : context.isMornye
                                               ? 15
                                               : null,
                                         ),
@@ -922,13 +1117,13 @@ extension _ArtistScreenSections on _ArtistScreenState {
             ),
           ),
         );
-        if (!context.isMornye) return row;
+        if (!context.isMornye || !separated) return row;
         return Stack(
           children: [
             row,
             PositionedDirectional(
-              start: 80,
-              end: 20,
+              start: compact ? 60 : 80,
+              end: compact ? 0 : 20,
               bottom: 0,
               child: Divider(
                 height: 1,
@@ -1008,20 +1203,72 @@ extension _ArtistScreenSections on _ArtistScreenState {
     ColorScheme colorScheme, {
     bool showTypeBadge = false,
   }) {
-    final sectionHeight = artistAlbumSectionHeight(context);
-    final tileSize = artistAlbumTileSize(context);
+    if (isDesktopPlatform && context.isMornye) {
+      // Four covers to the pane's width: two line up under each highlight
+      // column above.
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          final column = _mornyeHighlightColumn(constraints.maxWidth);
+          final tile = (column - _mornyeHighlightGap) / 2;
+          return _albumShelf(
+            context,
+            title,
+            albums,
+            colorScheme,
+            showTypeBadge: showTypeBadge,
+            tileSize: tile,
+            sectionHeight:
+                tile +
+                artistAlbumSectionHeight(context) -
+                artistAlbumTileSize(context),
+            headingStyle: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+            headingPadding: const EdgeInsets.fromLTRB(
+              _mornyeSectionInset,
+              28,
+              _mornyeSectionInset,
+              12,
+            ),
+            listPadding: _mornyeSectionInset - 4,
+          );
+        },
+      );
+    }
+    return _albumShelf(
+      context,
+      '$title (${albums.length})',
+      albums,
+      colorScheme,
+      showTypeBadge: showTypeBadge,
+      tileSize: artistAlbumTileSize(context),
+      sectionHeight: artistAlbumSectionHeight(context),
+      headingStyle: Theme.of(
+        context,
+      ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+      headingPadding: const EdgeInsets.fromLTRB(16, 24, 16, 12),
+      listPadding: 12,
+    );
+  }
 
+  Widget _albumShelf(
+    BuildContext context,
+    String title,
+    List<ArtistAlbum> albums,
+    ColorScheme colorScheme, {
+    required bool showTypeBadge,
+    required double tileSize,
+    required double sectionHeight,
+    required TextStyle? headingStyle,
+    required EdgeInsets headingPadding,
+    required double listPadding,
+  }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 24, 16, 12),
-          child: Text(
-            '$title (${albums.length})',
-            style: Theme.of(
-              context,
-            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
-          ),
+          padding: headingPadding,
+          child: Text(title, style: headingStyle),
         ),
         NotificationListener<ScrollNotification>(
           onNotification: _onAlbumsScroll,
@@ -1036,7 +1283,7 @@ extension _ArtistScreenSections on _ArtistScreenState {
                 builder: (context, controller) => ListView.builder(
                   controller: controller,
                   scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  padding: EdgeInsets.symmetric(horizontal: listPadding),
                   itemCount: albums.length,
                   itemBuilder: (context, index) {
                     final album = albums[index];

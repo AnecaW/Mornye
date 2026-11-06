@@ -3,9 +3,11 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show compute, visibleForTesting;
+import 'package:flutter/services.dart' show MissingPluginException;
 import 'package:mornye/services/autoplay_personalization.dart';
 import 'package:mornye/services/autoplay_signal.dart';
 import 'package:mornye/services/playable_media.dart';
+import 'package:mornye/services/platform_bridge.dart';
 import 'package:mornye/services/sqlite_helpers.dart' as sqlite;
 import 'package:mornye/utils/logger.dart';
 import 'package:sqflite/sqflite.dart';
@@ -141,28 +143,22 @@ class AutoplayTasteModel {
   Float32List? artist(String artist) => _vector(_artistToken(_key(artist)));
 
   /// Replaces the stored model. One row per token keeps rows small.
-  Future<void> _save(Database db) => db.transaction((transaction) async {
-    final batch = transaction.batch()
-      ..delete('model')
-      ..delete('vectors')
-      ..insert('model', {
-        'id': 1,
-        'version': _version,
-        'through': through,
-        'positives': positives,
+  Future<void> _save(Database db, List<(String, Uint8List)> rows) =>
+      db.transaction((transaction) async {
+        final batch = transaction.batch()
+          ..delete('model')
+          ..delete('vectors')
+          ..insert('model', {
+            'id': 1,
+            'version': _version,
+            'through': through,
+            'positives': positives,
+          });
+        for (final (token, bytes) in rows) {
+          batch.insert('vectors', {'token': token, 'vector': bytes});
+        }
+        await batch.commit(noResult: true);
       });
-    for (var row = 0; row < tokens.length; row++) {
-      final data = ByteData(dimensions * 4);
-      for (var k = 0; k < dimensions; k++) {
-        data.setFloat32(k * 4, vectors[row * dimensions + k], Endian.little);
-      }
-      batch.insert('vectors', {
-        'token': tokens[row],
-        'vector': data.buffer.asUint8List(),
-      });
-    }
-    await batch.commit(noResult: true);
-  });
 
   static Future<AutoplayTasteModel?> _load(Database db) async {
     final meta = await db.query('model', where: 'id = 1');
@@ -202,6 +198,92 @@ class AutoplayTasteModel {
     );
   }
 }
+
+typedef _PackedTaste = ({
+  AutoplayTasteModel model,
+  List<(String, Uint8List)> rows,
+});
+
+_PackedTaste _packTaste(AutoplayTasteModel model) {
+  const dimensions = AutoplayTasteModel.dimensions;
+  final rows = <(String, Uint8List)>[];
+  for (var row = 0; row < model.tokens.length; row++) {
+    final data = ByteData(dimensions * 4);
+    for (var k = 0; k < dimensions; k++) {
+      data.setFloat32(
+        k * 4,
+        model.vectors[row * dimensions + k],
+        Endian.little,
+      );
+    }
+    rows.add((model.tokens[row], data.buffer.asUint8List()));
+  }
+  return (model: model, rows: rows);
+}
+
+_PackedTaste _trainPackedTaste(List<AutoplayTastePlay> plays) =>
+    _packTaste(trainAutoplayTaste(plays));
+
+Map<String, dynamic> _tasteTrainingRequest(List<AutoplayTastePlay> plays) => {
+  'operation': 'train_autoplay_taste',
+  'plays': [
+    for (final play in plays)
+      {
+        'id': play.id,
+        'song': play.song,
+        'artist': play.artist,
+        'atMicros': play.at.microsecondsSinceEpoch,
+        'kind': play.kind.name,
+        'reward': play.reward,
+      },
+  ],
+};
+
+_PackedTaste _hydrateNativeTaste(Map<String, dynamic> result) {
+  final tokens = (result['tokens'] as List).cast<String>();
+  final values = (result['vectors'] as List).cast<num>();
+  if (tokens.length > _vocabulary ||
+      values.length != tokens.length * AutoplayTasteModel.dimensions ||
+      values.any((value) => !value.isFinite || value.abs() > 1.001)) {
+    throw const FormatException('Invalid native autoplay taste model');
+  }
+  return _packTaste(
+    AutoplayTasteModel(
+      tokens: tokens,
+      vectors: Float32List.fromList([
+        for (final value in values) value.toDouble(),
+      ]),
+      positives: result['positives'] as int,
+      through: result['through'] as int,
+    ),
+  );
+}
+
+Future<_PackedTaste> _trainNativePackedTaste(
+  List<AutoplayTastePlay> plays,
+) async {
+  try {
+    final request = await compute(_tasteTrainingRequest, plays);
+    final result = await PlatformBridge.runNativeDataJob(request);
+    return await compute(_hydrateNativeTaste, result);
+  } on MissingPluginException {
+    return compute(_trainPackedTaste, plays, debugLabel: 'autoplay-taste');
+  }
+}
+
+/// Trains one snapshot on the native worker; persistence stays with Dart.
+Future<AutoplayTasteModel> trainAutoplayTasteInBackground(
+  List<AutoplayTastePlay> plays,
+) async => (await _trainNativePackedTaste(plays)).model;
+
+@visibleForTesting
+Future<AutoplayTasteModel> trainAutoplayTasteDartInBackground(
+  List<AutoplayTastePlay> plays,
+) async => (await compute(
+  _trainPackedTaste,
+  plays,
+  debugLabel: 'autoplay-taste',
+)).model;
 
 class _Position {
   _Position(this.song, this.artist, this.weight);
@@ -535,15 +617,17 @@ class AutoplayTaste {
     Future<Database> Function()? open,
     Future<AutoplayTasteModel> Function(List<AutoplayTastePlay>)? train,
   }) : _open = open ?? _openShared,
-       _trainer = train ?? _trainOnWorker;
+       _trainer = train == null
+           ? _trainOnWorker
+           : ((plays) async => _packTaste(await train(plays)));
 
   final Future<Database> Function() _open;
-  final Future<AutoplayTasteModel> Function(List<AutoplayTastePlay>) _trainer;
+  final Future<_PackedTaste> Function(List<AutoplayTastePlay>) _trainer;
   final _pending = <AutoplayTastePlay>[];
   AutoplayTasteModel? _model;
   Future<void>? _loading, _training, _queued;
   Future<void> _writing = Future<void>.value();
-  Timer? _saveTimer;
+  Timer? _saveTimer, _trainTimer;
   int _sinceTraining = 0, _generation = 0;
   bool _disposed = false;
 
@@ -597,9 +681,8 @@ class AutoplayTaste {
     options: OpenDatabaseOptions(version: _schema, onCreate: _create),
   );
 
-  static Future<AutoplayTasteModel> _trainOnWorker(
-    List<AutoplayTastePlay> plays,
-  ) => compute(trainAutoplayTaste, plays, debugLabel: 'autoplay-taste');
+  static Future<_PackedTaste> _trainOnWorker(List<AutoplayTastePlay> plays) =>
+      _trainNativePackedTaste(plays);
 
   /// The model autoplay uses now, if any.
   @visibleForTesting
@@ -611,7 +694,15 @@ class AutoplayTaste {
     _pending.add(AutoplayTastePlay.of(feedback));
     if (_pending.length > autoplayTasteLogLimit) _pending.removeAt(0);
     _saveTimer ??= Timer(const Duration(seconds: 10), () => unawaited(flush()));
-    if (++_sinceTraining >= _retrainAfter) unawaited(train());
+    if (++_sinceTraining >= _retrainAfter) _scheduleTraining();
+  }
+
+  void _scheduleTraining() {
+    if (_disposed) return;
+    _trainTimer ??= Timer(const Duration(seconds: 20), () {
+      _trainTimer = null;
+      unawaited(train());
+    });
   }
 
   Future<void> flush() {
@@ -684,7 +775,7 @@ class AutoplayTaste {
       if (generation != _generation || _disposed) return;
       // Training may have finished first.
       final model = _model ??= stored;
-      if (last > (model?.through ?? 0)) unawaited(train());
+      if (last > (model?.through ?? 0)) _scheduleTraining();
     } catch (error) {
       _loading = null;
       _log.w('Autoplay listening sessions unavailable: $error');
@@ -695,6 +786,9 @@ class AutoplayTaste {
   /// A run already learning read the log before any later plays, so one
   /// more follows it then.
   Future<void> train() {
+    _trainTimer?.cancel();
+    _trainTimer = null;
+    if (_disposed) return Future<void>.value();
     final running = _training;
     if (running == null) {
       return _training = _train().whenComplete(() => _training = null);
@@ -713,8 +807,9 @@ class AutoplayTaste {
       final plays = await readLog();
       if (plays.isEmpty || generation != _generation || _disposed) return;
       final clock = Stopwatch()..start();
-      final model = await _trainer(plays);
+      final trained = await _trainer(plays);
       if (generation != _generation || _disposed) return;
+      final model = trained.model;
       _model = model;
       _log.d(
         'Learned ${model.tokens.length} songs and artists from '
@@ -722,7 +817,9 @@ class AutoplayTaste {
       );
       await (_writing = _writing.then((_) async {
         try {
-          if (generation == _generation) await model._save(await _open());
+          if (generation == _generation) {
+            await model._save(await _open(), trained.rows);
+          }
         } catch (error) {
           // The log stays; the next launch learns from it again.
           _log.w('Could not cache what autoplay learned: $error');
@@ -773,6 +870,8 @@ class AutoplayTaste {
     _pending.clear();
     _saveTimer?.cancel();
     _saveTimer = null;
+    _trainTimer?.cancel();
+    _trainTimer = null;
     _model = null;
     _sinceTraining = 0;
     await (_writing = _writing.then((_) async {
@@ -791,6 +890,8 @@ class AutoplayTaste {
 
   Future<void> dispose() async {
     _disposed = true;
+    _trainTimer?.cancel();
+    _trainTimer = null;
     await flush();
   }
 }

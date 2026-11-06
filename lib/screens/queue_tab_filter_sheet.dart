@@ -49,6 +49,7 @@ extension _QueueTabFilterSheet on _QueueTabState {
                         (null, context.l10n.libraryFilterAll),
                         ('downloaded', context.l10n.libraryFilterDownloaded),
                         ('local', context.l10n.libraryFilterLocal),
+                        ('on-device', offlineDeviceFilterLabel(context)),
                       ])
                         AppChoiceChip(
                           label: Text(label),
@@ -239,9 +240,13 @@ extension _QueueTabFilterSheet on _QueueTabState {
                           _filterQuality = tempQuality;
                           _filterFormat = tempFormat;
                           _filterMetadata = tempMetadata;
-                          _sortMode = tempSortMode;
                           _resetLibraryPaging();
                         });
+                        if (tempSortMode != _sortMode) {
+                          ref
+                              .read(settingsProvider.notifier)
+                              .setHistorySortMode(tempSortMode);
+                        }
                         Navigator.pop(context);
                         if (widget.librarySection == null &&
                             isAlbumCompletenessFilter(tempMetadata)) {

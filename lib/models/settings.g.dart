@@ -86,6 +86,7 @@ AppSettings _$AppSettingsFromJson(Map<String, dynamic> json) => AppSettings(
       ? ''
       : playerCoverStyleFromJson(json['playerCoverStyle']),
   landscapeLyricsArtwork: json['landscapeLyricsArtwork'] as bool? ?? false,
+  autoHideLyricsControls: json['autoHideLyricsControls'] as bool? ?? true,
   compactPlayer: json['compactPlayer'] as bool? ?? false,
   isFirstLaunch: json['isFirstLaunch'] as bool? ?? true,
   checkForUpdates: json['checkForUpdates'] as bool? ?? true,
@@ -101,6 +102,9 @@ AppSettings _$AppSettingsFromJson(Map<String, dynamic> json) => AppSettings(
       json['filterContributingArtistsInAlbumArtist'] as bool? ?? false,
   historyViewMode: json['historyViewMode'] as String? ?? 'grid',
   historyFilterMode: json['historyFilterMode'] as String? ?? 'all',
+  historySortMode: json['historySortMode'] == null
+      ? 'latest'
+      : librarySortModeFromJson(json['historySortMode']),
   defaultLibraryView: json['defaultLibraryView'] as String? ?? 'last',
   libraryQualityLabelMode:
       json['libraryQualityLabelMode'] as String? ??
@@ -178,6 +182,7 @@ AppSettings _$AppSettingsFromJson(Map<String, dynamic> json) => AppSettings(
   lyricsAiInstruction: json['lyricsAiInstruction'] as String? ?? '',
   lyricsAutoTranslate: json['lyricsAutoTranslate'] as bool? ?? false,
   lyricsAiRomanize: json['lyricsAiRomanize'] as bool? ?? true,
+  lyricsAiWordSync: json['lyricsAiWordSync'] as bool? ?? false,
   lastSeenVersion: json['lastSeenVersion'] as String? ?? '',
   deduplicateDownloads: json['deduplicateDownloads'] as bool? ?? true,
   allowQualityVariants: json['allowQualityVariants'] as bool? ?? false,
@@ -238,6 +243,7 @@ Map<String, dynamic> _$AppSettingsToJson(
   'musicHapticsStrength': instance.musicHapticsStrength,
   'playerCoverStyle': instance.playerCoverStyle,
   'landscapeLyricsArtwork': instance.landscapeLyricsArtwork,
+  'autoHideLyricsControls': instance.autoHideLyricsControls,
   'compactPlayer': instance.compactPlayer,
   'isFirstLaunch': instance.isFirstLaunch,
   'checkForUpdates': instance.checkForUpdates,
@@ -252,6 +258,7 @@ Map<String, dynamic> _$AppSettingsToJson(
       instance.filterContributingArtistsInAlbumArtist,
   'historyViewMode': instance.historyViewMode,
   'historyFilterMode': instance.historyFilterMode,
+  'historySortMode': instance.historySortMode,
   'defaultLibraryView': instance.defaultLibraryView,
   'libraryQualityLabelMode': instance.libraryQualityLabelMode,
   'askQualityBeforeDownload': instance.askQualityBeforeDownload,
@@ -308,6 +315,7 @@ Map<String, dynamic> _$AppSettingsToJson(
   'lyricsAiInstruction': instance.lyricsAiInstruction,
   'lyricsAutoTranslate': instance.lyricsAutoTranslate,
   'lyricsAiRomanize': instance.lyricsAiRomanize,
+  'lyricsAiWordSync': instance.lyricsAiWordSync,
   'lastSeenVersion': instance.lastSeenVersion,
   'deduplicateDownloads': instance.deduplicateDownloads,
   'allowQualityVariants': instance.allowQualityVariants,

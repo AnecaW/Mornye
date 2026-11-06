@@ -1,10 +1,12 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mornye/constants/app_info.dart';
+import 'package:mornye/controllers/open_audio_controller.dart';
 import 'package:mornye/l10n/l10n.dart';
 import 'package:mornye/providers/music_player_provider.dart';
 import 'package:mornye/providers/settings_provider.dart';
@@ -15,6 +17,7 @@ import 'package:mornye/services/music_playback_deck.dart'
 import 'package:mornye/services/shell_navigation_service.dart';
 import 'package:mornye/theme/mornye_theme.dart';
 import 'package:mornye/widgets/app_refresh_indicator.dart';
+import 'package:mornye/widgets/open_audio_button.dart';
 import 'package:mornye/widgets/desktop/desktop_commands.dart';
 import 'package:mornye/widgets/desktop/desktop_inspector.dart';
 import 'package:mornye/widgets/desktop/desktop_player_bar.dart';
@@ -94,13 +97,17 @@ class _DesktopShortcutsState extends ConsumerState<DesktopShortcuts> {
       return false;
     }
     return switch (command) {
+      DesktopCommand.openAudioFiles ||
+      DesktopCommand.openAudioFolder => !ref.read(openAudioControllerProvider),
       DesktopCommand.playPause => !_editingText && _nothingFocused,
       // Text fields use these keys for caret movement.
       DesktopCommand.next ||
       DesktopCommand.previous ||
       DesktopCommand.volumeUp ||
       DesktopCommand.volumeDown => !_editingText,
-      DesktopCommand.back => _canCloseTopLayer,
+      DesktopCommand.back =>
+        _canCloseTopLayer || ShellNavigationService.canNavigateBack,
+      DesktopCommand.forward => ShellNavigationService.canNavigateForward,
       DesktopCommand.dismiss =>
         _editingText ||
             _canCloseTopLayer ||
@@ -113,6 +120,18 @@ class _DesktopShortcutsState extends ConsumerState<DesktopShortcuts> {
     if (_playerCommand(command) && !ref.read(playerUiEnabledProvider)) return;
     final controller = ref.read(musicPlayerControllerProvider);
     switch (command) {
+      case DesktopCommand.openAudioFiles:
+      case DesktopCommand.openAudioFolder:
+        final target = _rootNavigator?.context;
+        if (target != null) {
+          unawaited(
+            pickOpenAudio(
+              target,
+              ref,
+              folder: command == DesktopCommand.openAudioFolder,
+            ),
+          );
+        }
       case DesktopCommand.playPause:
         unawaited(
           controller.togglePlayPause(ref.read(playbackPlayingProvider)),
@@ -132,8 +151,11 @@ class _DesktopShortcutsState extends ConsumerState<DesktopShortcuts> {
         _closePages();
         ShellNavigationService.requestTab(ShellTab.settings);
       case DesktopCommand.back:
-        _closeTopLayer();
+        _goBack();
+      case DesktopCommand.forward:
+        ShellNavigationService.navigateForward();
       case DesktopCommand.dismiss:
+        // Escape only closes layers; it never switches destinations.
         if (_editingText) {
           FocusManager.instance.primaryFocus?.unfocus();
         } else if (_canCloseTopLayer) {
@@ -197,21 +219,47 @@ class _DesktopShortcutsState extends ConsumerState<DesktopShortcuts> {
 
   bool get _canCloseTopLayer =>
       _rootNavigator?.canPop() == true ||
-      canDismissDesktopPlayerLayer(_windowWidth) ||
+      canDismissDesktopPlayerLayer(_windowWidth, mornye: context.isMornye) ||
       ShellNavigationService.activeBackNavigator()?.canPop() == true;
 
-  /// Closes what Escape or Back closes: a dialog or page over the shell
-  /// first, then the floating inspector or Now Playing, then the active
-  /// destination's own pages.
+  /// Closes what Escape closes: a dialog or page over the shell first, then
+  /// the floating inspector or Now Playing, then the active destination's
+  /// own pages.
   void _closeTopLayer() {
     final root = _rootNavigator;
     if (root != null && root.canPop()) {
       unawaited(root.maybePop());
       return;
     }
-    if (dismissDesktopPlayerLayer(_windowWidth)) return;
+    if (dismissDesktopPlayerLayer(_windowWidth, mornye: context.isMornye)) {
+      return;
+    }
     final tab = ShellNavigationService.activeBackNavigator();
     if (tab != null && tab.canPop()) unawaited(tab.maybePop());
+  }
+
+  /// Back closes the top layer like Escape, and once nothing is left to
+  /// close, returns to the previously visited destination.
+  void _goBack() {
+    if (_canCloseTopLayer) {
+      _closeTopLayer();
+    } else {
+      ShellNavigationService.navigateBack();
+    }
+  }
+
+  int _lastPointerButtons = 0;
+
+  /// The mouse side buttons, which only report through pointer buttons.
+  void _handlePointerEvent(PointerEvent event) {
+    if (event.kind != PointerDeviceKind.mouse) return;
+    final pressed = event.buttons & ~_lastPointerButtons;
+    _lastPointerButtons = event.buttons;
+    if ((pressed & kBackMouseButton) != 0) {
+      _goBack();
+    } else if ((pressed & kForwardMouseButton) != 0) {
+      ShellNavigationService.navigateForward();
+    }
   }
 
   void _nudgeVolume(double delta) {
@@ -258,6 +306,14 @@ class _DesktopShortcutsState extends ConsumerState<DesktopShortcuts> {
           ),
         ),
       ),
+    );
+    child = Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: _handlePointerEvent,
+      onPointerMove: _handlePointerEvent,
+      onPointerUp: _handlePointerEvent,
+      onPointerCancel: (_) => _lastPointerButtons = 0,
+      child: child,
     );
     if (defaultTargetPlatform == TargetPlatform.macOS) {
       child = ValueListenableBuilder<DesktopWindowMode>(
@@ -428,7 +484,11 @@ class _DesktopMenuBarState extends ConsumerState<_DesktopMenuBar> {
       ),
       PlatformMenu(
         label: l10n.desktopMenuFile,
-        menus: [_command(l10n.mornyeSearch, DesktopCommand.search)],
+        menus: [
+          _command(l10n.openAudioFiles, DesktopCommand.openAudioFiles),
+          _command(l10n.openAudioFolder, DesktopCommand.openAudioFolder),
+          _command(l10n.mornyeSearch, DesktopCommand.search),
+        ],
       ),
       PlatformMenu(
         label: l10n.desktopMenuEdit,
@@ -471,6 +531,7 @@ class _DesktopMenuBarState extends ConsumerState<_DesktopMenuBar> {
           PlatformMenuItemGroup(
             members: [
               _command(material.backButtonTooltip, DesktopCommand.back),
+              _command(l10n.desktopShortcutForward, DesktopCommand.forward),
               _command(l10n.desktopMenuRefresh, DesktopCommand.refresh),
               if (showPlayer)
                 _command(l10n.nowPlayingTabLyrics, DesktopCommand.lyrics),

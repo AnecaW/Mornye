@@ -1,6 +1,7 @@
 //! One scan owner, bounded worker results and shared full/incremental traversal.
 
 use super::{Backend, library_extension, modified_time, scan_time};
+use crate::files::SyncBatch;
 use cap_std::fs::OpenOptions;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -236,9 +237,21 @@ impl Backend {
             },
             check,
         )?;
-        Ok(
-            json!({"scanned":tracks,"deletedPaths":if summary.deleted.is_empty() { Value::Null } else { json!(summary.deleted) },"skippedCount":summary.skipped,"totalFiles":summary.total}),
-        )
+        // json! serializes every value again by reference; moving the rows
+        // into the map avoids a second copy of the whole delta.
+        let mut delta = serde_json::Map::new();
+        delta.insert("scanned".into(), Value::Array(tracks));
+        delta.insert(
+            "deletedPaths".into(),
+            if summary.deleted.is_empty() {
+                Value::Null
+            } else {
+                summary.deleted.into()
+            },
+        );
+        delta.insert("skippedCount".into(), summary.skipped.into());
+        delta.insert("totalFiles".into(), summary.total.into());
+        Ok(Value::Object(delta))
     }
 
     pub fn scan_library_folder_to_ndjson_file(
@@ -526,12 +539,15 @@ impl Backend {
         };
         let next = AtomicUsize::new(0);
         let stop = AtomicBool::new(false);
+        // Thumbnails get one folder flush when the workers finish, also when
+        // the scan fails.
+        let covers = SyncBatch::default();
         thread::scope(|scope| -> Result<(), String> {
             let (sender, receiver) = mpsc::sync_channel(workers * 16);
             for _ in 0..workers {
                 let sender = sender.clone();
-                let (audio, next, stop, check, time, files) =
-                    (&audio, &next, &stop, &check, &time, &files);
+                let (audio, next, stop, check, time, files, covers) =
+                    (&audio, &next, &stop, &check, &time, &files, &covers);
                 scope.spawn(move || {
                     while !stop.load(Ordering::Acquire) {
                         let Some((index, file)) = audio.get(next.fetch_add(1, Ordering::AcqRel))
@@ -546,6 +562,7 @@ impl Backend {
                                 &format!("{}|{}|{}", file.path, file.size, file.modified),
                                 time,
                                 file.modified,
+                                Some(covers),
                                 check,
                             )
                         });
@@ -579,6 +596,7 @@ impl Backend {
             }
             failure.map_or(Ok(()), Err)
         })?;
+        covers.flush();
         check()?;
         for (_, values) in results {
             for value in values {
@@ -673,7 +691,9 @@ fn update(run: &Run, completed: usize, path: &str, error: Option<&String>) {
 mod tests {
     use super::*;
     use crate::RuntimeLimits;
+    use crate::backend::cover::tests::{artwork, flac_with_picture};
     use std::fs;
+    use std::path::PathBuf;
 
     fn backend(root: &Path, library: &Path) -> Backend {
         let backend = Backend::new(
@@ -835,6 +855,231 @@ mod tests {
         assert_eq!(failures.len(), 1);
         assert_eq!(failures[0]["path"], locked.to_string_lossy().as_ref());
         assert!(!failures[0]["message"].as_str().unwrap().is_empty());
+    }
+
+    /// Writes `albums` folders of `tracks` FLAC files; the songs of one album
+    /// embed the same 1200 px picture. Returns the canonical library folder.
+    fn library_with_artwork(root: &Path, albums: u32, tracks: u32, seed: u32) -> PathBuf {
+        let library = fs::canonicalize(root).unwrap().join("library");
+        for album in 0..albums {
+            let flac = flac_with_picture(&artwork(seed.wrapping_add(album), 1200));
+            let folder = library.join(format!("{album:04}"));
+            fs::create_dir_all(&folder).unwrap();
+            for track in 0..tracks {
+                fs::write(folder.join(format!("{track:02}.flac")), &flac).unwrap();
+            }
+        }
+        library
+    }
+
+    fn thumbnails(covers: &Path) -> Vec<(String, Vec<u8>)> {
+        let mut files: Vec<_> = fs::read_dir(covers)
+            .unwrap()
+            .map(|entry| {
+                let path = entry.unwrap().path();
+                let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                (name, fs::read(path).unwrap())
+            })
+            .collect();
+        files.sort();
+        files
+    }
+
+    #[test]
+    fn scan_thumbnails_are_whole_files_even_when_the_scan_stops() {
+        let root = tempfile::tempdir().unwrap();
+        let library = library_with_artwork(root.path(), 2, 3, 7_000);
+        let expected: Vec<_> = (0..2)
+            .map(|album| {
+                let art = artwork(7_000 + album, 1200);
+                mornye_core::cover::library_thumbnail(&art, &|| Ok(())).unwrap()
+            })
+            .collect();
+        let backend = backend(root.path(), &library);
+        let covers = root.path().join("data/library_covers");
+        backend
+            .set_library_cover_cache_directory(&covers.to_string_lossy())
+            .unwrap();
+        let folder = library.to_string_lossy();
+
+        let stopped = backend.scan_library_folder_incremental(&folder, "{}", &|| {
+            let written = fs::read_dir(&covers).map_or(0, |entries| {
+                entries
+                    .filter(|entry| {
+                        !entry
+                            .as_ref()
+                            .unwrap()
+                            .file_name()
+                            .to_string_lossy()
+                            .starts_with('.')
+                    })
+                    .count()
+            });
+            if written >= 2 {
+                Err("scan cancelled".into())
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!(stopped.unwrap_err(), "scan cancelled");
+        let partial = thumbnails(&covers);
+        assert!(!partial.is_empty() && partial.len() < 6);
+        for (name, bytes) in &partial {
+            assert!(name.starts_with("cover_"), "{name}");
+            assert!(expected.iter().any(|thumbnail| **thumbnail == **bytes));
+        }
+
+        let result = backend
+            .scan_library_folder_incremental(&folder, "{}", &|| Ok(()))
+            .unwrap();
+        let scanned = result["scanned"].as_array().unwrap();
+        assert_eq!(scanned.len(), 6);
+        for row in scanned {
+            let path = Path::new(row["filePath"].as_str().unwrap());
+            let album: usize = path
+                .parent()
+                .unwrap()
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .parse()
+                .unwrap();
+            let cover = row["coverPath"].as_str().unwrap();
+            assert_eq!(Path::new(cover).parent().unwrap(), covers);
+            assert_eq!(fs::read(cover).unwrap(), *expected[album]);
+        }
+        assert_eq!(thumbnails(&covers).len(), 6);
+    }
+
+    #[test]
+    fn a_scan_stores_one_thumbnail_file_per_picture_under_every_song_name() {
+        use std::os::unix::fs::MetadataExt;
+        let root = tempfile::tempdir().unwrap();
+        let library = library_with_artwork(root.path(), 2, 3, 8_000);
+        let backend = backend(root.path(), &library);
+        let covers = root.path().join("data/library_covers");
+        backend
+            .set_library_cover_cache_directory(&covers.to_string_lossy())
+            .unwrap();
+
+        let result = backend
+            .scan_library_folder_incremental(&library.to_string_lossy(), "{}", &|| Ok(()))
+            .unwrap();
+
+        let mut albums: BTreeMap<String, BTreeSet<u64>> = BTreeMap::new();
+        let mut names = BTreeSet::new();
+        for row in result["scanned"].as_array().unwrap() {
+            let song = Path::new(row["filePath"].as_str().unwrap());
+            let cover = row["coverPath"].as_str().unwrap();
+            assert!(names.insert(cover.to_owned()));
+            albums
+                .entry(song.parent().unwrap().to_string_lossy().into_owned())
+                .or_default()
+                .insert(fs::metadata(cover).unwrap().ino());
+        }
+        assert_eq!(names.len(), 6);
+        assert_eq!(thumbnails(&covers).len(), 6);
+        let files: BTreeSet<_> = albums.values().flatten().collect();
+        if cfg!(any(target_vendor = "apple", target_os = "linux")) {
+            assert!(albums.values().all(|inodes| inodes.len() == 1));
+            assert_eq!(files.len(), 2);
+        } else {
+            assert_eq!(files.len(), 6);
+        }
+    }
+
+    #[test]
+    fn incremental_delta_matches_the_json_the_scan_always_returned() {
+        let root = tempfile::tempdir().unwrap();
+        let library = library_with_artwork(root.path(), 1, 3, 8_500);
+        let backend = backend(root.path(), &library);
+        let unchanged = library.join("0000/00.flac");
+        let modified = fs::metadata(&unchanged)
+            .unwrap()
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let gone = library
+            .join("0000/gone.flac")
+            .to_string_lossy()
+            .into_owned();
+        let snapshots = [
+            json!({unchanged.to_string_lossy(): modified, &gone: 5}),
+            json!({}),
+        ];
+        for (snapshot, deleted, skipped) in [
+            (&snapshots[0], json!([gone]), 1),
+            (&snapshots[1], Value::Null, 0),
+        ] {
+            let result = backend
+                .scan_library_folder_incremental(
+                    &library.to_string_lossy(),
+                    &snapshot.to_string(),
+                    &|| Ok(()),
+                )
+                .unwrap();
+            let tracks = result["scanned"].as_array().unwrap().clone();
+            assert_eq!(tracks.len(), 3 - skipped);
+            let previous = json!({"scanned":tracks,"deletedPaths":deleted,"skippedCount":skipped,"totalFiles":3});
+            assert_eq!(result.to_string(), previous.to_string());
+        }
+    }
+
+    #[test]
+    #[ignore = "manual scan timing with many thumbnails"]
+    fn scan_timing_with_many_thumbnails() {
+        use std::os::unix::fs::MetadataExt;
+        let setting = |name: &str, default: u32| {
+            std::env::var(name).map_or(default, |value| value.parse().unwrap())
+        };
+        let albums = setting("MORNYE_BENCH_ALBUMS", 100);
+        let tracks = setting("MORNYE_BENCH_TRACKS", 10);
+        let root = tempfile::tempdir().unwrap();
+        // The thumbnail cache is process-wide; fresh pictures keep runs apart.
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .subsec_nanos();
+        let library = library_with_artwork(root.path(), albums, tracks, seed);
+        let backend = backend(root.path(), &library);
+        let covers = root.path().join("data/library_covers");
+        backend
+            .set_library_cover_cache_directory(&covers.to_string_lossy())
+            .unwrap();
+        let output = root.path().join("data/scan.ndjson");
+
+        let start = std::time::Instant::now();
+        let count = backend
+            .scan_library_folder_to_ndjson_file(
+                &library.to_string_lossy(),
+                &output.to_string_lossy(),
+                &|| Ok(()),
+            )
+            .unwrap();
+        let elapsed = start.elapsed();
+
+        let (mut names, mut logical, mut stored) = (0, 0, 0);
+        let mut inodes = BTreeSet::new();
+        for entry in fs::read_dir(&covers).unwrap() {
+            let metadata = entry.unwrap().metadata().unwrap();
+            names += 1;
+            logical += metadata.len();
+            if inodes.insert(metadata.ino()) {
+                stored += metadata.blocks() * 512;
+            }
+        }
+        assert_eq!(count, u64::from(albums * tracks));
+        eprintln!(
+            "{count} songs, {albums} pictures: scan {:.2} s, {names} thumbnails of {} KB, {} files, {} MB named, {} MB on disk",
+            elapsed.as_secs_f64(),
+            (logical / names.max(1)) >> 10,
+            inodes.len(),
+            logical >> 20,
+            stored >> 20,
+        );
     }
 
     #[test]

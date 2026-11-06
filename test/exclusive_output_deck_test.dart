@@ -4,7 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mornye/services/exclusive_output_deck.dart';
 import 'package:mornye/services/playback_deck.dart';
 
-class _Deck implements PlaybackDeck {
+class _Deck implements PlaybackDeck, QueuedPlaybackDeck {
   _Deck(this.name);
 
   final String name;
@@ -14,8 +14,28 @@ class _Deck implements PlaybackDeck {
   final positions = StreamController<Duration>.broadcast();
   final completions = StreamController<void>.broadcast();
   Duration position = Duration.zero;
+  Completer<Duration?>? pendingPosition;
+  Completer<void>? pendingSource;
   bool Function()? wanted;
   bool disposed = false;
+  void Function()? queuedStart;
+
+  @override
+  bool get canQueueNextSource => name == 'mpv';
+
+  @override
+  Future<bool> queueNextSource(
+    String source, {
+    required double volume,
+    required void Function() onStarted,
+  }) async {
+    calls.add('queue $source $volume');
+    queuedStart = onStarted;
+    return true;
+  }
+
+  @override
+  Future<void> clearNextSource() async => queuedStart = null;
 
   @override
   PlaybackDeckState state = PlaybackDeckState.stopped;
@@ -56,7 +76,11 @@ class _Deck implements PlaybackDeck {
     bool requiresDsd = false,
     bool allowFixedVolume = false,
     bool dapExclusive = false,
-  }) async => calls.add('file $path');
+  }) async {
+    calls.add('file $path');
+    await pendingSource?.future;
+  }
+
   @override
   Future<void> cancelPreparation() async {}
   @override
@@ -83,7 +107,8 @@ class _Deck implements PlaybackDeck {
   @override
   Future<bool> setNextDeck(PlaybackDeck? next) async => false;
   @override
-  Future<Duration?> getCurrentPosition() async => position;
+  Future<Duration?> getCurrentPosition() async =>
+      pendingPosition == null ? position : await pendingPosition!.future;
   @override
   Future<Duration?> getDuration() async => const Duration(minutes: 3);
   @override
@@ -102,16 +127,22 @@ void main() {
   late _Deck shared;
   late List<_Deck> exclusives;
   late bool available;
+  late bool failExclusiveCreation;
+  late Completer<void>? pendingExclusiveSource;
   late ExclusiveOutputDeck deck;
 
   setUp(() {
     shared = _Deck('shared');
     exclusives = [];
     available = true;
+    failExclusiveCreation = false;
+    pendingExclusiveSource = null;
     deck = ExclusiveOutputDeck(
       shared: shared,
       createExclusive: () {
+        if (failExclusiveCreation) throw StateError('Output unavailable');
         final created = _Deck('mpv');
+        created.pendingSource = pendingExclusiveSource;
         exclusives.add(created);
         return created;
       },
@@ -124,6 +155,42 @@ void main() {
     playbackExclusiveOutput.value = false;
     playbackExclusiveStatus.value = ExclusiveOutputStatus.pending;
   });
+
+  for (final source in ['/next.flac', 'https://example.com/next.flac']) {
+    test(
+      'a native handoff restores its current source on shared output ($source)',
+      () async {
+        playbackExclusiveOutput.value = true;
+        await deck.configureOutput();
+        await deck.setFileSource('/first.flac');
+        await deck.resume();
+        var starts = 0;
+        expect(deck.canQueueNextSource, isTrue);
+        expect(
+          await deck.queueNextSource(
+            source,
+            volume: 0.4,
+            onStarted: () => starts++,
+          ),
+          isTrue,
+        );
+        final active = exclusives.single;
+        active.queuedStart!();
+        expect(starts, 1);
+        playbackExclusiveOutput.value = false;
+        await _settle();
+        await deck.configureOutput();
+        expect(
+          shared.calls,
+          contains('${source.startsWith('https:') ? 'url' : 'file'} $source'),
+        );
+        expect(shared.calls, contains('volume 0.4'));
+        expect(deck.canQueueNextSource, isFalse);
+        active.queuedStart!();
+        expect(starts, 1);
+      },
+    );
+  }
 
   test('plays through the shared deck while exclusive output is off', () async {
     await deck.configureOutput();
@@ -208,4 +275,94 @@ void main() {
     expect(shared.calls, ['configure', 'file /song.flac']);
     expect(playbackExclusiveStatus.value, ExclusiveOutputStatus.unavailable);
   });
+
+  test('a failed output switch does not block later playback', () async {
+    failExclusiveCreation = true;
+    playbackExclusiveOutput.value = true;
+    await _settle();
+    expect(exclusives, isEmpty);
+
+    playbackExclusiveOutput.value = false;
+    await deck.configureOutput();
+    await deck.setFileSource('/song.flac');
+    await deck.resume();
+    expect(shared.calls, ['configure', 'file /song.flac', 'resume']);
+
+    failExclusiveCreation = false;
+    playbackExclusiveOutput.value = true;
+    await deck.configureOutput();
+    expect(exclusives, hasLength(1));
+  });
+
+  test('pausing during a switch does not resume the new output', () async {
+    await deck.setFileSource('/song.flac');
+    await deck.resume();
+    final position = shared.pendingPosition = Completer<Duration?>();
+
+    playbackExclusiveOutput.value = true;
+    await _settle();
+    await deck.pause();
+    position.complete(const Duration(seconds: 12));
+    await deck.configureOutput();
+
+    expect(exclusives.single.calls, contains('file /song.flac'));
+    expect(exclusives.single.calls, isNot(contains('resume')));
+    expect(deck.state, PlaybackDeckState.paused);
+  });
+
+  test('stopping during source transfer cancels automatic playback', () async {
+    await deck.setFileSource('/song.flac');
+    await deck.resume();
+    final source = pendingExclusiveSource = Completer<void>();
+
+    playbackExclusiveOutput.value = true;
+    await _settle();
+    expect(exclusives.single.calls, contains('file /song.flac'));
+    await deck.stop();
+    source.complete();
+    await deck.configureOutput();
+
+    expect(exclusives.single.calls, isNot(contains('resume')));
+    expect(deck.state, PlaybackDeckState.stopped);
+  });
+
+  test('resume waits for source transfer and respects a later pause', () async {
+    await deck.setFileSource('/song.flac');
+    await deck.resume();
+    final source = pendingExclusiveSource = Completer<void>();
+
+    playbackExclusiveOutput.value = true;
+    await _settle();
+    final resumed = deck.resume();
+    await _settle();
+    expect(exclusives.single.calls, isNot(contains('resume')));
+    await deck.pause();
+    source.complete();
+    await resumed;
+
+    expect(exclusives.single.calls, isNot(contains('resume')));
+    expect(deck.state, PlaybackDeckState.paused);
+  });
+
+  test(
+    'dispose waits for a switch and prevents its automatic resume',
+    () async {
+      await deck.setFileSource('/song.flac');
+      await deck.resume();
+      final source = pendingExclusiveSource = Completer<void>();
+
+      playbackExclusiveOutput.value = true;
+      await _settle();
+      final disposed = deck.dispose();
+      await _settle();
+      expect(shared.disposed, isFalse);
+      expect(exclusives.single.disposed, isFalse);
+      source.complete();
+      await disposed;
+
+      expect(shared.disposed, isTrue);
+      expect(exclusives.single.disposed, isTrue);
+      expect(exclusives.single.calls, isNot(contains('resume')));
+    },
+  );
 }

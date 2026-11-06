@@ -13,6 +13,7 @@ import 'package:mornye/providers/music_player_provider.dart';
 import 'package:mornye/providers/settings_provider.dart';
 import 'package:mornye/services/lyrics_ai_client.dart';
 import 'package:mornye/services/lyrics_translation.dart';
+import 'package:mornye/services/lyrics_translation_alignment.dart';
 import 'package:mornye/services/lyrics_translation_sharing.dart';
 import 'package:mornye/utils/lyrics_parser.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -65,6 +66,31 @@ final _lyrics = ParsedLyrics(
   plainText: 'Hello\nWorld\nHello',
 );
 
+const _timedLyrics = ParsedLyrics(
+  synced: true,
+  wordSynced: true,
+  plainText: '君を',
+  lines: [
+    LyricLine(
+      time: Duration(seconds: 10),
+      end: Duration(seconds: 14),
+      text: '君を',
+      words: [
+        LyricWord(
+          time: Duration(seconds: 10),
+          end: Duration(seconds: 12),
+          text: '君',
+        ),
+        LyricWord(
+          time: Duration(seconds: 12),
+          end: Duration(seconds: 14),
+          text: 'を',
+        ),
+      ],
+    ),
+  ],
+);
+
 /// A chat completion that puts "es:" before each text, and "r:" for its
 /// romanization when the prompt asks for one.
 http.Response _reply(http.Request request) {
@@ -86,6 +112,15 @@ http.Response _reply(http.Request request) {
                       'id': item['id'],
                       'text': 'es:${item['text']}',
                       if (romanize) 'romanization': 'r:${item['text']}',
+                      if (romanize &&
+                          (item['words'] as List?)?.isNotEmpty == true)
+                        'romanizationAlignment': [
+                          {'text': 'r:${item['text']}', 'source': 0},
+                        ],
+                      if ((item['words'] as List?)?.isNotEmpty == true)
+                        'alignment': [
+                          {'text': 'es:${item['text']}', 'source': 0},
+                        ],
                     },
                 ],
               }),
@@ -159,6 +194,287 @@ void main() {
     await Future<void>.delayed(Duration.zero);
     return container;
   }
+
+  for (final wordSync in [false, true]) {
+    test(
+      'requests only the selected timing mode (wordSync=$wordSync)',
+      () async {
+        final container = await containerFor(
+          settings: _settings.copyWith(lyricsAiWordSync: wordSync),
+        );
+        final controller = container.read(lyricsTranslationProvider.notifier);
+        expect((await controller.translate(_timedLyrics)).error, isNull);
+        final body = jsonDecode(requests.single.body) as Map<String, dynamic>;
+        final messages = body['messages'] as List;
+        final prompt = (messages.first as Map)['content'] as String;
+        final items =
+            jsonDecode((messages.last as Map)['content'] as String) as List;
+        expect((items.single as Map).containsKey('words'), wordSync);
+        expect(prompt.contains('"alignment"'), wordSync);
+        expect(prompt.contains('"romanizationAlignment"'), wordSync);
+        final line = controller.display(_timedLyrics).lines.single;
+        expect(line.translation, 'es:君を');
+        expect(line.romanization, 'r:君を');
+        expect(line.words, same(_timedLyrics.lines.single.words));
+        expect(line.time, _timedLyrics.lines.single.time);
+        expect(line.translationWords.isNotEmpty, wordSync);
+        expect(line.romanizationWords.isNotEmpty, wordSync);
+      },
+    );
+  }
+
+  test(
+    'Fast reuses saved translations and toggles timing without AI',
+    () async {
+      final cache = LyricsTranslationCache(directory: () async => directory);
+      final key = lyricsTranslationCacheKey(
+        sourceHash: LyricsTranslationSource.of(_timedLyrics).hash,
+        language: 'es',
+        config: lyricsAiConfigFor(_settings),
+      );
+      const result = LyricsTranslationResult(
+        ['You'],
+        romanizations: ['kimi o'],
+        alignments: [
+          [LyricsTranslationChunk('You', 0)],
+        ],
+        romanizationAlignments: [
+          [LyricsTranslationChunk('kimi ', 0), LyricsTranslationChunk('o', 1)],
+        ],
+      );
+      await cache.write(key, result);
+      final container = await containerFor(cache: cache, keys: {});
+      final controller = container.read(lyricsTranslationProvider.notifier);
+      expect((await controller.translate(_timedLyrics)).error, isNull);
+      final fast = controller.display(_timedLyrics);
+      expect(fast.lines.single.translation, 'You');
+      expect(fast.lines.single.translationWords, isEmpty);
+      expect(fast.lines.single.romanizationWords, isEmpty);
+      final settings = container.read(settingsProvider.notifier);
+      settings.setLyricsAiWordSync(true);
+      final synced = controller.display(_timedLyrics);
+      expect(synced.lines.single.translationWords.single.time.inSeconds, 10);
+      expect(synced.lines.single.romanizationWords.last.time.inSeconds, 12);
+      expect((await controller.translate(_timedLyrics)).error, isNull);
+      settings.setLyricsAiWordSync(false);
+      expect(
+        controller.display(_timedLyrics).lines.single.translationWords,
+        isEmpty,
+      );
+      expect((await cache.read(key))!.wordSynced, isTrue);
+      expect(requests, isEmpty);
+    },
+  );
+
+  test(
+    'Fast reuses 5.3.0 line-only cache without requesting word timing',
+    () async {
+      final cache = LyricsTranslationCache(directory: () async => directory);
+      await cache.write(
+        lyricsTranslationCacheKey(
+          sourceHash: LyricsTranslationSource.of(_timedLyrics).hash,
+          language: 'es',
+          config: lyricsAiConfigFor(_settings),
+        ),
+        const LyricsTranslationResult(['You'], romanizations: ['kimi o']),
+      );
+      final container = await containerFor(cache: cache, keys: {});
+      final controller = container.read(lyricsTranslationProvider.notifier);
+      expect((await controller.translate(_timedLyrics)).error, isNull);
+      expect(controller.display(_timedLyrics).lines.single.translation, 'You');
+      expect(requests, isEmpty);
+    },
+  );
+
+  test(
+    'fills an incomplete cache without requesting completed lines',
+    () async {
+      final cache = LyricsTranslationCache(directory: () async => directory);
+      final key = lyricsTranslationCacheKey(
+        sourceHash: LyricsTranslationSource.of(_lyrics).hash,
+        language: 'es',
+        config: lyricsAiConfigFor(_settings),
+      );
+      await cache.write(
+        key,
+        const LyricsTranslationResult(['Already done', null]),
+      );
+      final container = await containerFor(cache: cache);
+      final controller = container.read(lyricsTranslationProvider.notifier);
+      final outcome = await controller.translate(_lyrics);
+      expect(outcome.error, isNull);
+      expect(outcome.missing, 0);
+      final body = jsonDecode(requests.single.body) as Map<String, dynamic>;
+      final items =
+          jsonDecode(
+                ((body['messages'] as List).last as Map)['content'] as String,
+              )
+              as List;
+      expect(items.map((item) => (item as Map)['id']), [1]);
+      expect((await cache.read(key))!.translations, [
+        'Already done',
+        'es:World',
+      ]);
+      await controller.translate(_lyrics);
+      expect(requests, hasLength(1));
+    },
+  );
+
+  test(
+    'upgrades a line-only cache and shares word alignment with local timing',
+    () async {
+      const lyrics = ParsedLyrics(
+        synced: true,
+        wordSynced: true,
+        plainText: 'Hello World',
+        lines: [
+          LyricLine(
+            time: Duration(seconds: 10),
+            end: Duration(seconds: 14),
+            text: 'Hello World',
+            words: [
+              LyricWord(
+                time: Duration(seconds: 10),
+                end: Duration(seconds: 12),
+                text: 'Hello ',
+              ),
+              LyricWord(
+                time: Duration(seconds: 12),
+                end: Duration(seconds: 14),
+                text: 'World',
+              ),
+            ],
+          ),
+        ],
+      );
+      final cache = LyricsTranslationCache(directory: () async => directory);
+      await cache.write(
+        lyricsTranslationCacheKey(
+          sourceHash: LyricsTranslationSource.of(lyrics).hash,
+          language: 'es',
+          config: lyricsAiConfigFor(_settings),
+        ),
+        const LyricsTranslationResult(['Old translation']),
+      );
+      final container = await containerFor(
+        settings: _settings.copyWith(lyricsAiWordSync: true),
+      );
+      final controller = container.read(lyricsTranslationProvider.notifier);
+      final outgoing = container
+          .read(lyricsTranslationSharingProvider)
+          .outgoing
+          .first;
+      expect((await controller.translate(lyrics)).error, isNull);
+      expect(requests, hasLength(1));
+      final displayed = controller.display(lyrics).lines.single;
+      expect(displayed.translation, 'es:Hello World');
+      expect(displayed.translationWords.single.time.inSeconds, 10);
+      expect(displayed.translationWords.single.end!.inSeconds, 14);
+      final published = await outgoing;
+      expect(published.result.alignments.single.single.source, 0);
+      await controller.translate(lyrics);
+      expect(
+        requests,
+        hasLength(1),
+        reason: 'aligned cache does not call AI again',
+      );
+
+      final peer = await containerFor(
+        settings: const AppSettings(
+          lyricsAiProvider: 'custom',
+          lyricsAiModel: '',
+          lyricsAiWordSync: true,
+        ),
+        keys: {},
+      );
+      peer
+          .read(lyricsTranslationSharingProvider)
+          .receive(
+            SharedLyricsTranslation(
+              sourceHash: LyricsTranslationSource.of(lyrics).hash,
+              language: 'es',
+              updatedMs: 1,
+              result: const LyricsTranslationResult(
+                ['Hola Mundo'],
+                alignments: [
+                  [
+                    LyricsTranslationChunk('Hola ', 0),
+                    LyricsTranslationChunk('Mundo', 1),
+                  ],
+                ],
+              ),
+            ),
+          );
+      final peerLine = peer
+          .read(lyricsTranslationProvider.notifier)
+          .display(lyrics)
+          .lines
+          .single;
+      expect(peerLine.translationWords.last.time.inSeconds, 12);
+      expect(requests, hasLength(1));
+    },
+  );
+
+  test(
+    'upgrades cached AI pronunciation to word timing and publishes it',
+    () async {
+      const lyrics = ParsedLyrics(
+        synced: true,
+        wordSynced: true,
+        plainText: '君を',
+        lines: [
+          LyricLine(
+            time: Duration(seconds: 10),
+            end: Duration(seconds: 14),
+            text: '君を',
+            words: [
+              LyricWord(
+                time: Duration(seconds: 10),
+                end: Duration(seconds: 12),
+                text: '君',
+              ),
+              LyricWord(
+                time: Duration(seconds: 12),
+                end: Duration(seconds: 14),
+                text: 'を',
+              ),
+            ],
+          ),
+        ],
+      );
+      final cache = LyricsTranslationCache(directory: () async => directory);
+      await cache.write(
+        lyricsTranslationCacheKey(
+          sourceHash: LyricsTranslationSource.of(lyrics).hash,
+          language: 'es',
+          config: lyricsAiConfigFor(_settings),
+        ),
+        const LyricsTranslationResult(
+          ['Old translation'],
+          romanizations: ['kimi o'],
+          alignments: [
+            [LyricsTranslationChunk('Old translation', 0)],
+          ],
+        ),
+      );
+      final container = await containerFor(
+        settings: _settings.copyWith(lyricsAiWordSync: true),
+      );
+      final controller = container.read(lyricsTranslationProvider.notifier);
+      final outgoing = container
+          .read(lyricsTranslationSharingProvider)
+          .outgoing
+          .first;
+      expect((await controller.translate(lyrics)).error, isNull);
+      expect(requests, hasLength(1));
+      final displayed = controller.display(lyrics).lines.single;
+      expect(displayed.romanizationWords.single.time.inSeconds, 10);
+      expect(displayed.romanizationWords.single.end!.inSeconds, 14);
+      expect((await outgoing).result.romanizationWordSynced, isTrue);
+      await controller.translate(lyrics);
+      expect(requests, hasLength(1));
+    },
+  );
 
   test('translates once, shows it and persists it apart', () async {
     final container = await containerFor();

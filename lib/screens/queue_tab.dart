@@ -3,6 +3,7 @@ import 'package:mornye/providers/library_source_provider.dart';
 import 'package:mornye/widgets/library_source_selector.dart';
 import 'dart:async';
 import 'dart:io';
+import 'package:mornye/widgets/open_audio_button.dart';
 import 'package:flutter/foundation.dart'
     show ValueListenable, listEquals, setEquals;
 import 'package:flutter/material.dart';
@@ -48,6 +49,7 @@ import 'package:material_3_expressive/material_3_expressive.dart'
         M3EButtonSize,
         M3EButtonStyle;
 import 'package:mornye/providers/library_browse_provider.dart';
+import 'package:mornye/providers/library_counts_provider.dart';
 import 'package:mornye/services/platform_bridge.dart';
 import 'package:mornye/widgets/app_shape.dart';
 import 'package:mornye/widgets/library_fast_scroller.dart';
@@ -63,6 +65,7 @@ import 'package:mornye/utils/saf_download_tree.dart';
 import 'package:mornye/models/download_item.dart';
 import 'package:mornye/models/settings.dart';
 import 'package:mornye/models/unified_library_item.dart';
+import 'package:mornye/widgets/network_offline_actions.dart';
 import 'package:mornye/providers/download_queue_provider.dart';
 import 'package:mornye/providers/extension_provider.dart';
 import 'package:mornye/providers/library_collections_provider.dart';
@@ -209,7 +212,14 @@ class _QueueTabState extends ConsumerState<QueueTab> {
   String? _filterQuality;
   String? _filterFormat;
   String? _filterMetadata;
-  String _sortMode = 'latest';
+  String get _sortMode {
+    final settings = ref.read(settingsProvider);
+    final mode = settings.historySortMode;
+    final section = widget.librarySection ?? settings.historyFilterMode;
+    // Playlists have no file size. Keep the saved song order for returning.
+    return section == 'playlists' && mode.startsWith('size-') ? 'latest' : mode;
+  }
+
   String _libraryQualityLabelMode = AppSettings.libraryQualityLabelBitDepthOnly;
   final _libraryGridExtent = ValueNotifier(_libraryGridDefaultExtent);
   double? _libraryGridPinchStartExtent;
@@ -242,7 +252,7 @@ class _QueueTabState extends ConsumerState<QueueTab> {
   final Map<String, _LibrarySongTableRows> _songTableByMode = {};
 
   final QueueLibraryPager<
-    _QueueLibraryCountsRequest,
+    LibraryCountsRequest,
     _QueueLibraryPageRequest,
     _QueueLibraryPageData
   >
@@ -422,9 +432,6 @@ class _QueueTabState extends ConsumerState<QueueTab> {
 
   void _onFilterPageChanged(int index) {
     if (widget.librarySection != null) return;
-    if (_modeForPage(index) == 'playlists' && _sortMode.startsWith('size-')) {
-      setState(() => _sortMode = 'latest');
-    }
     HapticFeedback.selectionClick();
     ref
         .read(settingsProvider.notifier)
@@ -513,9 +520,9 @@ class _QueueTabState extends ConsumerState<QueueTab> {
       _filterQuality = null;
       _filterFormat = null;
       _filterMetadata = null;
-      _sortMode = 'latest';
       _resetLibraryPaging();
     });
+    ref.read(settingsProvider.notifier).setHistorySortMode('latest');
   }
 
   @override
@@ -550,6 +557,7 @@ class _QueueTabState extends ConsumerState<QueueTab> {
     });
     _initializePageController();
     _applyDefaultLibraryViewOnTabVisible();
+    ref.watch(settingsProvider.select((s) => s.historySortMode));
     final localLibraryEnabled = ref.watch(
       settingsProvider.select((s) => s.localLibraryEnabled),
     );
@@ -668,7 +676,7 @@ class _QueueTabState extends ConsumerState<QueueTab> {
       settingsProvider.select((s) => s.libraryQualityLabelMode),
     );
     final colorScheme = Theme.of(context).colorScheme;
-    final countsRequest = _QueueLibraryCountsRequest(
+    final countsRequest = LibraryCountsRequest(
       searchQuery: _searchQuery,
       filterSource: _filterSource,
       filterQuality: _filterQuality,
@@ -690,7 +698,7 @@ class _QueueTabState extends ConsumerState<QueueTab> {
               singleTrackCount: 0,
             ),
           )
-        : ref.watch(_queueLibraryCountsProvider(countsRequest));
+        : ref.watch(libraryCountsProvider(countsRequest));
     if (!identical(_snapshotHistory, inMemoryHistoryItems)) {
       _snapshotHistory = inMemoryHistoryItems;
       _historySnapshots.clear();
@@ -908,6 +916,7 @@ class _QueueTabState extends ConsumerState<QueueTab> {
                   AppSliverHeader.tabRoot(
                     title: context.l10n.navLibrary,
                     alignToContent: true,
+                    actions: const [OpenAudioButton()],
                   )
                 else
                   AppSliverHeader.page(

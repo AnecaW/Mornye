@@ -88,9 +88,10 @@ class SliverTrackTable extends StatefulWidget {
     this.sortableColumns,
     this.albumLayout = false,
     this.albumArtist,
+    this.uniformRowHeight = false,
   });
 
-  /// The album page layout of Apple Music: no column headers, the number,
+  /// The compact album layout: no column headers, the number,
   /// title and duration with a "More" button, the artist under the title only
   /// when it differs from [albumArtist], separators from the title column,
   /// and a play glyph in place of the number under the pointer. [columns],
@@ -99,6 +100,11 @@ class SliverTrackTable extends StatefulWidget {
 
   /// The album's artist, which album rows leave out.
   final String? albumArtist;
+
+  /// Uses the first column row as the extent for every row. Callers opt in
+  /// only when artwork, badges and actions have uniform height. Album rows
+  /// and text scaled above 200% retain variable layout.
+  final bool uniformRowHeight;
 
   final List<TrackTableRow> rows;
   final List<TrackTableColumn> columns;
@@ -211,6 +217,35 @@ class _SliverTrackTableState extends State<SliverTrackTable> {
         },
       );
     }
+    Widget rowList(IndexedWidgetBuilder builder) {
+      if (widget.uniformRowHeight &&
+          rows.isNotEmpty &&
+          MediaQuery.textScalerOf(context).scale(14) <= 28) {
+        return SliverPrototypeExtentList.builder(
+          prototypeItem: TickerMode(
+            enabled: false,
+            child: ExcludeFocus(
+              child: ExcludeSemantics(
+                child: _TrackTableRowView(
+                  row: rows.first,
+                  columns: widget.columns,
+                  hasTrailing: hasTrailing,
+                  selected: false,
+                  current: false,
+                  playing: false,
+                  onTap: () {},
+                  onContextMenu: null,
+                ),
+              ),
+            ),
+          ),
+          itemCount: rows.length,
+          itemBuilder: builder,
+        );
+      }
+      return SliverList.builder(itemCount: rows.length, itemBuilder: builder);
+    }
+
     return SliverMainAxisGroup(
       slivers: [
         SliverPersistentHeader(
@@ -227,49 +262,46 @@ class _SliverTrackTableState extends State<SliverTrackTable> {
             ),
           ),
         ),
-        SliverList.builder(
-          itemCount: rows.length,
-          itemBuilder: (context, index) {
-            final row = rows[index];
-            Widget rowView({
-              Key? key,
-              bool current = false,
-              bool playing = false,
-            }) => _TrackTableRowView(
-              key: key,
-              row: row,
-              columns: widget.columns,
-              hasTrailing: hasTrailing,
-              selected: widget.selectedIds.contains(row.id),
-              current: current,
-              playing: playing,
-              onTap: () => handleDesktopRowClick(
-                row.id,
-                select: (kind) => widget.onSelect(row.id, kind, orderedIds),
-                activate: () => widget.onActivate(row.id),
-              ),
-              onContextMenu: widget.onContextMenu == null
-                  ? null
-                  : (position) => widget.onContextMenu!(row.id, position),
-            );
-            final rowPlayback = row.playback;
-            if (rowPlayback == null || context.isMornye) {
-              return rowView(key: ValueKey(row.id));
-            }
-            // Each row follows only its own track, so a track change
-            // rebuilds the two rows involved rather than the whole table.
-            return Consumer(
-              key: ValueKey(row.id),
-              builder: (context, ref, _) {
-                final playback = ref.watch(rowPlayback);
-                return rowView(
-                  current: playback.isCurrent,
-                  playing: playback.isPlaying,
-                );
-              },
-            );
-          },
-        ),
+        rowList((context, index) {
+          final row = rows[index];
+          Widget rowView({
+            Key? key,
+            bool current = false,
+            bool playing = false,
+          }) => _TrackTableRowView(
+            key: key,
+            row: row,
+            columns: widget.columns,
+            hasTrailing: hasTrailing,
+            selected: widget.selectedIds.contains(row.id),
+            current: current,
+            playing: playing,
+            onTap: () => handleDesktopRowClick(
+              row.id,
+              select: (kind) => widget.onSelect(row.id, kind, orderedIds),
+              activate: () => widget.onActivate(row.id),
+            ),
+            onContextMenu: widget.onContextMenu == null
+                ? null
+                : (position) => widget.onContextMenu!(row.id, position),
+          );
+          final rowPlayback = row.playback;
+          if (rowPlayback == null || context.isMornye) {
+            return rowView(key: ValueKey(row.id));
+          }
+          // Each row follows only its own track, so a track change
+          // rebuilds the two rows involved rather than the whole table.
+          return Consumer(
+            key: ValueKey(row.id),
+            builder: (context, ref, _) {
+              final playback = ref.watch(rowPlayback);
+              return rowView(
+                current: playback.isCurrent,
+                playing: playback.isPlaying,
+              );
+            },
+          );
+        }),
       ],
     );
   }
@@ -345,6 +377,9 @@ class _QualityKey implements Comparable<_QualityKey> {
   }
 }
 
+/// How fast a Mornye row's hover actions appear.
+const _mornyeRowFade = Duration(milliseconds: 100);
+
 String _formatDuration(Duration duration) {
   final hours = duration.inHours;
   final minutes = duration.inMinutes.remainder(60);
@@ -367,7 +402,7 @@ class TrackTableLayout {
   static const double albumNumber = 32;
   static const double albumTitleGap = 14;
 
-  // Pointer rows: Music's 40pt, and the M3 compact list density for Material
+  // Pointer rows: 40pt for Mornye, and the M3 compact list density for Material
   // instead of the 48dp touch row.
   static double rowMinHeightFor(BuildContext context) =>
       context.isMornye ? 40 : 44;
@@ -620,7 +655,8 @@ class _TrackTableRowViewState extends State<_TrackTableRowView> {
                 opacity: hovered || selected || current || _trailingFocused
                     ? 1
                     : 0,
-                duration: tokens.motionFast,
+                duration: material ? tokens.motionFast : _mornyeRowFade,
+                curve: material ? Curves.linear : Curves.easeIn,
                 child: child,
               ),
               child: row.trailing,
@@ -857,7 +893,8 @@ class _AlbumRowViewState extends State<_AlbumRowView> {
             onFocusChange: (focused) => setState(() => _focused = focused),
             child: AnimatedOpacity(
               opacity: active ? 1 : 0,
-              duration: tokens.motionFast,
+              duration: context.isMornye ? _mornyeRowFade : tokens.motionFast,
+              curve: context.isMornye ? Curves.easeIn : Curves.linear,
               child: Builder(
                 builder: (buttonContext) => IconButton(
                   tooltip: l10n.showMenuTooltip,
@@ -941,7 +978,7 @@ class _AlbumRowViewState extends State<_AlbumRowView> {
                   children: [
                     number,
                     const SizedBox(width: TrackTableLayout.albumTitleGap),
-                    // The separator starts at the title, as in Apple Music.
+                    // Align the separator with the title column.
                     Expanded(
                       child: DecoratedBox(
                         decoration: BoxDecoration(

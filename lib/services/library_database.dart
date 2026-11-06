@@ -11,6 +11,7 @@ import 'package:mornye/services/library_queue_store.dart';
 import 'package:mornye/services/library_file_sizes.dart';
 import 'package:mornye/services/library_cleanup.dart';
 import 'package:mornye/services/library_search.dart';
+import 'package:mornye/services/library_lyrics_search.dart';
 import 'package:mornye/models/library_database_models.dart';
 import 'package:mornye/services/library_duplicates.dart';
 import 'package:mornye/services/network_storage_service.dart';
@@ -18,6 +19,7 @@ import 'package:mornye/services/library_ingestion_store.dart';
 import 'package:mornye/services/library_native_adapter.dart';
 import 'package:mornye/services/library_row_mapper.dart';
 import 'package:mornye/services/library_schema.dart';
+import 'package:mornye/services/library_android_covers.dart';
 import 'package:mornye/services/platform_bridge.dart';
 import 'package:mornye/services/sqlite_helpers.dart' as sqlite;
 
@@ -54,10 +56,25 @@ class LibraryDatabase {
   bool? _searchFtsAvailable;
   final _shadow = sqlite.LibraryShadowSnapshot();
   ({Database db, String stamp, LocalLibraryLookupIndex index})? _lookupIndex;
+  final Database? _databaseOverride;
 
-  LibraryDatabase._init();
+  LibraryDatabase._init() : _databaseOverride = null;
+
+  /// Keeps integration fixtures on a private connection while exercising the
+  /// same summary, search and browse routes as the application.
+  @visibleForTesting
+  LibraryDatabase.withDatabase(
+    Database database, {
+    bool historyAttached = false,
+    bool searchFtsAvailable = false,
+  }) : _databaseOverride = database {
+    _historyAttached = historyAttached;
+    _searchFtsAvailable = searchFtsAvailable;
+  }
 
   Future<Database> get database {
+    final override = _databaseOverride;
+    if (override != null) return Future.value(override);
     return _database.getOrCreate(() async {
       final db = await sqlite.openAppDatabase(
         'local_library.db',
@@ -66,7 +83,10 @@ class LibraryDatabase {
           _searchFtsAvailable = await LibrarySchema.create(db, version);
         },
         onUpgrade: LibrarySchema.upgrade,
-        onOpen: LibrarySchema.migrateIosContainerPaths,
+        onOpen: (db) async {
+          await LibrarySchema.onOpen(db);
+          await migrateAndroidLibraryCovers(db);
+        },
       );
       // Library upserts use INSERT OR REPLACE. Recursive triggers ensure the
       // implicit delete also decrements materialized lookup ref-counts.
@@ -165,6 +185,18 @@ class LibraryDatabase {
     );
   }
 
+  /// Lyrics keeps a disposable cache beside the authoritative song indexes.
+  Future<Database> openLyricsSearchDatabase() async {
+    final db = await database;
+    await _ensureHistoryAttached(db);
+    return db;
+  }
+
+  Future<void> invalidateLyricsSearch(String path) async {
+    final db = await openLyricsSearchDatabase();
+    await LibraryLyricsSearchStore.invalidateStored(db, path);
+  }
+
   /// [includeLocal] reads scanned rows, which the shadow snapshot serves.
   /// [rebuild] false keeps the row check while the snapshot is stale.
   Future<T> _shadowRead<T>(
@@ -221,6 +253,30 @@ class LibraryDatabase {
     List<Map<String, dynamic>> items, {
     required String sourceId,
   }) => _ingestion.upsertBatchExcludingHistory(items, sourceId: sourceId);
+
+  /// Retains the original of a NAS download before History moves to its local
+  /// copy. Unlike a scan import this must keep the currently shadowed row.
+  Future<void> retainOfflineOrigin(
+    LocalLibraryItem item,
+    String sourceId,
+  ) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      final batch = txn.batch();
+      batch.insert(
+        'library',
+        LibraryRowMapper.encode(item.toJson(), sourceId: sourceId),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      sqlite.putPathKeysInBatch(
+        batch,
+        'library_path_keys',
+        item.id,
+        item.filePath,
+      );
+      await batch.commit(noResult: true);
+    });
+  }
 
   Future<List<LocalLibrarySource>> getSources() async {
     final db = await database;
@@ -476,21 +532,25 @@ class LibraryDatabase {
   Future<List<Map<String, Object?>>> getSongFiles() =>
       _queueRead((store) => store.songFiles(), includeLocal: true);
 
-  /// One page of every downloaded and scanned song's metadata, for the
-  /// Home mixes.
+  /// One page of the downloaded ('downloaded') or scanned ('local') songs'
+  /// metadata by id after [afterId], for the Home mixes.
   Future<List<Map<String, Object?>>> getMixSongPage({
-    required bool includeLocal,
-    required int limit,
-    required int offset,
+    String? source,
+    String? afterId,
+    bool? includeLocal,
+    int offset = 0,
     QueueLibraryDbQuery? scope,
+    required int limit,
   }) => _queueRead(
     (store) => store.mixSongs(
-      includeLocal: includeLocal,
+      source: source,
+      afterId: afterId,
       limit: limit,
+      includeLocal: includeLocal,
       offset: offset,
       scope: scope,
     ),
-    includeLocal: includeLocal,
+    includeLocal: source == null ? includeLocal ?? true : source == 'local',
   );
 
   @visibleForTesting
@@ -816,6 +876,69 @@ class LibraryDatabase {
     });
   }
 
+  /// Decoded visible rows in a stable order, for passes over the whole
+  /// library such as reorganizing files.
+  Future<List<Map<String, dynamic>>> getPage({
+    required int limit,
+    int offset = 0,
+  }) async {
+    final db = await database;
+    final rows = await db.query(
+      visibleLibraryView,
+      orderBy: 'id',
+      limit: limit,
+      offset: offset,
+    );
+    return rows.map(LibraryRowMapper.decode).toList(growable: false);
+  }
+
+  /// Points the row for [oldPath] at [newPath] after the file was moved. The
+  /// id is derived from the new path, as a scan of that location would, so a
+  /// later rescan updates this row instead of adding a duplicate. Returns
+  /// false when no row has [oldPath].
+  Future<bool> relinkMovedFile(String oldPath, String newPath) async {
+    final db = await database;
+    final newId = _generateLibraryId(newPath);
+    return sqlite.transactionWithBusyRetry(db, (txn) async {
+      final rows = await txn.query(
+        'library',
+        columns: ['id'],
+        where: 'file_path = ?',
+        whereArgs: [oldPath],
+        limit: 1,
+      );
+      if (rows.isEmpty) return false;
+      final oldId = rows.first['id'] as String;
+      // A stale row can still claim the destination path or its id.
+      final stale = await txn.query(
+        'library',
+        columns: ['id'],
+        where: '(file_path = ? OR id = ?) AND id != ?',
+        whereArgs: [newPath, newId, oldId],
+      );
+      for (final id in [oldId, for (final row in stale) row['id'] as String]) {
+        await txn.delete(
+          'library_path_keys',
+          where: 'item_id = ?',
+          whereArgs: [id],
+        );
+      }
+      for (final row in stale) {
+        await txn.delete('library', where: 'id = ?', whereArgs: [row['id']]);
+      }
+      await txn.update(
+        'library',
+        {'id': newId, 'file_path': newPath},
+        where: 'id = ?',
+        whereArgs: [oldId],
+      );
+      final batch = txn.batch();
+      _putPathKeysInBatch(batch, newId, newPath);
+      await batch.commit(noResult: true);
+      return true;
+    });
+  }
+
   Future<void> replaceWithConvertedItem({
     required LocalLibraryItem item,
     required String newFilePath,
@@ -1007,7 +1130,7 @@ class LibraryDatabase {
   Future<void> close() async {
     final db = await database;
     await db.close();
-    _database.reset();
+    if (_databaseOverride == null) _database.reset();
     _historyAttached = false;
     _fileSizes = null;
     _searchFtsAvailable = null;

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:mornye/services/backend/backend_channel.dart';
@@ -95,7 +96,7 @@ class PlatformBridge {
     final states = _nativeDataJobs.putIfAbsent(id, () => {});
     states.add(state);
     try {
-      final encoded = await compute(_encodeJsonInBackground, request);
+      final encoded = await _encodeNativeDataJobRequest(request);
       if (state.cancelled) {
         throw PlatformException(
           code: 'CANCELLED',
@@ -223,6 +224,8 @@ class PlatformBridge {
       StreamController<Map<String, dynamic>>.broadcast();
   static final StreamController<String> _linkPairingEndedEvents =
       StreamController<String>.broadcast();
+  static final StreamController<Map<Object?, Object?>> _castEvents =
+      StreamController<Map<Object?, Object?>>.broadcast();
   static bool _backendEventHandlerInstalled = false;
 
   /// The Rust backend answers on Android and iOS through the MethodChannel
@@ -335,6 +338,20 @@ class PlatformBridge {
   );
 
   static Future<void> linkStop() => _invokeVoid('linkStop');
+
+  // Desktop Google Cast (rust_backend/crates/cast): one call per service
+  // method, and the session and device list as events.
+
+  static Future<Object?> castCall(
+    String method, [
+    Map<String, Object?>? arguments,
+  ]) => _channel.invokeMethod<Object?>('castCall', {
+    'method': method,
+    'args': ?arguments,
+  });
+
+  /// Session snapshots, and `{"devices": [...]}` when the list changes.
+  static Stream<Map<Object?, Object?>> castEvents() => _events(_castEvents);
 
   /// `running`, `port`, `fingerprint`, `serverId`, `name`, `addresses` and
   /// the connected `clients`.
@@ -504,6 +521,11 @@ class PlatformBridge {
           final args = call.arguments;
           final reason = args is Map ? args['reason']?.toString() : null;
           _linkPairingEndedEvents.add(reason ?? 'cancelled');
+          return null;
+        case 'castStatus' || 'castDevices':
+          if (call.arguments case final Map<Object?, Object?> payload) {
+            _castEvents.add(payload);
+          }
           return null;
         case 'extensionVerificationNotificationTapped':
           _verificationNotificationEvents.add(null);
@@ -993,10 +1015,12 @@ class PlatformBridge {
   }
 
   static Future<Map<String, dynamic>> getAllDownloadProgress() async =>
-      _decodeMapResult(await _channel.invokeMethod('getAllDownloadProgress'));
+      _decodeProgressMapAsync(
+        await _channel.invokeMethod('getAllDownloadProgress'),
+      );
 
   static Stream<Map<String, dynamic>> downloadProgressStream() {
-    return _channel.downloadProgressEvents().map(_decodeMapResult);
+    return _channel.downloadProgressEvents().asyncMap(_decodeProgressMapAsync);
   }
 
   static Future<void> exitApp() => _invokeVoid('exitApp');
@@ -1137,6 +1161,13 @@ class PlatformBridge {
 
   static Future<bool> safExists(String uri) =>
       _invokeAs('safExists', {'uri': uri});
+
+  /// Lists playable documents for a temporary queue, without indexing a source.
+  static Future<List<dynamic>> listSafAudioFiles(String treeUri) async =>
+      await _channel.invokeMethod<List<dynamic>>('listSafAudioFiles', {
+        'tree_uri': treeUri,
+      }) ??
+      const [];
 
   /// Exact-path checks. Only explicit `missing` results authorize cleanup;
   /// absent responses and permission/provider failures remain unknown.
@@ -1546,7 +1577,11 @@ class PlatformBridge {
     try {
       final directories = <String>{
         for (final path in paths)
-          if (path.startsWith('/')) File(path).parent.path,
+          if (path.startsWith('/'))
+            p.posix.dirname(path)
+          else if (p.windows.isAbsolute(path) &&
+              !p.windows.isRootRelative(path))
+            p.windows.dirname(path),
       };
       for (final directory in directories) {
         scopes.add(await acquireDownloadDirectory(directory));
@@ -1839,7 +1874,7 @@ class PlatformBridge {
   /// only compact progress fields are returned.
   static Future<Map<String, dynamic>> getNativeDownloadWorkerSnapshot({
     int sinceStateSerial = 0,
-  }) async => _decodeMapResult(
+  }) async => _decodeProgressMapAsync(
     await _channel.invokeMethod('getNativeDownloadWorkerSnapshot', {
       'since_state_serial': sinceStateSerial,
     }),
@@ -2300,6 +2335,9 @@ class PlatformBridge {
           );
         }
         return decoded;
+      } on PlatformException catch (e, stack) {
+        _log.e('Extension URL metadata failed', e, stack);
+        rethrow;
       } catch (e) {
         return null;
       }
@@ -2802,6 +2840,16 @@ class PlatformBridge {
       }
     }
     return const <String, dynamic>{};
+  }
+
+  static Future<Map<String, dynamic>> _decodeProgressMapAsync(
+    dynamic result,
+  ) async {
+    if (result is! String || result.isEmpty) return _decodeMapResult(result);
+    final decoded = await _decodeJsonStringAsync(result);
+    return decoded is Map
+        ? decoded.cast<String, dynamic>()
+        : const <String, dynamic>{};
   }
 
   /// Present the native iOS folder picker. The security-scoped bookmark is

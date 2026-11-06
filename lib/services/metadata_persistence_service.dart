@@ -2,7 +2,9 @@ import 'dart:io';
 
 import 'package:mornye/services/ffmpeg_metadata.dart';
 import 'package:mornye/services/metadata_cover_resources.dart';
+import 'package:mornye/services/network_file_editor.dart';
 import 'package:mornye/services/platform_bridge.dart';
+import 'package:mornye/services/source_metadata_events.dart';
 import 'package:mornye/utils/artist_utils.dart';
 
 enum MetadataSaveFailure {
@@ -32,6 +34,7 @@ class MetadataSaveRequest {
   final String? selectedCoverPath;
   final String? currentCoverPath;
   final int? coverMaxDimension;
+  final bool preserveUnspecifiedTags;
 
   MetadataSaveRequest({
     required this.filePath,
@@ -40,6 +43,7 @@ class MetadataSaveRequest {
     this.selectedCoverPath,
     this.currentCoverPath,
     this.coverMaxDimension,
+    this.preserveUnspecifiedTags = false,
   }) : metadata = Map.unmodifiable(metadata);
 }
 
@@ -61,6 +65,7 @@ class MetadataPersistenceService {
   final Future<Map<String, dynamic>> Function(String) read;
   final MetadataEmbed embed;
   final Future<bool> Function(String, String) writeBack;
+  final NetworkFileEditor? networkEditor;
 
   const MetadataPersistenceService({
     required this.covers,
@@ -68,10 +73,42 @@ class MetadataPersistenceService {
     this.read = PlatformBridge.readFileMetadata,
     this.embed = _embed,
     this.writeBack = PlatformBridge.writeTempToSaf,
+    this.networkEditor,
   });
 
   Future<MetadataSaveResult> save(MetadataSaveRequest request) async {
     final releaseLease = covers.retain();
+    try {
+      if (request.filePath.startsWith('network://')) {
+        return await (networkEditor ?? NetworkFileEditor.instance).edit(
+          request.filePath,
+          (path) => _saveLocal(
+            MetadataSaveRequest(
+              filePath: path,
+              metadata: request.metadata,
+              artistTagMode: request.artistTagMode,
+              selectedCoverPath: request.selectedCoverPath,
+              currentCoverPath: request.currentCoverPath,
+              coverMaxDimension: request.coverMaxDimension,
+              preserveUnspecifiedTags: request.preserveUnspecifiedTags,
+            ),
+          ),
+          succeeded: (result) => result.failure == null,
+        );
+      }
+      final saved = await _saveLocal(request);
+      if (saved.failure == null && request.metadata.containsKey('lyrics')) {
+        await SourceMetadataEvents.instance.publish(request.filePath);
+      }
+      return saved;
+    } catch (error) {
+      return MetadataSaveResult.failed(MetadataSaveFailure.unexpected, error);
+    } finally {
+      await releaseLease();
+    }
+  }
+
+  Future<MetadataSaveResult> _saveLocal(MetadataSaveRequest request) async {
     String? resizedCoverDir;
     String? extractedCoverDir;
     String? stagedPath;
@@ -101,12 +138,18 @@ class MetadataPersistenceService {
       if (result['error'] case final error?) {
         return MetadataSaveResult.failed(MetadataSaveFailure.backend, error);
       }
+      if (result['success'] == false) {
+        return const MetadataSaveResult.failed(MetadataSaveFailure.backend);
+      }
       if (result['method'] != 'ffmpeg') {
         return const MetadataSaveResult.saved();
       }
 
       final target = stagedPath ?? request.filePath;
-      final tags = _fallbackTags(metadata);
+      final tags = _fallbackTags(
+        metadata,
+        preserveUnspecified: request.preserveUnspecifiedTags,
+      );
       try {
         final existing = await read(target);
         for (final key in const [
@@ -161,7 +204,6 @@ class MetadataPersistenceService {
       }
       await covers.release(extractedCoverDir);
       await covers.release(resizedCoverDir);
-      await releaseLease();
     }
   }
 
@@ -177,7 +219,10 @@ class MetadataPersistenceService {
     return null;
   }
 
-  static Map<String, String> _fallbackTags(Map<String, String> metadata) {
+  static Map<String, String> _fallbackTags(
+    Map<String, String> metadata, {
+    required bool preserveUnspecified,
+  }) {
     String index(String key) {
       final number = metadata['${key}_number'] ?? '';
       final total = metadata['${key}_total'] ?? '';
@@ -185,7 +230,7 @@ class MetadataPersistenceService {
       return total.isEmpty || total == '0' ? number : '$number/$total';
     }
 
-    // Emit empty values too: preserve custom tags while clearing edited fields.
+    // Full editor saves clear empty fields; partial saves keep unspecified tags.
     return {
       for (final entry in const {
         'TITLE': 'title',
@@ -206,9 +251,12 @@ class MetadataPersistenceService {
         'BARCODE': 'upc',
         'COMPILATION': 'compilation',
       }.entries)
-        entry.key: metadata[entry.value] ?? '',
-      'TRACKNUMBER': index('track'),
-      'DISCNUMBER': index('disc'),
+        if (!preserveUnspecified || metadata.containsKey(entry.value))
+          entry.key: metadata[entry.value] ?? '',
+      if (!preserveUnspecified || metadata.containsKey('track_number'))
+        'TRACKNUMBER': index('track'),
+      if (!preserveUnspecified || metadata.containsKey('disc_number'))
+        'DISCNUMBER': index('disc'),
     };
   }
 

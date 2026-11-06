@@ -10,6 +10,7 @@ import 'package:mornye/services/platform_bridge.dart';
 import 'package:mornye/services/history_database.dart';
 import 'package:mornye/services/download_file_recovery.dart';
 import 'package:mornye/services/history_maintenance.dart';
+import 'package:mornye/services/source_metadata_events.dart';
 import 'package:mornye/utils/logger.dart';
 import 'package:mornye/utils/file_access.dart';
 import 'package:mornye/utils/string_utils.dart';
@@ -84,6 +85,8 @@ bool _sameHistoryItem(DownloadHistoryItem a, DownloadHistoryItem b) =>
         a.albumArtist == b.albumArtist &&
         a.coverUrl == b.coverUrl &&
         a.filePath == b.filePath &&
+        a.originFilePath == b.originFilePath &&
+        a.originAvailable == b.originAvailable &&
         a.storageMode == b.storageMode &&
         a.downloadTreeUri == b.downloadTreeUri &&
         a.safRelativeDir == b.safRelativeDir &&
@@ -184,13 +187,16 @@ class DownloadHistoryNotifier extends Notifier<DownloadHistoryState> {
     if (_isLoaded) return;
     _isLoaded = true;
     Future.microtask(() async {
+      if (!ref.mounted) return;
       await reloadFromStorage();
     });
   }
 
   Future<void> _loadFromDatabase({bool publishUnchanged = true}) async {
+    if (!ref.mounted) return;
     try {
       final migrated = await _db.migrateFromSharedPreferences();
+      if (!ref.mounted) return;
       if (migrated) {
         _historyLog.i('Migrated history from SharedPreferences to SQLite');
       }
@@ -198,6 +204,7 @@ class DownloadHistoryNotifier extends Notifier<DownloadHistoryState> {
       var pathsMigrated = false;
       if (Platform.isIOS) {
         pathsMigrated = await _db.migrateIosContainerPaths();
+        if (!ref.mounted) return;
         if (pathsMigrated) {
           _historyLog.i('Migrated iOS container paths after app update');
         }
@@ -209,6 +216,7 @@ class DownloadHistoryNotifier extends Notifier<DownloadHistoryState> {
           .map((e) => DownloadHistoryItem.fromJson(e))
           .toList();
       final totalCount = await countFuture;
+      if (!ref.mounted) return;
 
       if (publishUnchanged ||
           migrated ||
@@ -390,6 +398,32 @@ class DownloadHistoryNotifier extends Notifier<DownloadHistoryState> {
       preserveTrackVariant: preserveTrackVariant,
     ),
   );
+
+  /// Serialized with Link, NAS transfers and ordinary History mutations.
+  /// A concurrent transfer must not publish a second row for one origin.
+  Future<void> saveOfflineCopy(DownloadHistoryItem item) =>
+      _enqueueHistoryWrite(() async {
+        final origin = item.originFilePath;
+        if (origin == null || !origin.startsWith('network://')) {
+          throw const FormatException('An offline copy needs a network origin');
+        }
+        final existing = await _db.findOfflineCopy(origin);
+        var incoming = item;
+        if (existing != null) {
+          final path = existing['filePath'] as String;
+          if (path != item.filePath && await fileExists(path)) {
+            throw const OfflineCopyAlreadySaved();
+          }
+          incoming = DownloadHistoryItem.fromJson(
+            item.toJson()..['id'] = existing['id'],
+          );
+        }
+        await _persistHistoryItem(
+          incoming,
+          'save offline copy',
+          preserveTrackVariant: true,
+        );
+      });
 
   Future<void> adoptNativeHistoryItem(
     DownloadHistoryItem item, {
@@ -774,6 +808,11 @@ class DownloadHistoryNotifier extends Notifier<DownloadHistoryState> {
       lookupItems: _lookupItemsWithUpdates([updated]),
     );
     _bumpHistoryRevision();
+    if (hasLyrics != null) {
+      // Listeners can enqueue a metadata probe themselves. Publish after the
+      // history write without waiting inside its serialized write queue.
+      unawaited(SourceMetadataEvents.instance.publish(updated.filePath));
+    }
   });
 
   static const _audioExtensions = [
@@ -819,10 +858,17 @@ class DownloadHistoryNotifier extends Notifier<DownloadHistoryState> {
       Map<String, String> replacementFileNames,
       Map<String, String> replacementRelativeDirs,
       Map<String, String> pathById,
+      Set<String> recoveredIds,
     })
   >
-  _inspectOrphanedEntries(List<Map<String, dynamic>> entries) async {
+  _inspectOrphanedEntries(
+    List<Map<String, dynamic>> entries, {
+    bool recoverMovedFiles = false,
+  }) async {
     final orphanedIds = <String>[];
+    // Downloads found in the current download folder after a move; recovery
+    // has already stored their new paths.
+    final recoveredIds = <String>{};
     final replacementPaths = <String, String>{};
     final replacementFileNames = <String, String>{};
     final replacementRelativeDirs = <String, String>{};
@@ -857,12 +903,15 @@ class DownloadHistoryNotifier extends Notifier<DownloadHistoryState> {
           try {
             if (await fileExists(filePath)) return MapEntry(id, true);
 
-            final moved = Platform.isAndroid
+            final moved = Platform.isAndroid || recoverMovedFiles
                 ? await DownloadFileRecovery(
                     history: _db,
                   ).recover(filePath, historyId: id, knownMissing: true)
                 : null;
-            if (moved != null) return MapEntry(id, true);
+            if (moved != null) {
+              recoveredIds.add(id);
+              return MapEntry(id, true);
+            }
             final sibling = await _findConvertedSibling(filePath);
             if (sibling != null) {
               _historyLog.i(
@@ -929,7 +978,10 @@ class DownloadHistoryNotifier extends Notifier<DownloadHistoryState> {
                 historyId: id,
                 knownMissing: true,
               );
-              if (moved != null) continue;
+              if (moved != null) {
+                recoveredIds.add(id);
+                continue;
+              }
             } catch (error) {
               _historyLog.w(
                 'Retaining download while its new folder is unavailable: $error',
@@ -976,6 +1028,7 @@ class DownloadHistoryNotifier extends Notifier<DownloadHistoryState> {
       replacementFileNames: replacementFileNames,
       replacementRelativeDirs: replacementRelativeDirs,
       pathById: pathById,
+      recoveredIds: recoveredIds,
     );
   }
 
@@ -1212,6 +1265,60 @@ class DownloadHistoryNotifier extends Notifier<DownloadHistoryState> {
       'Cleaned up ${committed.deleted} orphaned entries and repaired ${committed.repaired} paths',
     );
     return committed.deleted;
+  }
+
+  /// Relinks downloads whose files were moved: into the current download
+  /// folder with the same subfolders and name, or to a converted copy next to
+  /// the old file. Unlike [cleanupOrphanedDownloads], nothing is removed;
+  /// downloads whose files cannot be found are only counted as [missing].
+  Future<({int relinked, int missing})> findMovedDownloads() async {
+    _historyLog.i('Looking for moved downloads...');
+    final missingIds = <String>{};
+    final recoveredIds = <String>{};
+    final replacementPaths = <String, String>{};
+    final replacementFileNames = <String, String>{};
+    final replacementRelativeDirs = <String, String>{};
+    final inspectedEntries = <Map<String, dynamic>>[];
+    const pageSize = 256;
+    var offset = 0;
+
+    while (true) {
+      final entries = await _db.getEntriesWithPathsPage(
+        limit: pageSize,
+        offset: offset,
+      );
+      if (entries.isEmpty) break;
+      inspectedEntries.addAll(entries);
+      final result = await _inspectOrphanedEntries(
+        entries,
+        recoverMovedFiles: true,
+      );
+      missingIds.addAll(result.orphanedIds);
+      recoveredIds.addAll(result.recoveredIds);
+      replacementPaths.addAll(result.replacementPaths);
+      replacementFileNames.addAll(result.replacementFileNames);
+      replacementRelativeDirs.addAll(result.replacementRelativeDirs);
+      if (entries.length < pageSize) break;
+      // Recovery changes paths, not rows, so the pages stay in place.
+      offset += entries.length;
+    }
+
+    var repaired = 0;
+    if (replacementPaths.isNotEmpty) {
+      final committed = await _commitInspectedHistoryChanges(
+        entries: inspectedEntries,
+        orphanedIds: const [],
+        replacementPaths: replacementPaths,
+        replacementFileNames: replacementFileNames,
+        replacementRelativeDirs: replacementRelativeDirs,
+      );
+      repaired = committed.repaired;
+    }
+    final relinked = recoveredIds.length + repaired;
+    _historyLog.i(
+      'Relinked $relinked moved downloads; ${missingIds.length} still missing',
+    );
+    return (relinked: relinked, missing: missingIds.length);
   }
 
   Future<void> clearHistory() async {

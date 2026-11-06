@@ -22,6 +22,85 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   test(
+    'v16 migration backfills Windows aliases without changing history',
+    () async {
+      final db = await SqliteProcessDatabase.open();
+      addTearDown(db.close);
+      await HistorySchema.create(db, HistoryDatabase.schemaVersion);
+      await db.insert(
+        'history',
+        HistoryRowMapper.jsonToDbRow({
+          'id': 'windows',
+          'trackName': 'Song',
+          'artistName': 'Artist',
+          'albumName': 'Album',
+          'filePath': r'\\?\C:\Music\song.flac',
+          'service': 'local',
+          'downloadedAt': '2026-01-01T00:00:00Z',
+        }),
+      );
+      final original = await db.query('history');
+      await HistorySchema.upgrade(db, 16, HistoryDatabase.schemaVersion);
+      expect(await db.query('history'), original);
+      expect(
+        await db.query(
+          'history_path_keys',
+          where: 'path_key = ?',
+          whereArgs: ['windows-file:C:/Music/song.flac'],
+        ),
+        hasLength(1),
+      );
+    },
+  );
+
+  test(
+    'v15 index migration preserves rows and removes recreated indexes',
+    () async {
+      final db = await SqliteProcessDatabase.open();
+      addTearDown(db.close);
+      await HistorySchema.create(db, HistoryDatabase.schemaVersion);
+      const removed = {
+        'idx_downloaded_at': 'downloaded_at DESC',
+        'idx_album': 'album_name, album_artist',
+        'idx_history_track_artist': 'track_name, artist_name',
+      };
+      await db.execute('DROP INDEX idx_history_sort_album_artist');
+      await db.insert(
+        'history',
+        HistoryRowMapper.jsonToDbRow({
+          'id': 'persisted',
+          'trackName': 'Song',
+          'artistName': 'Artist',
+          'albumName': 'Album',
+          'filePath': '/music/song.flac',
+          'service': 'example-provider',
+          'downloadedAt': '2026-01-02T03:04:05.000Z',
+        }),
+      );
+      final rows = await db.query('history');
+      for (var attempt = 0; attempt < 2; attempt++) {
+        for (final MapEntry(:key, :value) in removed.entries) {
+          await db.execute('CREATE INDEX $key ON history($value)');
+        }
+        await HistorySchema.upgrade(db, 15, HistoryDatabase.schemaVersion);
+        expect(await db.query('history'), rows);
+        expect(
+          (await _schemaObjects(db)).keys,
+          isNot(anyElement(isIn(removed.keys))),
+        );
+        final plan = await db.rawQuery(
+          'EXPLAIN QUERY PLAN SELECT id FROM history WHERE sort_album_artist = ?',
+          ['artist'],
+        );
+        expect(
+          plan.single['detail'],
+          contains('idx_history_sort_album_artist'),
+        );
+      }
+    },
+  );
+
+  test(
     'v1 upgrade reaches the fresh history schema and backfills rows',
     () async {
       final fresh = await SqliteProcessDatabase.open();
@@ -64,7 +143,7 @@ void main() {
       expect(
         upgradedIndexes.keys,
         containsAll(<String>[
-          'idx_history_track_artist',
+          'idx_history_sort_album_artist',
           'idx_history_spotify_id_norm',
           'idx_history_isrc_norm',
           'idx_history_match_key',
@@ -77,6 +156,12 @@ void main() {
           'idx_history_queue_release',
         ]),
       );
+      for (final indexes in [freshIndexes, upgradedIndexes]) {
+        expect(
+          indexes.keys,
+          isNot(anyElement(isIn(HistorySchema.unusedIndexes))),
+        );
+      }
 
       final row = (await upgraded.query('history')).single;
       final expected = {

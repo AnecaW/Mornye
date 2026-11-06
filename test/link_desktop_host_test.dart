@@ -12,6 +12,7 @@ import 'package:mornye/services/link/link_host_router.dart';
 import 'package:mornye/services/link/link_protocol.dart';
 import 'package:mornye/services/lyrics_translation.dart';
 import 'package:mornye/services/lyrics_translation_sharing.dart';
+import 'package:mornye/services/source_deletion_events.dart';
 import 'package:mornye/utils/desktop_platform.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -310,16 +311,25 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
     expect(pushed(), hasLength(2));
 
-    // The heartbeat repeats the state every 15 s.
-    await tester.pump(const Duration(seconds: 15));
+    // A paused position does not need the periodic heartbeat.
+    await tester.pump(const Duration(seconds: 60));
+    expect(pushed(), hasLength(2));
+
+    player.emit(snapshot());
+    await tester.pump(const Duration(milliseconds: 250));
     expect(pushed(), hasLength(3));
+    expect((pushed().last['state'] as Map)['playing'], isTrue);
+    await tester.pump(const Duration(milliseconds: 14749));
+    expect(pushed(), hasLength(3));
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(pushed(), hasLength(4));
 
     // Without phones the heartbeat and pushes stop.
     backend.connect(const []);
     await tester.pump();
     player.emit(snapshot(playing: true, positionMs: 5));
     await tester.pump(const Duration(seconds: 16));
-    expect(pushed(), hasLength(3));
+    expect(pushed(), hasLength(4));
     await shutdown(tester);
   });
 
@@ -365,6 +375,74 @@ void main() {
     ]);
     await shutdown(tester);
   });
+
+  testWidgets(
+    'negotiated download pushes target deltas and reconnect snapshots',
+    (tester) async {
+      await boot(tester);
+      DownloadItem item(int id, double progress) => DownloadItem(
+        id: 'q$id',
+        track: Track(
+          id: 't$id',
+          name: 'Song $id',
+          artistName: 'Artist',
+          albumName: 'Album',
+          duration: 100,
+        ),
+        service: 'example-service',
+        status: DownloadStatus.downloading,
+        progress: progress,
+        createdAt: DateTime(2024),
+      );
+      final queue = container.read(fakeDownloadItemsProvider.notifier);
+      queue.replace(List.generate(200, (i) => item(i, 0.1)));
+      backend.connect([_phone, _tablet]);
+      await flush(tester);
+      expect(
+        backend.sentOfType(LinkMessageTypes.downloadsChanged),
+        hasLength(2),
+      );
+      backend.message('p1', {
+        'type': LinkMessageTypes.downloadsSubscribe,
+        'deltas': 1,
+      });
+      await flush(tester);
+      expect(
+        backend.sentOfType(LinkMessageTypes.downloadsChanged),
+        hasLength(3),
+      );
+      backend.sent.clear();
+      queue.replace(List.generate(200, (i) => item(i, i == 0 ? 0.9 : 0.1)));
+      await tester.pump(const Duration(milliseconds: 999));
+      expect(backend.sentOfType(LinkMessageTypes.downloadsDelta), isEmpty);
+      await tester.pump(const Duration(milliseconds: 1));
+      await flush(tester);
+      final deltas = backend.sent
+          .where(
+            (entry) => entry.message['type'] == LinkMessageTypes.downloadsDelta,
+          )
+          .toList();
+      expect(deltas, hasLength(1));
+      final delta = deltas.single;
+      expect(delta.deviceId, 'p1');
+      expect(delta.message['items'], hasLength(1));
+      final legacy = backend.sent.singleWhere(
+        (entry) => entry.message['type'] == LinkMessageTypes.downloadsChanged,
+      );
+      expect(legacy.deviceId, 'p2');
+      expect(legacy.message['items'], hasLength(200));
+
+      backend.connect([_tablet]);
+      await flush(tester);
+      backend.sent.clear();
+      backend.connect([_phone, _tablet]);
+      await flush(tester);
+      final reconnect = backend.sentOfType(LinkMessageTypes.downloadsChanged);
+      expect(reconnect, hasLength(1));
+      expect(reconnect.single['items'], hasLength(200));
+      await shutdown(tester);
+    },
+  );
 
   testWidgets('keeps each phone state until the phone disconnects', (
     tester,
@@ -487,6 +565,74 @@ void main() {
     expect(exporter.exports, hasLength(2));
     await shutdown(tester);
   });
+
+  testWidgets('confirmed desktop deletion bypasses the Library export delay', (
+    tester,
+  ) async {
+    await boot(tester);
+    container.listen(linkDesktopHostProvider, (_, _) {});
+    final revision = container.read(fakeLibraryRevisionProvider.notifier);
+    exporter.songs = [catalogSong('l:a')];
+    backend.catalogSongs = 1;
+    await SourceDeletionEvents.instance.publish('/music/b.flac');
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(exporter.exports, hasLength(1));
+    // Deletion updates both indexes and can publish more than one revision.
+    revision.bump();
+    await SourceDeletionEvents.instance.publish('/music/b.flac');
+    revision.bump();
+    await tester.pump(LinkDesktopHost.deletionExportDelay);
+    await flush(tester);
+    expect(exporter.exports, hasLength(2));
+    expect(backend.catalogs, hasLength(2));
+    expect(hostState().catalogSongs, 1);
+    await tester.pump(const Duration(seconds: 11));
+    expect(
+      exporter.exports,
+      hasLength(2),
+      reason: 'one coalesced deletion export',
+    );
+    await host().setEnabled(false);
+    await SourceDeletionEvents.instance.publish('/music/a.flac');
+    await tester.pump(const Duration(seconds: 11));
+    expect(exporter.exports, hasLength(2));
+    await shutdown(tester);
+  });
+
+  testWidgets('network file deletion does not export the desktop catalog', (
+    tester,
+  ) async {
+    await boot(tester);
+    await SourceDeletionEvents.instance.publish('network://phone/a.flac');
+    await tester.pump(LinkDesktopHost.deletionExportDelay);
+    await flush(tester);
+    expect(exporter.exports, hasLength(1));
+    await shutdown(tester);
+  });
+
+  testWidgets(
+    'deletion during an export publishes a fresh snapshot afterwards',
+    (tester) async {
+      await boot(tester);
+      backend.catalogGate = Completer<void>();
+      final pending = host().exportCatalog();
+      await flush(tester);
+      expect(exporter.exports, hasLength(2));
+      exporter.songs = [catalogSong('l:a')];
+      backend.catalogSongs = 1;
+      await SourceDeletionEvents.instance.publish('/music/b.flac');
+      await tester.pump(LinkDesktopHost.deletionExportDelay);
+      await flush(tester);
+      expect(exporter.exports, hasLength(2));
+      backend.catalogGate!.complete();
+      await pending;
+      await flush(tester);
+      expect(exporter.exports, hasLength(3));
+      expect(backend.catalogs, hasLength(3));
+      expect(hostState().catalogSongs, 1);
+      await shutdown(tester);
+    },
+  );
 
   testWidgets('an unchanged catalog is not pushed again, a changed one and '
       'a new server get it', (tester) async {
@@ -710,7 +856,7 @@ void main() {
     });
 
     player.current = snapshot(positionMs: 30000, playing: false);
-    expect(host().hasCurrentTrack, isTrue);
+    expect(host().hasCurrentTrack(), isTrue);
     expect(await host().continueOnPhone('p1'), isTrue);
     final handoff = backend.sent.last;
     expect(handoff.deviceId, 'p1');
@@ -857,7 +1003,7 @@ void main() {
   ) async {
     await boot(tester);
     final events = <LinkPairingEvent>[];
-    final subscription = host().pairingEvents.listen(events.add);
+    final subscription = host().pairingEvents().listen(events.add);
     backend.deviceList = [
       const LinkPairedDevice(deviceId: 'p9', name: 'New', platform: 'ios'),
     ];
