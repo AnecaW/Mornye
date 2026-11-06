@@ -1,0 +1,132 @@
+name: iOS unsigned IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - freebuff/a43542c94a5f6c7006c87717
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-ios-ipa:
+    name: Build unsigned IPA
+    runs-on: xcode-27
+    timeout-minutes: 45
+    env:
+      MORNYE_DISCORD_SDK: "0"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Select Xcode 27.1
+        run: |
+          if [ -d /Applications/Xcode_27.1.app ]; then
+            sudo xcode-select -s /Applications/Xcode_27.1.app
+          fi
+          xcodebuild -version
+
+      - name: Activate pinned Rust toolchain
+        working-directory: rust_backend
+        run: rustup show
+
+      - name: Cache Cargo registry and build output
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            rust_backend/target
+          key: cargo-${{ runner.os }}-rust-ios-${{ hashFiles('rust_backend/rust-toolchain.toml') }}-${{ hashFiles('rust_backend/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-rust-ios-${{ hashFiles('rust_backend/rust-toolchain.toml') }}-
+
+      - name: Build Rust iOS XCFramework
+        run: bash scripts/build_ios.sh
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          channel: "stable"
+          flutter-version-file: .fvmrc
+          cache: true
+
+      - name: Cache pub dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.pub-cache
+          key: pub-${{ runner.os }}-${{ hashFiles('pubspec.lock') }}
+          restore-keys: pub-${{ runner.os }}-
+
+      - name: Prepare Flutter framework patch
+        run: dart scripts/prepare_flutter_sdk.dart
+
+      - name: Get Flutter dependencies
+        run: flutter pub get
+
+      - name: Normalize ffmpeg plugin shell scripts
+        run: |
+          find "$HOME/.pub-cache/hosted" -path "*ffmpeg_kit_flutter_new_audio*/scripts/*.sh" -type f -print0 |
+            while IFS= read -r -d '' f; do
+              perl -pi -e 's/\r$//' "$f"
+              chmod +x "$f"
+            done
+
+      - name: Configure CocoaPods
+        working-directory: ios
+        run: pod install
+
+      - name: Build iOS (unsigned)
+        run: |
+          flutter build ios --release --no-codesign --target lib/main.dart \
+            --dart-define="GIT_COMMIT=$(git rev-parse --short=8 HEAD)"
+
+      - name: Audit Rust iOS application
+        run: |
+          app="build/ios/iphoneos/Runner.app"
+          test -s "$app/Extensions/LinkNowPlaying.appex/LinkNowPlaying"
+          python3 -m unittest discover -s scripts -p 'test_check_backend_ios.py'
+          python3 scripts/check_backend_ios.py "$app" \
+            --backend rust --archs arm64 --platform ios --release
+
+      - name: Package unsigned IPA
+        run: |
+          set -euo pipefail
+          VERSION="$(sed -n 's/^version: \([^+]*\).*/\1/p' pubspec.yaml | head -n 1)"
+          test -n "$VERSION"
+          IPA_NAME="Mornye-${VERSION}-ios-unsigned.ipa"
+          rm -rf build/ios/ipa
+          mkdir -p build/ios/ipa/Payload
+          cp -R build/ios/iphoneos/Runner.app build/ios/ipa/Payload/Runner.app
+          cd build/ios/ipa
+          zip -qry "$IPA_NAME" Payload
+          python3 - "$IPA_NAME" <<'PY'
+          import plistlib
+          import sys
+          import zipfile
+
+          with zipfile.ZipFile(sys.argv[1]) as ipa:
+              names = set(ipa.namelist())
+              assert "Payload/Runner.app/Runner" in names, "missing Runner executable"
+              info = plistlib.loads(ipa.read("Payload/Runner.app/Info.plist"))
+          print(f"bundle={info.get('CFBundleIdentifier')} version={info.get('CFBundleShortVersionString')} build={info.get('CFBundleVersion')}")
+          PY
+          shasum -a 256 "$IPA_NAME" | tee SHA256SUMS.txt
+          ls -lh "$IPA_NAME"
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-ipa-unsigned
+          path: |
+            build/ios/ipa/Mornye-*.ipa
+            build/ios/ipa/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
