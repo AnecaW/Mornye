@@ -410,7 +410,7 @@ class NetworkStorageService {
   List<NetworkConnection>? _connections;
   Future<HttpServer>? _server;
   Future<void> _mutation = Future.value();
-  final _routes = <String, ({String id, String path})>{};
+  final _routes = <String, ({String id, String path, bool playback})>{};
   final _readClients =
       <
         ({
@@ -749,9 +749,18 @@ class NetworkStorageService {
         ? '$opaque.$suffix'
         : opaque;
     while (_routes.length >= 256) {
-      _routes.remove(_routes.keys.first);
+      // Browsing/analysis traffic must not evict AVPlayer's active URL. Keep
+      // recent playback routes preferentially, within the same bounded table.
+      String? disposable;
+      for (final entry in _routes.entries) {
+        if (!entry.value.playback) {
+          disposable = entry.key;
+          break;
+        }
+      }
+      _routes.remove(disposable ?? _routes.keys.first);
     }
-    _routes[token] = (id: host, path: path);
+    _routes[token] = (id: host, path: path, playback: forPlayback);
     return 'http://127.0.0.1:${server.port}/$token';
   }
 

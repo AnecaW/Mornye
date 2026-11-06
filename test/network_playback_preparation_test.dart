@@ -45,6 +45,27 @@ void main() {
     await directory.delete(recursive: true);
   });
   test(
+    'browsing many library sources keeps the active playback route reachable',
+    () async {
+      final url = await storage.preparePlayback(source, PlaybackLoad());
+      for (var i = 0; i < 300; i++) {
+        await storage.resolve(
+          NetworkStorageService.source(
+            'fixture',
+            subsonicSongPath('browse-$i', 'flac'),
+          ),
+        );
+      }
+      final client = HttpClient();
+      addTearDown(() => client.close(force: true));
+      final request = await client.getUrl(Uri.parse(url));
+      request.headers.set('Range', 'bytes=0-1');
+      final response = await request.close();
+      expect(response.statusCode, 206);
+      expect(await response.expand((chunk) => chunk).toList(), [102, 76]);
+    },
+  );
+  test(
     'partial cache resumes at the exact offset when the origin ignores Range',
     () async {
       server.ignoreRanges = true;
