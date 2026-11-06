@@ -271,12 +271,14 @@ class LocalLibraryLookupIndex {
 
 class LocalLibraryBatchLookupRequest {
   final String? id;
+  final String? filePath;
   final String? isrc;
   final String trackName;
   final String artistName;
 
   const LocalLibraryBatchLookupRequest({
     this.id,
+    this.filePath,
     this.isrc,
     required this.trackName,
     required this.artistName,

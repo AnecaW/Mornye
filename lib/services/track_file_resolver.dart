@@ -25,6 +25,11 @@ resolveTrackFiles(
   final requests = [
     for (final track in tracks)
       LocalLibraryBatchLookupRequest(
+        filePath: (track.source ?? '').startsWith('network://')
+            ? track.source
+            : track.id.startsWith('network://')
+            ? track.id
+            : null,
         id: (track.source ?? '').toLowerCase() == 'local' ? track.id : null,
         isrc: track.isrc,
         trackName: track.name,
@@ -98,6 +103,20 @@ resolveTrackFiles(
     while (true) {
       final index = next++;
       if (index >= tracks.length) return;
+      final track = tracks[index];
+      final explicitSource = (track.source ?? '').startsWith('network://')
+          ? track.source!
+          : track.id.startsWith('network://')
+          ? track.id
+          : null;
+      if (explicitSource != null) {
+        // A server track already identifies its owning account. Never replace
+        // it with an identically named/ISRC-matched song from another source.
+        if (libraryScopeAllowsPath(scope, explicitSource, indexed: true)) {
+          results[index] = explicitSource;
+        }
+        continue;
+      }
       final localPath = localMatches[index]?['filePath']?.toString() ?? '';
       if (localPath.isNotEmpty && await pathExists(localPath)) {
         results[index] = localPath;

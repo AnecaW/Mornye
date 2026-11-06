@@ -26,6 +26,11 @@ Future<List<UnifiedLibraryItem>> linkLibraryItemsFor(
   final lookups = [
     for (final track in tracks)
       LocalLibraryBatchLookupRequest(
+        filePath: (track.source ?? '').startsWith('network://')
+            ? track.source
+            : track.id.startsWith('network://')
+            ? track.id
+            : null,
         id: (track.source ?? '').toLowerCase() == 'local' ? track.id : null,
         isrc: track.isrc,
         trackName: track.name,

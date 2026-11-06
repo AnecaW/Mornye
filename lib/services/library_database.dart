@@ -687,6 +687,7 @@ class LibraryDatabase {
     final where = <String>[];
     final args = <Object?>[];
     appendLibrarySourceScope(where, args, scope, 'file_path', indexed: true);
+    final byPath = <String, Map<String, dynamic>>{};
     final byId = <String, Map<String, dynamic>>{};
     final byIsrc = <String, Map<String, dynamic>>{};
     final byMatchKey = <String, Map<String, dynamic>>{};
@@ -709,6 +710,11 @@ class LibraryDatabase {
     }
 
     await Future.wait([
+      loadColumn(
+        'file_path',
+        requests.map((request) => request.filePath ?? ''),
+        byPath,
+      ),
       loadColumn('id', requests.map((request) => request.id ?? ''), byId),
       loadColumn('isrc', requests.map((request) => request.isrc ?? ''), byIsrc),
       loadColumn(
@@ -722,6 +728,8 @@ class LibraryDatabase {
 
     return requests
         .map((request) {
+          final filePath = request.filePath;
+          if (filePath != null && filePath.isNotEmpty) return byPath[filePath];
           final id = request.id?.trim() ?? '';
           if (id.isNotEmpty && (strictIds || byId[id] != null)) return byId[id];
           final isrc = request.isrc?.trim() ?? '';

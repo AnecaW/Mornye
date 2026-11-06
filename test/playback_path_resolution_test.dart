@@ -201,6 +201,35 @@ void main() {
     return container;
   }
 
+  test(
+    'explicit NAS track identity never switches to an identically named other server',
+    () async {
+      final library = _Library()
+        ..paths['Track 0'] = 'network://other/subsonic/song/other.flac';
+      final history = _HistoryDatabase();
+      final track = Track(
+        id: 'network://nas/subsonic/song/own.flac',
+        source: 'network://nas/subsonic/song/own.flac',
+        name: 'Track 0',
+        artistName: 'Artist',
+        albumName: 'Album',
+        duration: 180,
+      );
+      for (final enabled in [false, true]) {
+        final c = containerFor(
+          history,
+          library: library,
+          servers: enabled ? {'nas', 'other'} : {'other'},
+        );
+        final paths = await c
+            .read(playbackProvider.notifier)
+            .resolveTrackFilePaths([track]);
+        expect(paths, [enabled ? track.source : null]);
+        expect(history.deletes, isEmpty);
+      }
+    },
+  );
+
   test('scanned files play only while Local Library is on', () async {
     final library = _Library()..paths['Track 0'] = 'content://library/0';
     final database = _HistoryDatabase()..paths['1'] = 'content://downloads/1';
