@@ -242,10 +242,11 @@ class AudioplayersPlaybackDeck
       _equalizerSent = true;
       reportEqualizerError(_ordinary.playerId, null);
     } catch (error) {
+      _log.w('Equalizer processing unavailable: ${error.runtimeType}');
       if (!_disposed && !_equalizerDisposed && settings.enabled) {
         reportEqualizerError(
           _ordinary.playerId,
-          'Equalizer is unavailable on this output: $error',
+          'Equalizer is unavailable for this stream or audio output.',
         );
       }
     }

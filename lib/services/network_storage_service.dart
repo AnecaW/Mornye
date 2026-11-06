@@ -1,3 +1,4 @@
+import 'package:mornye/services/music_library_capabilities.dart';
 import 'dart:async';
 import 'package:mornye/utils/logger.dart';
 import 'package:mornye/services/playback_load.dart';
@@ -311,6 +312,16 @@ class NetworkStorageService {
   final _playbackPrefixes = <String, _PlaybackPrefix>{};
   final _playbackPreparations = <String, _SharedPlaybackPreparation>{};
   final _playbackProfiles = <String, PlaybackNetworkProfile>{};
+  final _subsonicSupport = <String, SubsonicCapabilities>{};
+  SubsonicCapabilities subsonicCapabilities(NetworkConnection connection) {
+    final key = _audioCacheKey(connection, '');
+    final value = _subsonicSupport.putIfAbsent(key, SubsonicCapabilities.new);
+    while (_subsonicSupport.length > 32) {
+      _subsonicSupport.remove(_subsonicSupport.keys.first);
+    }
+    return value;
+  }
+
   final SubsonicResponseCache? metadataCache;
   final NetworkAudioCache? audioCache;
   static const _storage = FlutterSecureStorage(

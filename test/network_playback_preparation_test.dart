@@ -1,3 +1,4 @@
+import 'package:mornye/services/subsonic_response_cache.dart';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -26,6 +27,9 @@ void main() {
       },
       ensureAccess: (_) async {},
       audioCache: NetworkAudioCache(directory: () async => directory),
+      metadataCache: SubsonicResponseCache(
+        directory: () async => Directory('${directory.path}/metadata'),
+      ),
     );
     await storage.save(server.connection());
     source = NetworkStorageService.source(
@@ -157,7 +161,7 @@ void main() {
     'closing an API client does not interrupt another pooled request',
     () async {
       server.blockMethod = 'getArtists';
-      final blocked = storage.openSubsonic(server.connection());
+      final blocked = storage.openSubsonic(server.connection(), fresh: true);
       final other = storage.openSubsonic(server.connection());
       addTearDown(other.close);
       final pending = blocked.request('getArtists');
@@ -170,6 +174,27 @@ void main() {
       final url = await storage.preparePlayback(source, PlaybackLoad());
       expect(url, contains('127.0.0.1'));
       server.release.complete();
+    },
+  );
+  test(
+    'closing the first metadata caller preserves a shared cache fetch',
+    () async {
+      server.blockMethod = 'getArtists';
+      final first = storage.openSubsonic(server.connection());
+      final second = storage.openSubsonic(server.connection());
+      addTearDown(second.close);
+      final a = first.request('getArtists');
+      final cancelled = expectLater(a, throwsStateError);
+      await server.held.future.timeout(const Duration(seconds: 2));
+      final b = second.request('getArtists');
+      first.close();
+      server.release.complete();
+      expect((await b.timeout(const Duration(seconds: 2)))['status'], 'ok');
+      await cancelled;
+      expect(
+        server.requests.where((r) => r.path.endsWith('/getArtists.view')),
+        hasLength(1),
+      );
     },
   );
   test(

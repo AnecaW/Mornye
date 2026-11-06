@@ -286,6 +286,8 @@ extension NetworkPlaybackPreparation on NetworkStorageService {
       rethrow;
     } catch (error) {
       load.check();
+      if (deadlineExpired)
+        throw const PlaybackFailure(PlaybackFailureKind.timeout);
       throw PlaybackFailure.classify(error);
     } finally {
       deadline.cancel();

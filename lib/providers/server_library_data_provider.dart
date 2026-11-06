@@ -1,3 +1,4 @@
+import 'package:mornye/services/music_library_capabilities.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mornye/providers/library_source_provider.dart';
 import 'package:mornye/providers/recent_access_provider.dart';
@@ -118,6 +119,13 @@ final serverRadioStationsProvider = FutureProvider.autoDispose
           connection.protocol != NetworkProtocol.subsonic) {
         return const [];
       }
+      final sources = ref.read(musicLibraryRegistryProvider);
+      if (!sources.any(
+        (s) =>
+            s.id == serverMusicSource(connection.id) &&
+            s.supports(MusicLibraryCapability.radio),
+      ))
+        return const [];
       return NavidromeLibrary(
         connection,
         storage: ref.read(librarySourceStorageProvider),

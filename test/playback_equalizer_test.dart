@@ -229,7 +229,14 @@ void main() {
       reject = true;
       playbackEqualizer.value = const EqualizerSettings(enabled: true);
       await deck.setFileSource('/song.flac');
-      expect(playbackEqualizerError.value, contains('Unsupported output'));
+      expect(
+        playbackEqualizerError.value,
+        'Equalizer is unavailable for this stream or audio output.',
+      );
+      expect(
+        playbackEqualizerError.value,
+        isNot(contains('PlatformException')),
+      );
       await deck.resume();
       expect(calls.last.method, 'resume');
       await deck.dispose();

@@ -1,3 +1,4 @@
+import 'package:mornye/services/music_library_capabilities.dart';
 import 'package:mornye/services/music_library_scope.dart';
 export 'package:mornye/services/music_library_scope.dart';
 import 'package:flutter/widgets.dart' show WidgetsBinding, AppLifecycleState;
@@ -88,6 +89,64 @@ final librarySourceConnectionsProvider =
       final ids = visibility.disabled.split('|').toSet();
       return saved.where((c) => !ids.contains(c.id)).toList(growable: false);
     });
+
+/// One source/capability registry for existing configured libraries. Network
+/// catalog storage is independent of the device scan switch.
+final musicLibraryRegistryProvider = Provider<List<MusicLibrarySource>>((ref) {
+  final device = ref.watch(
+    settingsProvider.select((s) => s.localLibraryEnabled),
+  );
+  final saved =
+      ref.watch(savedLibrarySourceConnectionsProvider).value ??
+      const <NetworkConnection>[];
+  final enabled =
+      (ref.watch(librarySourceConnectionsProvider).value ??
+              const <NetworkConnection>[])
+          .map((c) => c.id)
+          .toSet();
+  final storage = ref.watch(librarySourceStorageProvider);
+  return [
+    MusicLibrarySource(
+      id: deviceMusicSource,
+      account: deviceMusicSource,
+      enabled: device,
+      capabilities: {
+        MusicLibraryCapability.indexedCatalog,
+        MusicLibraryCapability.localFiles,
+        MusicLibraryCapability.playlists,
+        MusicLibraryCapability.playlistEditing,
+        MusicLibraryCapability.recentlyPlayed,
+        MusicLibraryCapability.recordPlayback,
+      },
+    ),
+    for (final connection in saved)
+      MusicLibrarySource(
+        id: serverMusicSource(connection.id),
+        account: musicSourceAccount(connection),
+        enabled: enabled.contains(connection.id),
+        capabilities: {
+          MusicLibraryCapability.indexedCatalog,
+          MusicLibraryCapability.progressiveStreaming,
+          MusicLibraryCapability.offlineDownload,
+          if (connection.protocol == NetworkProtocol.smb)
+            MusicLibraryCapability.upload,
+          if (connection.protocol == NetworkProtocol.subsonic) ...{
+            MusicLibraryCapability.playlists,
+            MusicLibraryCapability.recentlyPlayed,
+            MusicLibraryCapability.recordPlayback,
+            if (storage
+                .subsonicCapabilities(connection)
+                .supportsMethod('getInternetRadioStations'))
+              MusicLibraryCapability.radio,
+            if (storage
+                .subsonicCapabilities(connection)
+                .supportsMethod('updatePlaylist'))
+              MusicLibraryCapability.playlistEditing,
+          },
+        },
+      ),
+  ];
+});
 
 final selectedLibrarySourceProvider =
     NotifierProvider<LibrarySourceSelection, String>(

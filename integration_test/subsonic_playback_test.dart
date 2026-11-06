@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'package:flutter/services.dart';
 import 'dart:convert';
 import 'package:mornye/services/playback_load.dart';
 import 'package:mornye/services/music_playback_deck.dart';
@@ -51,6 +53,82 @@ void main() {
     'mp3': String.fromEnvironment('TEST_MP3'),
     'flac': String.fromEnvironment('TEST_FLAC'),
   };
+  testWidgets(
+    'iOS HLS radio processes actual PCM through EQ and updates gain live',
+    (tester) async {
+      const encoded = String.fromEnvironment('TEST_HLS');
+      expect(
+        encoded,
+        isNotEmpty,
+        reason: 'The macOS job must provide actual HLS segments',
+      );
+      final fixtures = (jsonDecode(utf8.decode(base64Decode(encoded))) as Map)
+          .cast<String, String>();
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      server.listen((request) async {
+        final name = request.uri.pathSegments.lastOrNull;
+        if (!fixtures.containsKey(name)) {
+          request.response.statusCode = 404;
+        } else {
+          request.response.headers.set(
+            'Content-Type',
+            name!.endsWith('.m3u8')
+                ? 'application/vnd.apple.mpegurl'
+                : 'video/mp2t',
+          );
+          request.response.add(base64Decode(fixtures[name]!));
+        }
+        await request.response.close();
+      });
+      final player = AudioPlayer();
+      addTearDown(player.dispose);
+      await player.getDuration();
+      const channel = MethodChannel('xyz.luan/audioplayers');
+      Future<void> effect(double gain) =>
+          channel.invokeMethod<void>('setEqualizer', {
+            'playerId': player.playerId,
+            'configuration': {
+              'enabled': true,
+              'frequencies': [60.0, 250.0, 1000.0, 4000.0, 16000.0],
+              'gains': List<double>.filled(5, 0),
+              'inputGain': gain,
+              'limiter': false,
+            },
+          });
+      Future<Map<Object?, Object?>> stats() async =>
+          (await channel.invokeMapMethod<Object?, Object?>(
+            'getEqualizerDiagnostics',
+            {'playerId': player.playerId},
+          ))!;
+      await player
+          .setSource(UrlSource('http://127.0.0.1:${server.port}/live.m3u8'))
+          .timeout(const Duration(seconds: 20));
+      await effect(-12);
+      await player.resume();
+      Future<Map<Object?, Object?>> frames(int minimum) async {
+        final end = DateTime.now().add(const Duration(seconds: 10));
+        while (DateTime.now().isBefore(end)) {
+          final sample = await stats();
+          if ((sample['processedFrames'] as num) >= minimum) return sample;
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+        }
+        fail('Decoded radio samples did not reach EQ: ${await stats()}');
+      }
+
+      final first = await frames(22050);
+      final input = (first['inputRms'] as num).toDouble();
+      final output = (first['outputRms'] as num).toDouble();
+      expect(input, greaterThan(0));
+      expect(output / input, inInclusiveRange(0.20, 0.35));
+      await effect(0);
+      final second = await frames(
+        (first['processedFrames'] as num).toInt() + 22050,
+      );
+      expect((second['outputRms'] as num).toDouble(), greaterThan(output));
+      await player.pause();
+    },
+  );
   for (final format in ['wav', 'mp3', 'flac']) {
     testWidgets('native Subsonic $format streaming, seeking and offline cache', (
       tester,
@@ -87,7 +165,15 @@ void main() {
       final player = AudioPlayer();
       addTearDown(player.dispose);
       await player.setVolume(0);
-      final url = await storage.preparePlayback(source, PlaybackLoad());
+      final preparation = PlaybackLoad();
+      final url = await storage.preparePlayback(source, preparation);
+      await player.getDuration();
+      await const MethodChannel(
+        'xyz.luan/audioplayers',
+      ).invokeMethod<void>('setBufferingPolicy', {
+        'playerId': player.playerId,
+        'configuration': preparation.bufferPolicy.toNative(),
+      });
       expect(Uri.parse(url).query, isEmpty);
       await player
           .setSource(UrlSource(url))

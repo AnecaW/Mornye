@@ -296,13 +296,20 @@ class SubsonicClient {
     final account = jsonEncode(connection.toJson());
     final result = cache == null
         ? await _requestJson(method, arguments)
-        : await cache.request(
-            account,
-            method,
-            arguments,
-            () => _requestJson(method, arguments),
-            fresh: fresh,
-          );
+        : await cache.request(account, method, arguments, () async {
+            if (fresh || !SubsonicResponseCache.isCacheable(method)) {
+              return _requestJson(method, arguments);
+            }
+            // The shared cache operation owns its request, not the first
+            // caller. Closing that caller cannot cancel another subscriber.
+            final owner = _storage.openSubsonic(connection);
+            try {
+              return await owner._requestJson(method, arguments);
+            } finally {
+              owner.close();
+            }
+          }, fresh: fresh);
+    _storage.subsonicCapabilities(connection).observe(result);
     if (method == 'startScan' ||
         (method == 'getScanStatus' &&
             result['scanStatus'] is Map &&
@@ -332,6 +339,8 @@ class SubsonicClient {
     bool post = false,
   ]) async {
     if (_closed) throw StateError('Subsonic request cancelled');
+    final support = _storage.subsonicCapabilities(connection);
+    if (!support.supportsMethod(method)) throw const SubsonicException(30);
     final target = _subsonicTarget(connection, method, arguments);
     final owned = <HttpClientRequest>{};
     try {
@@ -372,8 +381,10 @@ class SubsonicClient {
       } on FormatException {
         throw const HttpException('Invalid Subsonic response');
       }
+      support.observe(result);
       if (result['status'] == 'failed') {
         final code = _subsonicMap(result['error'])['code'];
+        support.failed(method, code is num ? code.toInt() : 0);
         throw SubsonicException(code is num ? code.toInt() : 0);
       }
       if (result['status'] != 'ok') {

@@ -261,6 +261,44 @@ void main() {
     },
   );
 
+  for (final skips in [5, 10, 20]) {
+    for (final shuffle in [false, true]) {
+      test(
+        '$skips rapid Next commands coalesce while buffering (shuffle: $shuffle)',
+        () async {
+          final tracks = [
+            for (var i = 0; i < 32; i++)
+              PlayableMedia(
+                id: 'rapid-$i',
+                source: '/rapid-$i.flac',
+                title: 'Rapid $i',
+                artist: 'Artist',
+              ),
+          ];
+          final gate = Completer<void>();
+          native.sourceGates[tracks.first.source] = gate;
+          final opening = handler.setQueueAndPlay(tracks);
+          await _until(() => native.calls.any((c) => c.$2 == 'setSourceUrl'));
+          if (shuffle)
+            await handler.setShuffleMode(AudioServiceShuffleMode.all);
+          final expected = handler.queue.value[skips];
+          final commands = [
+            for (var i = 0; i < skips; i++) handler.skipToNext(),
+          ];
+          gate.complete();
+          await Future.wait([opening, ...commands]);
+          expect(handler.mediaItem.value?.id, expected.id);
+          expect(native.sources['music-player'], expected.extras!['source']);
+          expect(native.resumedSources, [expected.extras!['source']]);
+          expect(
+            handler.playbackState.value.processingState,
+            AudioProcessingState.ready,
+          );
+        },
+      );
+    }
+  }
+
   for (final shuffle in [false, true]) {
     test('Previous changes both title and audio (shuffle: $shuffle)', () async {
       if (shuffle) await handler.setShuffleMode(AudioServiceShuffleMode.all);

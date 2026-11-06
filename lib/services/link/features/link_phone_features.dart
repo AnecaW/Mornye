@@ -1,3 +1,4 @@
+import 'package:mornye/providers/library_source_provider.dart';
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -51,6 +52,7 @@ final linkLibraryLookupProvider = Provider<LinkLibraryLookup>(
     history: () => ref.read(downloadHistoryProvider.notifier),
     library: ref.watch(musicPlayerRuntimeProvider).dependencies.libraryDatabase,
     includeLibrary: () => ref.read(settingsProvider).localLibraryEnabled,
+    scope: () => ref.read(musicLibraryScopeProvider),
   ),
 );
 

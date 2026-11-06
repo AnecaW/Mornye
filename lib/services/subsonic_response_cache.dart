@@ -41,6 +41,8 @@ class SubsonicResponseCache {
     'getPlaylist',
     'getMusicFolders',
   };
+  static bool isCacheable(String method) => _methods.contains(method);
+
   String _account(String account) =>
       sha256.convert(utf8.encode(account)).toString();
 

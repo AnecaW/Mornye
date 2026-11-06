@@ -1,3 +1,4 @@
+import 'package:mornye/providers/library_source_provider.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -424,6 +425,7 @@ class LinkTrackTransferButton extends ConsumerWidget {
     final root = Navigator.of(context, rootNavigator: true).context;
     Future<List<UnifiedLibraryItem>> items() => linkLibraryItemsFor(
       tracks,
+      scope: ref.read(musicLibraryScopeProvider),
       includeLocal: ref.read(settingsProvider).localLibraryEnabled,
     );
     await showAppBottomSheet<void>(

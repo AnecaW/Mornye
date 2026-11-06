@@ -1,3 +1,5 @@
+import 'package:mornye/services/music_library_scope.dart';
+import 'package:mornye/services/library_source_scope.dart';
 import 'package:mornye/models/track.dart';
 import 'package:mornye/models/unified_library_item.dart';
 import 'package:mornye/providers/download_history_provider.dart';
@@ -14,21 +16,27 @@ Future<List<UnifiedLibraryItem>> linkLibraryItemsFor(
   required bool includeLocal,
   LibraryDatabase? library,
   HistoryDatabase? history,
+  MusicLibraryScope? scope,
 }) async {
   if (tracks.isEmpty) return const [];
   final historyDb = history ?? HistoryDatabase.instance;
-  final local = includeLocal
-      ? await (library ?? LibraryDatabase.instance).findExistingBatch([
-          for (final track in tracks)
-            LocalLibraryBatchLookupRequest(
-              id: (track.source ?? '').toLowerCase() == 'local'
-                  ? track.id
-                  : null,
-              isrc: track.isrc,
-              trackName: track.name,
-              artistName: track.artistName,
-            ),
-        ])
+  final boundary = scope?.apply(
+    QueueLibraryDbQuery(includeLocal: includeLocal),
+  );
+  final lookups = [
+    for (final track in tracks)
+      LocalLibraryBatchLookupRequest(
+        id: (track.source ?? '').toLowerCase() == 'local' ? track.id : null,
+        isrc: track.isrc,
+        trackName: track.name,
+        artistName: track.artistName,
+      ),
+  ];
+  final database = library ?? LibraryDatabase.instance;
+  final local = (boundary?.includeLocal ?? includeLocal)
+      ? boundary == null
+            ? await database.findExistingBatch(lookups)
+            : await database.findExistingBatchScoped(lookups, boundary)
       : List<Map<String, dynamic>?>.filled(tracks.length, null);
   final matches = await historyDb.findExistingTracks([
     for (final track in tracks)
@@ -48,7 +56,11 @@ Future<List<UnifiedLibraryItem>> linkLibraryItemsFor(
     for (var i = 0; i < tracks.length; i++)
       if (local[i] case final row?)
         UnifiedLibraryItem.fromLocalLibrary(LocalLibraryItem.fromJson(row))
-      else if (downloads[matches[i]?['id']] case final row?)
+      else if (downloads[matches[i]?['id']] case final row?
+          when libraryScopeAllowsPath(
+            boundary,
+            row['file_path'] as String? ?? row['filePath'] as String? ?? '',
+          ))
         UnifiedLibraryItem.fromDownloadHistory(
           DownloadHistoryItem.fromJson(row),
         ),
@@ -62,18 +74,24 @@ class LinkDatabaseLookup implements LinkLibraryLookup {
     required DownloadHistoryNotifier Function() history,
     required this.library,
     required bool Function() includeLibrary,
+    this.scope,
   }) : _history = history,
        _includeLibrary = includeLibrary;
 
   final DownloadHistoryNotifier Function() _history;
   final LibraryDatabase library;
   final bool Function() _includeLibrary;
+  final MusicLibraryScope? Function()? scope;
+  QueueLibraryDbQuery? get boundary =>
+      scope?.call()?.apply(const QueueLibraryDbQuery());
+  bool allows(String path, {bool indexed = false}) =>
+      libraryScopeAllowsPath(boundary, path, indexed: indexed);
 
   DownloadHistoryNotifier get history => _history();
 
   /// Whether scanned Library rows count, read per query so a settings
   /// change applies at once.
-  bool get includeLibrary => _includeLibrary();
+  bool get includeLibrary => boundary?.includeLocal ?? _includeLibrary();
 
   static LinkLocalTrack _fromHistory(DownloadHistoryItem item) =>
       LinkLocalTrack(playableFromHistory(item), isrc: item.isrc);
@@ -90,11 +108,17 @@ class LinkDatabaseLookup implements LinkLibraryLookup {
   }) async {
     if (source.isNotEmpty) {
       final item = await history.getByFilePathAsync(source);
-      if (item != null) return _fromHistory(item);
+      if (item != null && allows(item.filePath)) return _fromHistory(item);
     }
     if (!includeLibrary || id.isEmpty) return null;
     final row = await library.getById(id);
-    return row == null ? null : _fromLibrary(row);
+    return row == null ||
+            !allows(
+              row['file_path'] as String? ?? row['filePath'] as String? ?? '',
+              indexed: true,
+            )
+        ? null
+        : _fromLibrary(row);
   }
 
   @override
@@ -103,16 +127,29 @@ class LinkDatabaseLookup implements LinkLibraryLookup {
     final found = <LinkLocalTrack>[];
     for (final value in candidates) {
       final item = await history.getByIsrcAsync(value);
-      if (item != null) {
+      if (item != null && allows(item.filePath)) {
         found.add(_fromHistory(item));
         break;
       }
     }
     if (includeLibrary) {
       for (final value in candidates) {
-        final row = await library.getByIsrc(value);
+        final currentScope = boundary;
+        final row = currentScope == null
+            ? await library.getByIsrc(value)
+            : (await library.findExistingBatchScoped([
+                LocalLibraryBatchLookupRequest(
+                  isrc: value,
+                  trackName: '',
+                  artistName: '',
+                ),
+              ], currentScope)).single;
         if (row != null) {
-          found.add(_fromLibrary(row));
+          if (allows(
+            row['file_path'] as String? ?? row['filePath'] as String? ?? '',
+            indexed: true,
+          ))
+            found.add(_fromLibrary(row));
           break;
         }
       }
@@ -130,10 +167,14 @@ class LinkDatabaseLookup implements LinkLibraryLookup {
     final artist = matchKey.substring(split + 1);
     final found = <LinkLocalTrack>[];
     final item = await history.findByTrackAndArtistAsync(title, artist);
-    if (item != null) found.add(_fromHistory(item));
+    if (item != null && allows(item.filePath)) found.add(_fromHistory(item));
     if (includeLibrary) {
       for (final row in await library.findByTrackAndArtist(title, artist)) {
-        found.add(_fromLibrary(row));
+        if (allows(
+          row['file_path'] as String? ?? row['filePath'] as String? ?? '',
+          indexed: true,
+        ))
+          found.add(_fromLibrary(row));
       }
     }
     return found;
