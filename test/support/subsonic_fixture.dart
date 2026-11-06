@@ -119,6 +119,8 @@ class SubsonicFixture {
       if (method == 'stream' && mediaStatus != null) {
         response.statusCode = mediaStatus!;
         response.write('Temporary media error');
+        await response.close();
+        return;
       } else if (disconnect) {
         (await response.detachSocket()).destroy();
         return;

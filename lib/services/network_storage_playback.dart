@@ -155,6 +155,7 @@ extension NetworkPlaybackPreparation on NetworkStorageService {
       );
     });
     StreamIterator<List<int>>? bytes;
+    HttpClientResponse? responseToDiscard;
     try {
       final target = c.protocol == NetworkProtocol.subsonic
           ? _subsonicMediaTarget(c, path)
@@ -179,9 +180,7 @@ extension NetworkPlaybackPreparation on NetworkStorageService {
           },
         ),
       );
-      // Own the response before validating headers so every failure releases
-      // this pool slot, including HTTP errors and invalid encodings/ranges.
-      bytes = StreamIterator(response.timeout(const Duration(seconds: 10)));
+      responseToDiscard = response;
       load.check();
       final status = response.statusCode;
       load.mark(PlaybackPreparationStage.validatingStream, status: status);
@@ -213,6 +212,8 @@ extension NetworkPlaybackPreparation on NetworkStorageService {
           )) {
         throw const PlaybackFailure(PlaybackFailureKind.invalidAudio);
       }
+      bytes = StreamIterator(response.timeout(const Duration(seconds: 10)));
+      responseToDiscard = null;
       final prefix = <int>[];
       while (prefix.length < probeBytes && await load.wait(bytes.moveNext())) {
         firstByte ??= clock.elapsed;
@@ -295,6 +296,9 @@ extension NetworkPlaybackPreparation on NetworkStorageService {
       deadline.cancel();
       removeCancellation();
       await bytes?.cancel();
+      // StreamIterator does not subscribe before moveNext. Header rejection
+      // therefore needs an explicit response subscription and cancellation.
+      if (responseToDiscard != null) await _discardResponse(responseToDiscard);
     }
   }
 
