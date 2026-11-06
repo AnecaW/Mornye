@@ -68,7 +68,19 @@ final class EqualizerAudioTap {
     var tap: MTAudioProcessingTap?
     let status: OSStatus
     if #available(iOS 27.0, macOS 27.0, *) {
-      status = MTAudioProcessingTapCreateWithPreferredFormat(kCFAllocatorDefault, &callbacks, kMTAudioProcessingTapCreationFlag_PostEffects, nil, &tap)
+      // The mixed HLS renderer may negotiate an output-device format that does
+      // not expose LPCM to the tap on iOS. Request decoded floating-point PCM
+      // at the active route's rate/channels; this changes no audio-session or
+      // Bluetooth routing settings. The prepare callback remains authoritative.
+      var preferredFormat: CMAudioFormatDescription?
+      #if os(iOS)
+      let session = AVAudioSession.sharedInstance()
+      let rate = session.sampleRate > 0 ? session.sampleRate : 48000
+      let channels = AVAudioChannelCount(max(1, session.outputNumberOfChannels))
+      preferredFormat = AVAudioFormat(standardFormatWithSampleRate: rate,
+        channels: channels)?.formatDescription
+      #endif
+      status = MTAudioProcessingTapCreateWithPreferredFormat(kCFAllocatorDefault, &callbacks, kMTAudioProcessingTapCreationFlag_PostEffects, preferredFormat, &tap)
     } else {
       status = MTAudioProcessingTapCreate(kCFAllocatorDefault, &callbacks, kMTAudioProcessingTapCreationFlag_PostEffects, &tap)
     }
