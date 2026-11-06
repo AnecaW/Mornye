@@ -81,7 +81,7 @@ jobs:
           python3 - <<'PY'
           import json
           rows=json.load(open(".tmp/probe/results.json"))
-          assert len(rows)==11, rows
+          assert len(rows)==14, rows
           for row in rows:
               stats=row.get("stats",{})
               assert stats.get("processedFrames",0)>=22050, row

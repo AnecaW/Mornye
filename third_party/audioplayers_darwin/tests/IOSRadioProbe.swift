@@ -26,7 +26,7 @@ final class AudioPlayersStreamHandler {
       ScrollView {
         VStack(alignment: .leading, spacing: 16) {
           Text("Mornye EQ-test").font(.largeTitle.bold())
-          Text("Verbind eerst je Bluetooth-hoofdtelefoon. De test gebruikt alleen meegeleverde geluiden en duurt ongeveer een minuut.")
+          Text("Verbind eerst je Bluetooth-hoofdtelefoon. De test gebruikt alleen meegeleverde geluiden en duurt ongeveer anderhalve minuut.")
           Text("iOS \(UIDevice.current.systemVersion)").font(.caption)
           Text("Uitvoer: " + AVAudioSession.sharedInstance().currentRoute.outputs.map { $0.portName }.joined(separator: ", ")).font(.caption)
           Button(running ? "Test loopt…" : "Start audiotest") {
@@ -76,6 +76,9 @@ final class AudioPlayersStreamHandler {
       "mp3-http": "MP3-stream met EQ", "hls-44100": "HLS-radio met EQ",
       "hls-24000": "HLS-radio lage bitrate", "hls-cmaf": "HLS-radio CMAF",
       "concrete-track-wav": "Klassieke audiotrack-controle",
+      "concrete-track-high/live.m3u8": "HLS met concrete audiotrack",
+      "concrete-track-low/live.m3u8": "HLS lage bitrate met audiotrack",
+      "concrete-track-cmaf/live.m3u8": "HLS CMAF met audiotrack",
       "before-association-high/live.m3u8": "HLS vooraf aansluiten",
       "before-association-low/live.m3u8": "HLS lage bitrate vooraf aansluiten"][key] ?? "Audio voorbereiden"
   }
@@ -158,6 +161,37 @@ final class AudioPlayersStreamHandler {
         localPlayer.replaceCurrentItem(with: nil)
       }
       results.append(localResult)
+
+      // HLS can expose a concrete AVAssetTrack on newer systems. Compare that
+      // real track directly with the special mixed-stream ID on the same data.
+      for path in ["high/live.m3u8", "low/live.m3u8", "cmaf/live.m3u8"] {
+        let native = AVPlayer()
+        let wrapper = WrappedMediaPlayer(reference: AudioplayersDarwinPlugin(),
+          eventHandler: AudioPlayersStreamHandler(), player: native, preparationTimeout: 10)
+        wrapper.releaseMode = .stop
+        var result: [String: Any] = ["case": "concrete-track-\(path)"]
+        do {
+          try await wrapper.setSourceUrl(url: "\(base)/\(path)", isLocal: false)
+          let item = native.currentItem!
+          if let track = item.tracks.compactMap({ $0.assetTrack }).first(where: { $0.mediaType == .audio }) {
+            let processor = EqualizerAudioTap()
+            processor.dsp.configure(["enabled": true,
+              "frequencies": [60.0, 250.0, 1000.0, 4000.0, 16000.0],
+              "gains": [0.0, 0.0, 0.0, 0.0, 0.0], "inputGain": -12.0, "limiter": false])
+            try await EqualizerAudioTap.attach(to: item, processor: processor, track: track)
+            wrapper.resume()
+            for _ in 0..<160 {
+              if (processor.diagnostics()["processedFrames"] as? Int64 ?? 0) >= 22050 { break }
+              try await Task.sleep(nanoseconds: 50_000_000)
+            }
+            result["stats"] = processor.diagnostics()
+            result["mixTrack"] = item.audioMix?.inputParameters.first?.trackID
+            result["status"] = item.status.rawValue
+          } else { result["trackMissing"] = true }
+        } catch { result["diagnostic"] = String(describing: error) }
+        results.append(result)
+        await wrapper.dispose()
+      }
 
       // Compare the identical processor/format before AVPlayer association.
       // Only attachment timing differs from the wrapper's ready-item path.
