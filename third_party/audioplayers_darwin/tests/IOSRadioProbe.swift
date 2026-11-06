@@ -69,6 +69,32 @@ final class AudioPlayersStreamHandler {
         results.append(result)
         await wrapper.dispose()
       }
+      // A concrete-track WAV control distinguishes a mixed-tap problem from
+      // an iOS simulator that is not rendering audio through any tap.
+      let localItem = AVPlayerItem(url: Bundle.main.url(forResource: "tone", withExtension: "wav")!)
+      let localProcessor = EqualizerAudioTap()
+      localProcessor.dsp.configure(["enabled": true,
+        "frequencies": [60.0, 250.0, 1000.0, 4000.0, 16000.0],
+        "gains": [0.0, 0.0, 0.0, 0.0, 0.0], "inputGain": -12.0, "limiter": false])
+      let tracks = try await localItem.asset.loadTracks(withMediaType: .audio)
+      let localPlayer = AVPlayer()
+      var localResult: [String: Any] = ["case": "concrete-track-wav"]
+      if let track = tracks.first {
+        try await EqualizerAudioTap.attach(to: localItem, processor: localProcessor, track: track)
+        localPlayer.replaceCurrentItem(with: localItem)
+        localPlayer.play()
+        for _ in 0..<160 {
+          if (localProcessor.diagnostics()["processedFrames"] as? Int64 ?? 0) >= 22050 { break }
+          try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        localResult["stats"] = localProcessor.diagnostics()
+        localResult["status"] = localItem.status.rawValue
+        localResult["mixTrack"] = localItem.audioMix?.inputParameters.first?.trackID
+        localPlayer.pause()
+        localPlayer.replaceCurrentItem(with: nil)
+      }
+      results.append(localResult)
+
       // Compare the identical processor/format before AVPlayer association.
       // Only attachment timing differs from the wrapper's ready-item path.
       for path in ["high/live.m3u8", "low/live.m3u8"] {
