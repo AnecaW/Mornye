@@ -78,7 +78,7 @@ jobs:
         if: always()
         run: python3 -m unittest discover -s scripts -p test_verify_delivery.py
       - name: Rust formatting, Clippy and tests
-        if: always()
+        if: ${{ !cancelled() }}
         run: bash scripts/check_rust_backend.sh
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
