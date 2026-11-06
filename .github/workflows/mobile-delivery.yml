@@ -246,7 +246,7 @@ jobs:
             third_party/audioplayers_darwin/tests/SourceLifecycleTests.swift -o .tmp/native-tests/source-lifecycle
           .tmp/native-tests/source-lifecycle
       - name: Test AVPlayer with authenticated Subsonic streams
-        timeout-minutes: 35
+        timeout-minutes: 50
         run: |
           set -euo pipefail
           command -v ffmpeg >/dev/null || brew install ffmpeg

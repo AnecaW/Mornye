@@ -1,3 +1,4 @@
+import 'package:audio_session/audio_session.dart';
 import 'dart:async';
 import 'package:flutter/services.dart';
 import 'dart:convert';
@@ -62,11 +63,18 @@ void main() {
         isNotEmpty,
         reason: 'The macOS job must provide actual HLS segments',
       );
+      final session = await AudioSession.instance;
+      await session.configure(const AudioSessionConfiguration.music());
+      expect(await session.setActive(true), isTrue);
+      addTearDown(() => session.setActive(false));
+      final requests = <String>[];
+      final nativeLogs = <String>[];
       final fixtures = (jsonDecode(utf8.decode(base64Decode(encoded))) as Map)
           .cast<String, String>();
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       addTearDown(() => server.close(force: true));
       server.listen((request) async {
+        requests.add(request.uri.path);
         final name = request.uri.pathSegments.lastOrNull;
         if (!fixtures.containsKey(name)) {
           request.response.statusCode = 404;
@@ -83,6 +91,12 @@ void main() {
       });
       final player = AudioPlayer();
       addTearDown(player.dispose);
+      final events = player.eventStream.listen((event) {
+        final message = event.logMessage;
+        if (message != null && message.startsWith('mornye.'))
+          nativeLogs.add(message);
+      });
+      addTearDown(events.cancel);
       await player.getDuration();
       const channel = MethodChannel('xyz.luan/audioplayers');
       Future<void> effect(double gain) =>
@@ -106,14 +120,26 @@ void main() {
           .timeout(const Duration(seconds: 20));
       await effect(-12);
       await player.resume();
+      var reported = false;
       Future<Map<Object?, Object?>> frames(int minimum) async {
         final end = DateTime.now().add(const Duration(seconds: 10));
         while (DateTime.now().isBefore(end)) {
           final sample = await stats();
           if ((sample['processedFrames'] as num) >= minimum) return sample;
+          if (!reported &&
+              DateTime.now().isAfter(
+                end.subtract(const Duration(seconds: 8)),
+              )) {
+            reported = true;
+            print(
+              'HLS_SIGNAL_STATE state=${player.state} position=${await player.getCurrentPosition()} requests=$requests native=$nativeLogs stats=$sample',
+            );
+          }
           await Future<void>.delayed(const Duration(milliseconds: 50));
         }
-        fail('Decoded radio samples did not reach EQ: ${await stats()}');
+        fail(
+          'Decoded radio samples did not reach EQ: ${await stats()} state=${player.state} position=${await player.getCurrentPosition()} requests=$requests native=$nativeLogs',
+        );
       }
 
       final first = await frames(22050);
