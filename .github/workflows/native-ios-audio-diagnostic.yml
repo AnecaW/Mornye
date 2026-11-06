@@ -21,6 +21,8 @@ jobs:
           command -v ffmpeg >/dev/null || brew install ffmpeg
           mkdir -p .tmp/probe/audio/high .tmp/probe/audio/low
           ffmpeg -v error -f lavfi -i sine=frequency=440:duration=15 -ar 44100 -ac 1 .tmp/probe/audio/tone.wav
+          ffmpeg -v error -i .tmp/probe/audio/tone.wav -c:a flac .tmp/probe/audio/tone.flac
+          ffmpeg -v error -i .tmp/probe/audio/tone.wav -c:a libmp3lame .tmp/probe/audio/tone.mp3
           ffmpeg -v error -i .tmp/probe/audio/tone.wav -c:a aac -hls_time 1 -hls_list_size 0 .tmp/probe/audio/high/live.m3u8
           ffmpeg -v error -f lavfi -i sine=frequency=440:duration=6 -ar 24000 -ac 1 -b:a 16k -c:a aac -hls_time 1 -hls_list_size 0 .tmp/probe/audio/low/live.m3u8
           python3 -m http.server 18762 --bind 127.0.0.1 --directory .tmp/probe/audio >.tmp/probe/http.log 2>&1 &
@@ -30,7 +32,7 @@ jobs:
           native=third_party/audioplayers_darwin/darwin/audioplayers_darwin/Sources/audioplayers_darwin
           app=.tmp/probe/RadioProbe.app
           mkdir -p "$app"
-          cp .tmp/probe/audio/tone.wav "$app/tone.wav"
+          cp .tmp/probe/audio/tone.wav .tmp/probe/audio/tone.flac .tmp/probe/audio/tone.mp3 "$app/"
           python3 - <<'PY'
           import pathlib, plistlib
           info = dict(CFBundleExecutable="RadioProbe", CFBundleIdentifier="com.mornye.radio-probe", CFBundleName="RadioProbe", CFBundlePackageType="APPL", CFBundleVersion="1", CFBundleShortVersionString="1", MinimumOSVersion="27.0", LSRequiresIPhoneOS=True, UILaunchScreen={}, NSAppTransportSecurity=dict(NSAllowsLocalNetworking=True))
@@ -66,7 +68,7 @@ jobs:
           python3 - <<'PY'
           import json
           rows=json.load(open(".tmp/probe/results.json"))
-          assert len(rows)==6, rows
+          assert len(rows)==8, rows
           for row in rows:
               stats=row.get("stats",{})
               assert stats.get("processedFrames",0)>=22050, row

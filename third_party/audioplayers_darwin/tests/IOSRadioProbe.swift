@@ -35,6 +35,7 @@ final class AudioPlayersStreamHandler {
       try session.setCategory(.playback, mode: .default)
       try session.setActive(true)
       for (name, path) in [("wav-control", "tone.wav"),
+        ("flac-control", "tone.flac"), ("mp3-control", "tone.mp3"),
         ("hls-44100", "high/live.m3u8"), ("hls-24000", "low/live.m3u8")] {
         let native = AVPlayer()
         let wrapper = WrappedMediaPlayer(reference: AudioplayersDarwinPlugin(),
@@ -44,8 +45,8 @@ final class AudioPlayersStreamHandler {
         var result: [String: Any] = ["case": name,
           "routeRate": session.sampleRate, "routeChannels": session.outputNumberOfChannels]
         do {
-          let local = name == "wav-control"
-          let address = local ? Bundle.main.url(forResource: "tone", withExtension: "wav")!.path
+          let local = name.hasSuffix("-control")
+          let address = local ? Bundle.main.url(forResource: "tone", withExtension: String(path.split(separator: ".").last!))!.path
             : "http://127.0.0.1:18762/\(path)"
           try await wrapper.setSourceUrl(url: address, isLocal: local)
           try await wrapper.setEqualizer(["enabled": true,
