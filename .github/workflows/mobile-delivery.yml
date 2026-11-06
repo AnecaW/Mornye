@@ -299,6 +299,20 @@ jobs:
           # build-settings query. Release and simulator use separate SDK graphs.
           xcrun xcodebuild -resolvePackageDependencies -project ios/Runner.xcodeproj -scheme Runner -clonedSourcePackagesDirPath "$PWD/build/ios/SourcePackages" >.tmp/ios-package-resolution.log 2>&1
           xcrun xcodebuild -project ios/Runner.xcodeproj -scheme Runner -configuration Debug -sdk iphonesimulator -destination "id=$device" -clonedSourcePackagesDirPath "$PWD/build/ios/SourcePackages" -showBuildSettings >.tmp/ios-simulator-settings.log 2>&1
+          # Package graph resolution can shut down the warm simulator on a
+          # hosted runner. Confirm Flutter can see it immediately before testing;
+          # retry only simulator startup, never a failed audio assertion.
+          ready=false
+          for attempt in 1 2; do
+            xcrun simctl boot "$device" || true
+            xcrun simctl bootstatus "$device" -b
+            flutter devices --machine --device-timeout 30 > .tmp/ios-flutter-devices.json
+            if python3 -c 'import json,sys; assert any(d["id"] == sys.argv[1] for d in json.load(open(".tmp/ios-flutter-devices.json")))' "$device"; then
+              ready=true
+              break
+            fi
+          done
+          "$ready"
           flutter test integration_test/subsonic_playback_test.dart --no-pub --verbose --timeout=2m -d "$device" --dart-define-from-file=.tmp/audio/test-defines.json 2>&1 | tee .tmp/ios-simulator.log
       - name: Collect simulator diagnostics
         if: always()
