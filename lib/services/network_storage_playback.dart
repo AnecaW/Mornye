@@ -179,6 +179,9 @@ extension NetworkPlaybackPreparation on NetworkStorageService {
           },
         ),
       );
+      // Own the response before validating headers so every failure releases
+      // this pool slot, including HTTP errors and invalid encodings/ranges.
+      bytes = StreamIterator(response.timeout(const Duration(seconds: 10)));
       load.check();
       final status = response.statusCode;
       load.mark(PlaybackPreparationStage.validatingStream, status: status);
@@ -210,7 +213,6 @@ extension NetworkPlaybackPreparation on NetworkStorageService {
           )) {
         throw const PlaybackFailure(PlaybackFailureKind.invalidAudio);
       }
-      bytes = StreamIterator(response.timeout(const Duration(seconds: 10)));
       final prefix = <int>[];
       while (prefix.length < probeBytes && await load.wait(bytes.moveNext())) {
         firstByte ??= clock.elapsed;

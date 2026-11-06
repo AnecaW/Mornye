@@ -35,6 +35,7 @@ class SubsonicFixture {
   final release = Completer<void>();
   String? blockMethod;
   int? errorCode;
+  int? mediaStatus;
   String? failMethod;
   String? failAlbum;
   bool mediaError = false;
@@ -115,7 +116,10 @@ class SubsonicFixture {
     }
     final response = request.response;
     try {
-      if (disconnect) {
+      if (method == 'stream' && mediaStatus != null) {
+        response.statusCode = mediaStatus!;
+        response.write('Temporary media error');
+      } else if (disconnect) {
         (await response.detachSocket()).destroy();
         return;
       }

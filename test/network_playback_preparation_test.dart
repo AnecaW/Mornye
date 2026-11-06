@@ -104,6 +104,29 @@ void main() {
       );
     },
   );
+  test(
+    'rejected HTTP responses release pool slots before later recovery',
+    () async {
+      server.mediaStatus = 503;
+      for (var i = 0; i < 8; i++) {
+        await expectLater(
+          storage
+              .preparePlayback(source, PlaybackLoad())
+              .timeout(const Duration(seconds: 2)),
+          throwsA(
+            isA<PlaybackFailure>().having((e) => e.status, 'status', 503),
+          ),
+        );
+      }
+      server.mediaStatus = null;
+      expect(
+        await storage
+            .preparePlayback(source, PlaybackLoad())
+            .timeout(const Duration(seconds: 2)),
+        contains('127.0.0.1'),
+      );
+    },
+  );
   test('superseding a blocked request aborts preparation promptly', () async {
     server.blockMethod = 'stream';
     final load = PlaybackLoad();
