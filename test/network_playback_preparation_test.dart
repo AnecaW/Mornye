@@ -1,5 +1,7 @@
 import 'package:mornye/services/subsonic_response_cache.dart';
 import 'dart:io';
+import 'dart:async';
+import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:mornye/services/network_audio_cache.dart';
@@ -42,6 +44,99 @@ void main() {
     await server.close();
     await directory.delete(recursive: true);
   });
+  test(
+    'partial cache resumes at the exact offset when the origin ignores Range',
+    () async {
+      server.ignoreRanges = true;
+      server.audio = [
+        102,
+        76,
+        97,
+        67,
+        ...List.generate(600000, (i) => i % 251),
+      ];
+      final cache = storage.audioCache!;
+      final path = subsonicSongPath(server.song['id'] as String, 'flac');
+      final key =
+          '${jsonEncode((await storage.connection('fixture')).toJson())}/$path';
+      final started = Completer<void>(), release = Completer<void>();
+      final fill = cache.fetch(key, 'flac', (file, _) async {
+        await file.writeAsBytes(server.audio!.take(4).toList());
+        cache.reportLength(key, server.audio!.length);
+        started.complete();
+        await release.future;
+        await file.writeAsBytes(server.audio!);
+      });
+      await started.future;
+      final client = HttpClient();
+      try {
+        final url = await storage.resolve(source, forPlayback: true);
+        final request = await client.getUrl(Uri.parse(url));
+        request.headers.set('Range', 'bytes=524288-524415');
+        final response = await request.close();
+        expect(response.statusCode, 206);
+        expect(
+          await response
+              .expand((chunk) => chunk)
+              .toList()
+              .timeout(const Duration(seconds: 2)),
+          server.audio!.sublist(524288, 524416),
+        );
+        expect(release.isCompleted, isFalse);
+      } finally {
+        client.close(force: true);
+        release.complete();
+        await fill;
+      }
+    },
+  );
+  for (final knownLength in [false, true]) {
+    test(
+      'cold playback does not wait for a stalled cache (length=$knownLength)',
+      () async {
+        final cache = storage.audioCache!;
+        final path = subsonicSongPath(server.song['id'] as String, 'flac');
+        final key =
+            '${jsonEncode((await storage.connection('fixture')).toJson())}/$path';
+        final started = Completer<void>(), release = Completer<void>();
+        final fill = cache.fetch(key, 'flac', (file, _) async {
+          await file.writeAsBytes(server.audio!.take(4).toList());
+          if (knownLength) cache.reportLength(key, server.audio!.length);
+          started.complete();
+          await release.future;
+          await file.writeAsBytes(server.audio!);
+          cache.reportLength(key, server.audio!.length);
+        });
+        await started.future;
+        final client = HttpClient();
+        try {
+          expect(await cache.lookup(key, 'flac'), isNull);
+          final url = await storage.resolve(source, forPlayback: true);
+          final playback = () async {
+            final response = await (await client.getUrl(
+              Uri.parse(url),
+            )).close();
+            expect(response.statusCode, 200);
+            return response.expand((chunk) => chunk).toList();
+          }();
+          playback.ignore();
+          expect(
+            await playback.timeout(const Duration(seconds: 2)),
+            server.audio,
+          );
+          expect(release.isCompleted, isFalse);
+        } finally {
+          client.close(force: true);
+          release.complete();
+          await fill;
+        }
+        expect(
+          await (await cache.lookup(key, 'flac'))!.readAsBytes(),
+          server.audio,
+        );
+      },
+    );
+  }
   test(
     'preparation reads only a prefix and gives AVPlayer an extension-bearing progressive URL',
     () async {

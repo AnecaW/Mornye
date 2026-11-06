@@ -88,6 +88,32 @@ void main() {
     expect(await cache.size(), 2);
   });
 
+  test(
+    'a progressing partial cache streams without waiting for completion',
+    () async {
+      final partial = File('${directory.path}/progress.part');
+      await partial.writeAsBytes([1, 2]);
+      final fill = NetworkCacheFill(
+        partial,
+        File('${directory.path}/progress.flac'),
+      );
+      fill.setLength(4);
+      final received = <int>[];
+      final prefix = Completer<void>();
+      final reading = fill.read(0, 4).listen((chunk) {
+        received.addAll(chunk);
+        if (!prefix.isCompleted) prefix.complete();
+      }).asFuture<void>();
+      await prefix.future;
+      expect(received, [1, 2]);
+      await partial.writeAsBytes([3, 4], mode: FileMode.append);
+      await reading;
+      expect(received, [1, 2, 3, 4]);
+      expect(fill.finished, isFalse);
+      fill.finish();
+    },
+  );
+
   test('LRU eviction and clearing never touch external downloads', () async {
     final permanent = await File(
       '${directory.parent.path}/permanent-${directory.uri.pathSegments.where((s) => s.isNotEmpty).last}.flac',

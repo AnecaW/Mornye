@@ -156,138 +156,179 @@ void main() {
     },
   );
   for (final format in ['wav', 'mp3', 'flac']) {
-    testWidgets(
-      'native Subsonic $format EQ streaming, seeking and offline cache',
-      (tester) async {
-        final bytes = format == 'wav'
-            ? _wave()
-            : base64Decode(fixtures[format]!);
-        expect(
-          bytes,
-          isNotEmpty,
-          reason:
-              'Provide the generated $format fixture through TEST_${format.toUpperCase()}',
-        );
-        final directory = await Directory.systemTemp.createTemp(
-          'subsonic-native-',
-        );
-        addTearDown(() => directory.delete(recursive: true));
-        final server = await SubsonicFixture.start();
-        addTearDown(server.close);
-        server.audio = bytes;
-        server.ignoreRanges = true;
-        server.audioContentType = 'application/octet-stream';
-        server.song['id'] = 'native-$format /?&';
-        server.song['suffix'] = format;
-        final storage = NetworkStorageService(
-          read: () async => null,
-          write: (_) async {},
-          ensureAccess: (_) async {},
-        );
-        addTearDown(storage.dispose);
-        await storage.save(server.connection());
-        final source = NetworkStorageService.source(
-          'fixture',
-          SubsonicSong(server.song).path,
-        );
-        final player = AudioPlayer();
-        addTearDown(player.dispose);
-        await player.setVolume(1);
-        final preparation = PlaybackLoad();
-        final url = await storage.preparePlayback(source, preparation);
-        await player.getDuration();
-        await const MethodChannel(
-          'xyz.luan/audioplayers',
-        ).invokeMethod<void>('setBufferingPolicy', {
-          'playerId': player.playerId,
-          'configuration': preparation.bufferPolicy.toNative(),
+    testWidgets('native Subsonic $format EQ streaming, seeking and offline cache', (
+      tester,
+    ) async {
+      final bytes = format == 'wav' ? _wave() : base64Decode(fixtures[format]!);
+      expect(
+        bytes,
+        isNotEmpty,
+        reason:
+            'Provide the generated $format fixture through TEST_${format.toUpperCase()}',
+      );
+      final directory = await Directory.systemTemp.createTemp(
+        'subsonic-native-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final server = await SubsonicFixture.start();
+      addTearDown(server.close);
+      server.audio = bytes;
+      server.ignoreRanges = true;
+      server.audioContentType = 'application/octet-stream';
+      server.song['id'] = 'native-$format /?&';
+      server.song['suffix'] = format;
+      final streamingCache = NetworkAudioCache(
+        directory: () async => directory,
+      );
+      await streamingCache.initialize();
+      streamingCache.wifiOnly = false;
+      final storage = NetworkStorageService(
+        audioCache: streamingCache,
+        read: () async => null,
+        write: (_) async {},
+        ensureAccess: (_) async {},
+      );
+      addTearDown(storage.dispose);
+      await storage.save(server.connection());
+      final source = NetworkStorageService.source(
+        'fixture',
+        SubsonicSong(server.song).path,
+      );
+      // Reproduce direct cold FLAC selection while prefetch has only a
+      // header. AVPlayer must stream now, without waiting for this producer.
+      final releaseFill = Completer<void>();
+      Future<void>? backgroundFill;
+      if (format == 'flac') {
+        final started = Completer<void>();
+        final path = SubsonicSong(server.song).path;
+        final key =
+            '${jsonEncode((await storage.connection('fixture')).toJson())}/$path';
+        backgroundFill = streamingCache.fetch(key, format, (file, _) async {
+          await file.writeAsBytes(bytes.take(4).toList());
+          streamingCache.reportLength(key, bytes.length);
+          started.complete();
+          await releaseFill.future;
+          await file.writeAsBytes(bytes);
         });
-        expect(Uri.parse(url).query, isEmpty);
-        await player
-            .setSource(UrlSource(url))
-            .timeout(const Duration(seconds: 20));
-        expect((await player.getDuration())!.inMilliseconds, greaterThan(1500));
-        const effects = MethodChannel('xyz.luan/audioplayers');
-        await effects.invokeMethod<void>('setEqualizer', {
-          'playerId': player.playerId,
-          'configuration': {
-            'enabled': true,
-            'frequencies': [60.0, 250.0, 1000.0, 4000.0, 16000.0],
-            'gains': List<double>.filled(5, 0),
-            'inputGain': -6.0,
-            'limiter': false,
-          },
+        await started.future;
+        addTearDown(() async {
+          if (!releaseFill.isCompleted) releaseFill.complete();
+          await backgroundFill;
         });
-        await player.resume();
-        final eqDeadline = DateTime.now().add(const Duration(seconds: 10));
-        Map<Object?, Object?> eq = const {};
-        do {
-          eq = (await effects.invokeMapMethod<Object?, Object?>(
-            'getEqualizerDiagnostics',
-            {'playerId': player.playerId},
-          ))!;
-          if ((eq['processedFrames'] as num) >= 4410) break;
-          await Future<void>.delayed(const Duration(milliseconds: 20));
-        } while (DateTime.now().isBefore(eqDeadline));
-        expect(
-          eq['processedFrames'],
-          greaterThanOrEqualTo(4410),
-          reason: '$format NAS samples must actually pass through EQ: $eq',
-        );
-        expect((eq['inputRms'] as num).toDouble(), greaterThan(0));
-        expect(
-          (eq['outputRms'] as num) / (eq['inputRms'] as num),
-          inInclusiveRange(0.45, 0.55),
-          reason: '$format must apply the -6 dB gain',
-        );
-        await player.seek(const Duration(milliseconds: 700));
-        await player.pause();
-        expect(
-          (await player.getCurrentPosition())!.inMilliseconds,
-          closeTo(700, 250),
-        );
-        await player.release();
-        expect(server.ranges.whereType<String>(), isNotEmpty);
-        expect(
-          server.requests
-              .where((r) => r.path.endsWith('/stream.view'))
-              .every(
-                (r) =>
-                    r.queryParameters['u'] == 'listener' &&
-                    r.queryParameters['s']!.isNotEmpty &&
-                    r.queryParameters['t']!.isNotEmpty,
-              ),
-          isTrue,
-        );
+        expect(await streamingCache.lookup(key, format), isNull);
+      }
+      final player = AudioPlayer();
+      addTearDown(player.dispose);
+      await player.setVolume(1);
+      final preparation = PlaybackLoad();
+      final url = await storage.preparePlayback(source, preparation);
+      await player.getDuration();
+      await const MethodChannel(
+        'xyz.luan/audioplayers',
+      ).invokeMethod<void>('setBufferingPolicy', {
+        'playerId': player.playerId,
+        'configuration': preparation.bufferPolicy.toNative(),
+      });
+      expect(Uri.parse(url).query, isEmpty);
+      await player
+          .setSource(UrlSource(url))
+          .timeout(const Duration(seconds: 20));
+      expect((await player.getDuration())!.inMilliseconds, greaterThan(1500));
+      // Validate the same uncached source with EQ off before exercising
+      // the already working concrete-track EQ path below.
+      await player.resume();
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      expect(
+        (await player.getCurrentPosition())!.inMilliseconds,
+        greaterThan(0),
+      );
+      await player.pause();
+      if (format == 'flac') expect(releaseFill.isCompleted, isFalse);
+      const effects = MethodChannel('xyz.luan/audioplayers');
+      await effects.invokeMethod<void>('setEqualizer', {
+        'playerId': player.playerId,
+        'configuration': {
+          'enabled': true,
+          'frequencies': [60.0, 250.0, 1000.0, 4000.0, 16000.0],
+          'gains': List<double>.filled(5, 0),
+          'inputGain': -6.0,
+          'limiter': false,
+        },
+      });
+      await player.resume();
+      final eqDeadline = DateTime.now().add(const Duration(seconds: 10));
+      Map<Object?, Object?> eq = const {};
+      do {
+        eq = (await effects.invokeMapMethod<Object?, Object?>(
+          'getEqualizerDiagnostics',
+          {'playerId': player.playerId},
+        ))!;
+        if ((eq['processedFrames'] as num) >= 4410) break;
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      } while (DateTime.now().isBefore(eqDeadline));
+      expect(
+        eq['processedFrames'],
+        greaterThanOrEqualTo(4410),
+        reason: '$format NAS samples must actually pass through EQ: $eq',
+      );
+      expect((eq['inputRms'] as num).toDouble(), greaterThan(0));
+      expect(
+        (eq['outputRms'] as num) / (eq['inputRms'] as num),
+        inInclusiveRange(0.45, 0.55),
+        reason: '$format must apply the -6 dB gain',
+      );
+      await player.seek(const Duration(milliseconds: 700));
+      await player.pause();
+      expect(
+        (await player.getCurrentPosition())!.inMilliseconds,
+        closeTo(700, 250),
+      );
+      await player.release();
+      expect(server.ranges.whereType<String>(), isNotEmpty);
+      expect(
+        server.requests
+            .where((r) => r.path.endsWith('/stream.view'))
+            .every(
+              (r) =>
+                  r.queryParameters['u'] == 'listener' &&
+                  r.queryParameters['s']!.isNotEmpty &&
+                  r.queryParameters['t']!.isNotEmpty,
+            ),
+        isTrue,
+      );
 
-        final cache = NetworkAudioCache(directory: () async => directory);
-        await cache.initialize();
-        cache.wifiOnly = false;
-        final cachedStorage = NetworkStorageService(
-          audioCache: cache,
-          read: () async => null,
-          write: (_) async {},
-          ensureAccess: (_) async {},
-        );
-        addTearDown(cachedStorage.dispose);
-        await cachedStorage.save(server.connection());
-        await cachedStorage.cacheAudio(source, manual: true);
-        server.disconnect = true;
-        cachedStorage.setReachable('fixture', reachable: false);
-        final local = await cachedStorage.resolve(source);
-        expect(File(local).isAbsolute, isTrue);
-        await player
-            .setSource(DeviceFileSource(local))
-            .timeout(const Duration(seconds: 20));
-        await player.resume();
-        await Future<void>.delayed(const Duration(milliseconds: 150));
-        expect(
-          (await player.getCurrentPosition())!.inMilliseconds,
-          greaterThan(0),
-        );
-        await player.pause();
-      },
-    );
+      if (backgroundFill != null) {
+        expect(releaseFill.isCompleted, isFalse);
+        releaseFill.complete();
+        await backgroundFill;
+      }
+      final cache = NetworkAudioCache(directory: () async => directory);
+      await cache.initialize();
+      cache.wifiOnly = false;
+      final cachedStorage = NetworkStorageService(
+        audioCache: cache,
+        read: () async => null,
+        write: (_) async {},
+        ensureAccess: (_) async {},
+      );
+      addTearDown(cachedStorage.dispose);
+      await cachedStorage.save(server.connection());
+      await cachedStorage.cacheAudio(source, manual: true);
+      server.disconnect = true;
+      cachedStorage.setReachable('fixture', reachable: false);
+      final local = await cachedStorage.resolve(source);
+      expect(File(local).isAbsolute, isTrue);
+      await player
+          .setSource(DeviceFileSource(local))
+          .timeout(const Duration(seconds: 20));
+      await player.resume();
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      expect(
+        (await player.getCurrentPosition())!.inMilliseconds,
+        greaterThan(0),
+      );
+      await player.pause();
+    });
   }
   testWidgets(
     'native AVPlayer cancels a blocked NAS load and survives 20 source changes',

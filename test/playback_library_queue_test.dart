@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'package:mornye/models/track.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mornye/models/download_history.dart';
@@ -28,6 +30,13 @@ class _Player extends MusicPlayerController {
   }) async => calls.add((items.map((item) => item.id).join(' '), initialIndex));
 }
 
+class _ResolvingPlayback extends PlaybackController {
+  final pending = <String, Completer<List<String?>>>{};
+  @override
+  Future<List<String?>> resolveTrackFilePaths(List<Track> tracks) =>
+      (pending[tracks.single.id] = Completer<List<String?>>()).future;
+}
+
 const _paths = {
   'blank': '  ',
   'a': '/music/a.flac',
@@ -50,6 +59,77 @@ void main() {
     );
   });
   tearDown(() => container.dispose());
+
+  for (final count in [5, 10, 20]) {
+    test(
+      '$count direct selections keep the last intent when old resolutions finish late',
+      () async {
+        final resolving = _ResolvingPlayback();
+        final scoped = ProviderContainer(
+          overrides: [
+            settingsProvider.overrideWith(_Settings.new),
+            musicPlayerControllerProvider.overrideWithValue(player),
+            playbackProvider.overrideWith(() => resolving),
+          ],
+        );
+        addTearDown(scoped.dispose);
+        final controller = scoped.read(playbackProvider.notifier);
+        final requests = [
+          for (var i = 0; i < count; i++)
+            controller.playTrackList([
+              Track(
+                id: '$i',
+                name: '$i',
+                artistName: 'Artist',
+                albumName: 'Album',
+                duration: 180,
+              ),
+            ]),
+        ];
+        resolving.pending['${count - 1}']!.complete([
+          'network://fixture/subsonic/song/last.flac',
+        ]);
+        await requests.last;
+        for (var i = count - 2; i >= 0; i--) {
+          resolving.pending['$i']!.complete([
+            'network://fixture/subsonic/song/old-$i.flac',
+          ]);
+        }
+        await Future.wait(requests);
+        expect(player.calls, hasLength(1));
+        expect(
+          player.calls.single.$1,
+          'network://fixture/subsonic/song/last.flac',
+        );
+      },
+    );
+  }
+  test('Next cancels a library selection still resolving its source', () async {
+    final resolving = _ResolvingPlayback();
+    final scoped = ProviderContainer(
+      overrides: [
+        settingsProvider.overrideWith(_Settings.new),
+        musicPlayerControllerProvider.overrideWithValue(player),
+        playbackProvider.overrideWith(() => resolving),
+      ],
+    );
+    addTearDown(scoped.dispose);
+    final request = scoped.read(playbackProvider.notifier).playTrackList([
+      Track(
+        id: 'old',
+        name: 'old',
+        artistName: 'Artist',
+        albumName: 'Album',
+        duration: 180,
+      ),
+    ]);
+    await player.next();
+    resolving.pending['old']!.complete([
+      'network://fixture/subsonic/song/old.flac',
+    ]);
+    await request;
+    expect(player.calls, isEmpty);
+  });
 
   // Blank and CUE virtual paths are skipped; the start item keeps its place
   // among the playable rows, and a skipped start falls back to the first.

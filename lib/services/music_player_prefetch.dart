@@ -20,7 +20,7 @@ class _MusicPrefetch {
   NetworkPlaybackCache? get _cache => handler._dependencies.networkCache();
 
   void onPosition(Duration position) {
-    if (position < start || handler._disposed) return;
+    if (position < start || handler._disposed || !handler._sourceReady) return;
     final key =
         '${handler._playRequestGeneration}:${handler._sessionQueueRevision}:'
         '${handler._index}:${handler._repeatMode.name}';

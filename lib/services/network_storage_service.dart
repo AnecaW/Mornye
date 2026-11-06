@@ -1723,6 +1723,9 @@ class NetworkStorageService {
     if (!force && !cache.preferOffline && local != null && fill == null) {
       return null;
     }
+    // A background download must never hold playback waiting for its headers.
+    // The authenticated origin can already provide a progressive stream.
+    if (local == null && (fill == null || !fill.ready.isCompleted)) return null;
     final size = local != null
         ? await local.length()
         : await fill?.ready.future;
@@ -1786,13 +1789,18 @@ class NetworkStorageService {
     }
     if (offset >= end) return;
     final remote = await _openRead(c, path, range: 'bytes=$offset-${end - 1}');
-    if (remote.status != HttpStatus.partialContent) {
+    if (remote.status != HttpStatus.partialContent &&
+        remote.status != HttpStatus.ok) {
       await remote.discard();
       await remote.close();
       throw const HttpException('Unable to continue audio stream');
     }
     try {
-      yield* remote.bytes;
+      // Some valid Subsonic origins ignore Range. Keep the already emitted
+      // cache prefix and discard exactly that prefix from the full response.
+      yield* remote.status == HttpStatus.ok
+          ? _sliceMedia(remote.bytes, offset, end)
+          : _sliceMedia(remote.bytes, 0, end - offset);
     } finally {
       await remote.close();
     }

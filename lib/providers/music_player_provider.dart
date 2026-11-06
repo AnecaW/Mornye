@@ -392,6 +392,12 @@ class MusicPlayerController {
   }) : _runtime = runtime ?? musicPlayerRuntime,
        _remote = remote;
 
+  int _selectionGeneration = 0;
+
+  /// Reserve before asynchronous library resolution, not only at setSource.
+  int reserveSelection() => ++_selectionGeneration;
+  bool isCurrentSelection(int generation) => generation == _selectionGeneration;
+
   final MusicPlayerRuntime _runtime;
   final RemotePlayback? Function()? _remote;
 
@@ -415,10 +421,12 @@ class MusicPlayerController {
     List<PlayableMedia> items, {
     int initialIndex = 0,
   }) async {
+    final selection = reserveSelection();
     if (remote case final remote?) {
       return remote.playAll(items, initialIndex: initialIndex);
     }
     final handler = await ensureInitialized();
+    if (!isCurrentSelection(selection)) return;
     await handler?.setQueueAndPlay(items, initialIndex: initialIndex);
   }
 
@@ -472,9 +480,15 @@ class MusicPlayerController {
 
   Future<void> seek(Duration position) async =>
       remote?.seek(position) ?? _handler?.seek(position);
-  Future<void> next() async => remote?.next() ?? _handler?.skipToNext();
-  Future<void> previous() async =>
-      remote?.previous() ?? _handler?.skipToPrevious();
+  Future<void> next() async {
+    reserveSelection();
+    await (remote?.next() ?? _handler?.skipToNext());
+  }
+
+  Future<void> previous() async {
+    reserveSelection();
+    await (remote?.previous() ?? _handler?.skipToPrevious());
+  }
 
   /// Hides a paused player, retaining its queue and position for Home's Resume.
   Future<void> dismiss() async {
@@ -604,8 +618,10 @@ class MusicPlayerController {
   Future<void> addToQueueLocal(LocalLibraryItem item) async =>
       addToQueue(playableFromLocal(item));
 
-  Future<void> jumpTo(int index) async =>
-      remote?.jumpTo(index) ?? _handler?.skipToQueueItem(index);
+  Future<void> jumpTo(int index) async {
+    reserveSelection();
+    await (remote?.jumpTo(index) ?? _handler?.skipToQueueItem(index));
+  }
 
   void moveQueueItem(int oldIndex, int newIndex) {
     if (remote case final remote?) {

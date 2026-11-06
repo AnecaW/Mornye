@@ -29,7 +29,15 @@ class PlaybackController extends Notifier<PlaybackState> {
   final HistoryDatabase _history;
 
   @override
-  PlaybackState build() => const PlaybackState();
+  PlaybackState build() {
+    _disposed = false;
+    ref.onDispose(() => _disposed = true);
+    return const PlaybackState();
+  }
+
+  bool _disposed = false;
+  bool _current(MusicPlayerController player, int selection) =>
+      !_disposed && player.isCurrentSelection(selection);
 
   Future<bool> _useInternalPlayer({String? source}) async {
     final mode = ref.read(settingsProvider).playerMode;
@@ -53,11 +61,15 @@ class PlaybackController extends Notifier<PlaybackState> {
     String? format,
     bool? explicit,
   }) async {
+    final player = ref.read(musicPlayerControllerProvider);
+    final selection = player.reserveSelection();
     if (isCueVirtualPath(path)) {
       throw Exception(cueVirtualTrackRequiresSplitMessage);
     }
 
-    if (await _useInternalPlayer(source: path)) {
+    final internal = await _useInternalPlayer(source: path);
+    if (!_current(player, selection)) return;
+    if (internal) {
       _log.d('Playing "$title" in the internal player: $path');
       await ref
           .read(musicPlayerControllerProvider)
@@ -87,6 +99,7 @@ class PlaybackController extends Notifier<PlaybackState> {
             settings: ref.read(settingsProvider),
           )
         : null;
+    if (!_current(player, selection)) return;
     await openFile(recovered ?? path);
   }
 
@@ -140,7 +153,11 @@ class PlaybackController extends Notifier<PlaybackState> {
     required int startIndex,
     required String externalPath,
   }) async {
-    if (await _useInternalPlayer(source: externalPath)) {
+    final player = ref.read(musicPlayerControllerProvider);
+    final selection = player.reserveSelection();
+    final internal = await _useInternalPlayer(source: externalPath);
+    if (!_current(player, selection)) return;
+    if (internal) {
       final items = queue.toList(growable: false);
       if (items.isEmpty) return;
       final i = startIndex.clamp(0, items.length - 1);
@@ -154,12 +171,15 @@ class PlaybackController extends Notifier<PlaybackState> {
               settings: ref.read(settingsProvider),
             )
           : null;
+      if (!_current(player, selection)) return;
       await openFile(recovered ?? externalPath);
     }
   }
 
   Future<void> playTrackList(List<Track> tracks, {int startIndex = 0}) async {
     if (tracks.isEmpty) return;
+    final player = ref.read(musicPlayerControllerProvider);
+    final selection = player.reserveSelection();
 
     final safeStart = startIndex.clamp(0, tracks.length - 1);
     List<String?>? resolvedPaths;
@@ -171,6 +191,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       for (var offset = 0; offset < tracks.length; offset++) {
         final index = (safeStart + offset) % tracks.length;
         final path = (await resolveTrackFilePaths([tracks[index]])).single;
+        if (!_current(player, selection)) return;
         if (path == null) continue;
         if (isCueVirtualPath(path)) {
           skippedCueVirtualTrack = true;
@@ -180,6 +201,7 @@ class PlaybackController extends Notifier<PlaybackState> {
           // Network identities require the internal proxy-aware player.
           networkSource = path;
           resolvedPaths = await resolveTrackFilePaths(tracks);
+          if (!_current(player, selection)) return;
           break;
         }
         await openFile(path);
@@ -195,9 +217,12 @@ class PlaybackController extends Notifier<PlaybackState> {
     }
     resolvedPaths ??= await resolveTrackFilePaths(tracks);
 
-    if (await _useInternalPlayer(
+    if (!_current(player, selection)) return;
+    final internal = await _useInternalPlayer(
       source: networkSource ?? resolvedPaths[safeStart],
-    )) {
+    );
+    if (!_current(player, selection)) return;
+    if (internal) {
       final queue = <PlayableMedia>[];
       int? initialIndex;
       var skippedCueVirtualTrack = false;

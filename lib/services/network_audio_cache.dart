@@ -303,6 +303,7 @@ class NetworkCacheFill {
 
   Stream<List<int>> read(int start, int end) async* {
     var offset = start;
+    final stalled = Stopwatch()..start();
     while (offset < end) {
       if (error != null) {
         throw const HttpException('Cached audio download interrupted');
@@ -325,6 +326,7 @@ class NetworkCacheFill {
               .fold<List<int>>([], (all, chunk) => all..addAll(chunk));
           if (bytes.isNotEmpty) {
             offset += bytes.length;
+            stalled.reset();
             yield bytes;
           }
         } on FileSystemException {
@@ -332,6 +334,11 @@ class NetworkCacheFill {
         }
       } else {
         if (finished) throw const HttpException('Cached audio ended early');
+        // This is a short handoff budget, not a playback timeout: the proxy
+        // resumes at the exact offset from the origin while caching continues.
+        if (stalled.elapsed >= const Duration(milliseconds: 240)) {
+          throw const HttpException('Background audio cache stalled');
+        }
         await Future<void>.delayed(const Duration(milliseconds: 40));
       }
     }
