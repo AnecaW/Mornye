@@ -254,7 +254,7 @@ jobs:
           ffmpeg -v error -f lavfi -i sine=frequency=440:duration=2 -ar 44100 -ac 1 .tmp/audio/tone.flac
           ffmpeg -v error -f lavfi -i sine=frequency=440:duration=2 -ar 44100 -ac 1 .tmp/audio/tone.mp3
           mkdir -p .tmp/audio/hls
-          ffmpeg -v error -f lavfi -i sine=frequency=440:duration=8 -ar 24000 -ac 1 -b:a 24k -c:a aac -hls_time 1 -hls_list_size 0 .tmp/audio/hls/live.m3u8
+          ffmpeg -v error -f lavfi -i sine=frequency=440:duration=6 -ar 24000 -ac 1 -b:a 16k -c:a aac -hls_time 1 -hls_list_size 0 .tmp/audio/hls/live.m3u8
           python3 -c 'import base64,json,pathlib; root=pathlib.Path(".tmp/audio/hls"); pathlib.Path(".tmp/audio/hls.json.b64").write_text(base64.b64encode(json.dumps({p.name:base64.b64encode(p.read_bytes()).decode() for p in root.iterdir()}).encode()).decode())'
           python3 - <<'PY'
           import base64, json
