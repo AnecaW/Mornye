@@ -254,8 +254,22 @@ jobs:
           ffmpeg -v error -f lavfi -i sine=frequency=440:duration=2 -ar 44100 -ac 1 .tmp/audio/tone.flac
           ffmpeg -v error -f lavfi -i sine=frequency=440:duration=2 -ar 44100 -ac 1 .tmp/audio/tone.mp3
           mkdir -p .tmp/audio/hls
-          ffmpeg -v error -f lavfi -i sine=frequency=440:duration=12 -c:a aac -hls_time 1 -hls_list_size 0 .tmp/audio/hls/live.m3u8
+          ffmpeg -v error -f lavfi -i sine=frequency=440:duration=8 -ar 24000 -ac 1 -b:a 24k -c:a aac -hls_time 1 -hls_list_size 0 .tmp/audio/hls/live.m3u8
           python3 -c 'import base64,json,pathlib; root=pathlib.Path(".tmp/audio/hls"); pathlib.Path(".tmp/audio/hls.json.b64").write_text(base64.b64encode(json.dumps({p.name:base64.b64encode(p.read_bytes()).decode() for p in root.iterdir()}).encode()).decode())'
+          python3 - <<'PY'
+          import base64, json
+          from pathlib import Path
+          audio = Path('.tmp/audio')
+          definitions = {
+              'TEST_HLS': (audio / 'hls.json.b64').read_text(),
+              'TEST_FLAC': base64.b64encode((audio / 'tone.flac').read_bytes()).decode(),
+              'TEST_MP3': base64.b64encode((audio / 'tone.mp3').read_bytes()).decode(),
+          }
+          encoded_size = sum(len(base64.b64encode(f'{key}={value}'.encode())) + 1 for key, value in definitions.items())
+          assert encoded_size < 160 * 1024, f'Playback fixtures exceed the Xcode argument/environment budget: {encoded_size}'
+          (audio / 'test-defines.json').write_text(json.dumps(definitions))
+          print(f'Playback fixture environment: {encoded_size} bytes')
+          PY
           # Only boot runtimes supported by the selected Xcode simulator SDK.
           export SIMULATOR_SDK_VERSION="$(xcrun --sdk iphonesimulator --show-sdk-version)"
           device=$(xcrun simctl list devices available --json | python3 -c 'import json,os,re,sys; sdk=tuple(map(int,(os.environ["SIMULATOR_SDK_VERSION"].split(".")+["0"])[:2])); groups=json.load(sys.stdin)["devices"]; candidates=[(tuple(map(int,re.search(r"iOS-(\d+)-(\d+)",key).groups())),group) for key,group in groups.items() if re.search(r"iOS-(\d+)-(\d+)",key)]; print(next(d["udid"] for version,group in sorted(candidates,key=lambda item:item[0]) if version[0]==sdk[0] and version<=sdk for d in group if "iPhone" in d["name"]))')
@@ -265,7 +279,7 @@ jobs:
           fi
           xcrun simctl boot "$device" || true
           xcrun simctl bootstatus "$device" -b
-          flutter test integration_test/subsonic_playback_test.dart --no-pub --verbose --timeout=2m -d "$device" --dart-define="TEST_HLS=$(cat .tmp/audio/hls.json.b64)" --dart-define="TEST_FLAC=$(base64 < .tmp/audio/tone.flac | tr -d '\n')" --dart-define="TEST_MP3=$(base64 < .tmp/audio/tone.mp3 | tr -d '\n')" 2>&1 | tee .tmp/ios-simulator.log
+          flutter test integration_test/subsonic_playback_test.dart --no-pub --verbose --timeout=2m -d "$device" --dart-define-from-file=.tmp/audio/test-defines.json 2>&1 | tee .tmp/ios-simulator.log
       - name: Collect simulator diagnostics
         if: always()
         timeout-minutes: 3
