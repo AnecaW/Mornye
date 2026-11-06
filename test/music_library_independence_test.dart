@@ -57,6 +57,37 @@ void main() {
     }
   });
   tearDown(() => db.close());
+  test(
+    'an offline NAS copy remains in its server when device indexing is off',
+    () async {
+      await db.insert('history_db.history', {
+        'id': 'offline-nas',
+        'file_path': '/offline/song.flac',
+        'origin_file_path': 'network://nas/subsonic/song/shared.flac',
+        'track_name': 'Same song',
+        'artist_name': 'Artist',
+        'album_name': 'Same album',
+        'album_key': 'same|artist',
+      });
+      final scope = MusicLibraryScope(
+        deviceEnabled: false,
+        selection: 'server:nas',
+        enabledServers: {'nas'},
+      );
+      final query = scope.apply(const QueueLibraryDbQuery(limit: 100));
+      final rows = (await store.trackPage(query)).rows;
+      expect(rows.map((r) => (r['item'] as Map)['id']), ['offline-nas']);
+      expect((await store.counts(query)).allTrackCount, 1);
+      expect(
+        (await store.mixSongs(
+          source: 'downloaded',
+          scope: query,
+          limit: 100,
+        )).map((r) => r['id']),
+        ['offline-nas'],
+      );
+    },
+  );
   final cases = [
     (
       name: 'only local',

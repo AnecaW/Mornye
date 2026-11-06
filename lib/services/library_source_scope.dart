@@ -62,3 +62,8 @@ bool libraryScopeAllowsPath(
     return false;
   return true;
 }
+
+/// An offline copy keeps the library it came from even though playback opens
+/// its independent local file. Older downloads without an origin remain local.
+String historyLogicalSourceSql(String alias) =>
+    "COALESCE(NULLIF($alias.origin_file_path, ''), $alias.file_path)";

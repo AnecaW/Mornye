@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -147,6 +148,24 @@ void main() {
       );
     },
   );
+  testWidgets('disposing a pending source read cancels its deadline', (
+    tester,
+  ) async {
+    final pending = Completer<String?>();
+    final storage = NetworkStorageService(
+      read: () => pending.future,
+      write: (_) async {},
+    );
+    final c = ProviderContainer(
+      overrides: [librarySourceStorageProvider.overrideWithValue(storage)],
+    );
+    final result = c.read(savedLibrarySourceConnectionsProvider.future);
+    c.dispose();
+    expect(await result, isEmpty);
+    pending.complete(null);
+    await tester.pump();
+    await storage.dispose();
+  });
   testWidgets(
     'shared source settings keep disabled servers visible when Local Library is off',
     (tester) async {

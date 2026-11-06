@@ -138,7 +138,10 @@ final homeRecentlyPlayedProvider =
           if (albums.add(
             entry.track.album.isEmpty
                 ? entry.track.key
-                : '${entry.track.artist}/${entry.track.album}',
+                : sourceAlbumKey(
+                    '${entry.track.artist}/${entry.track.album}',
+                    entry.item?.historyItem?.originFilePath ?? entry.track.key,
+                  ),
           ))
             entry,
       ].take(_homeShelfLimit).toList();
@@ -263,7 +266,7 @@ Future<List<HomeRepeatTrack>> _homeRepeatTracks(
           item: UnifiedLibraryItem.fromDownloadHistory(downloaded),
           hidden: !libraryScopeAllowsPath(
             scope.apply(const QueueLibraryDbQuery()),
-            key,
+            downloaded.originFilePath ?? key,
           ),
         );
       }

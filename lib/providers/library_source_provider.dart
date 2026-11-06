@@ -51,7 +51,26 @@ final savedLibrarySourceConnectionsProvider =
       void changed() => ref.invalidateSelf();
       storage.connectionRevision.addListener(changed);
       ref.onDispose(() => storage.connectionRevision.removeListener(changed));
-      return storage.connections().timeout(const Duration(seconds: 10));
+      final result = Completer<List<NetworkConnection>>();
+      final deadline = Timer(const Duration(seconds: 10), () {
+        if (!result.isCompleted)
+          result.completeError(
+            TimeoutException('Library connection settings unavailable'),
+          );
+      });
+      ref.onDispose(() {
+        deadline.cancel();
+        if (!result.isCompleted) result.complete(const []);
+      });
+      storage.connections().then(
+        (connections) {
+          if (!result.isCompleted) result.complete(connections);
+        },
+        onError: (Object error, StackTrace stack) {
+          if (!result.isCompleted) result.completeError(error, stack);
+        },
+      );
+      return result.future.whenComplete(deadline.cancel);
     }, retry: (retryCount, error) => null);
 
 // Keep the saved connection and its indexed metadata when temporarily disabled.

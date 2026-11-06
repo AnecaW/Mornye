@@ -243,6 +243,15 @@ void main() {
     expect(await subject.lookup(_c), isNotNull);
   });
 
+  test('wanted neighbours cannot exceed the shared byte budget', () async {
+    final subject = cache(maxBytes: 20)..want([_a, _b]);
+    expect(await subject.ready(_a, _wait), isTrue);
+    expect(await subject.ready(_b, _wait), isFalse);
+    expect(await subject.lookup(_a), isNotNull);
+    expect(await subject.lookup(_b), isNull);
+    expect((await files()).where((name) => name.endsWith('.part')), isEmpty);
+  });
+
   test('a song larger than the file bound keeps streaming', () async {
     server.put(_a, 'x' * 64);
     final subject = cache(maxFileBytes: 32)..want([_a, _b]);

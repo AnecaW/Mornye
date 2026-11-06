@@ -151,7 +151,7 @@ class LibrarySearchStore {
         where,
         args,
         scope,
-        '$alias.file_path',
+        local ? '$alias.file_path' : historyLogicalSourceSql(alias),
         indexed: local,
       );
       final column = switch (kind) {

@@ -112,7 +112,12 @@ class LibraryQueueStore {
     final args = <Object?>[];
     final historyWhere = <String>[];
     final localWhere = <String>[];
-    appendLibrarySourceScope(historyWhere, args, scope, 'h.file_path');
+    appendLibrarySourceScope(
+      historyWhere,
+      args,
+      scope,
+      historyLogicalSourceSql('h'),
+    );
     if (includeLocal) {
       appendLibrarySourceScope(
         localWhere,
@@ -204,7 +209,7 @@ class LibraryQueueStore {
       scopedWhere,
       scopedArgs,
       scope,
-      'song.file_path',
+      source == 'local' ? 'song.file_path' : historyLogicalSourceSql('song'),
       indexed: source == 'local',
     );
     final sourceWhere = scopedWhere.isEmpty
@@ -247,7 +252,12 @@ class LibraryQueueStore {
   }) {
     final args = <Object?>[];
     final historyWhere = <String>[];
-    appendLibrarySourceScope(historyWhere, args, scope, 'h.file_path');
+    appendLibrarySourceScope(
+      historyWhere,
+      args,
+      scope,
+      historyLogicalSourceSql('h'),
+    );
     final localWhere = <String>[];
     if (includeLocal)
       appendLibrarySourceScope(
@@ -939,6 +949,7 @@ class LibraryQueueStore {
       args,
       request,
       filePathExpr: 'h.file_path',
+      logicalPathExpr: historyLogicalSourceSql('h'),
       formatExpr: 'h.format',
       qualityExpr: 'h.quality',
       bitDepthExpr: 'h.bit_depth',
@@ -1054,6 +1065,7 @@ class LibraryQueueStore {
     List<Object?> args,
     QueueLibraryDbQuery request, {
     required String filePathExpr,
+    String? logicalPathExpr,
     required String? formatExpr,
     required String qualityExpr,
     required String bitDepthExpr,
@@ -1069,22 +1081,23 @@ class LibraryQueueStore {
     required String lyricsKnownExpr,
     required String hasReplayGainExpr,
   }) {
+    final sourcePath = logicalPathExpr ?? filePathExpr;
     if (request.networkScope case final scope?) {
       final choices = <String>[];
       if (request.includeDevice) {
         choices.add(
-          "($filePathExpr NOT LIKE 'network://%' AND $filePathExpr NOT LIKE 'http://%' AND $filePathExpr NOT LIKE 'https://%')",
+          "($sourcePath NOT LIKE 'network://%' AND $sourcePath NOT LIKE 'http://%' AND $sourcePath NOT LIKE 'https://%')",
         );
       }
       for (final id in scope) {
-        choices.add("$filePathExpr LIKE ? ESCAPE '\\'");
+        choices.add("$sourcePath LIKE ? ESCAPE '\\'");
         args.add('network://${_escapeLikePattern(id)}/%');
       }
       where.add(choices.isEmpty ? '0' : '(${choices.join(' OR ')})');
     }
     if (request.deviceOnly) {
       for (final scheme in const ['network://%', 'http://%', 'https://%']) {
-        where.add('$filePathExpr NOT LIKE ?');
+        where.add('$sourcePath NOT LIKE ?');
         args.add(scheme);
       }
     }

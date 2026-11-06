@@ -571,7 +571,12 @@ Future<List<LibraryMixView>> _resolve(
   }
   final items = <String, UnifiedLibraryItem>{
     for (final MapEntry(:key, :value) in history.entries)
-      if (libraryScopeAllowsPath(query, value['file_path'] as String? ?? ''))
+      if (libraryScopeAllowsPath(
+        query,
+        value['originFilePath'] as String? ??
+            value['filePath'] as String? ??
+            '',
+      ))
         'dl_$key': UnifiedLibraryItem.fromDownloadHistory(
           DownloadHistoryItem.fromJson(value),
         ),

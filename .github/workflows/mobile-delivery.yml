@@ -57,8 +57,18 @@ jobs:
       - name: Install verification tools
         timeout-minutes: 8
         run: |
-          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update
-          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y libclang-dev ffmpeg
+          set -euo pipefail
+          shopt -s nullglob
+          missing=()
+          command -v ffmpeg >/dev/null || missing+=(ffmpeg)
+          clang_libraries=(/usr/lib/llvm-*/lib/libclang.so* /usr/lib/x86_64-linux-gnu/libclang-[0-9]*.so* /usr/local/lib/libclang.so*)
+          if [ "${#clang_libraries[@]}" -eq 0 ]; then missing+=(libclang-dev); fi
+          if [ "${#missing[@]}" -gt 0 ]; then
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y "${missing[@]}"
+          fi
+          command -v ffmpeg
+          printf 'Available libclang libraries: %s\n' "${clang_libraries[*]}"
       - run: flutter pub get && dart scripts/prepare_flutter_sdk.dart
       - run: flutter analyze --no-fatal-infos
       - name: Prepare native test assets
