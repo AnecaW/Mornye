@@ -72,6 +72,7 @@ Map<String, dynamic> _state({bool playing = true, int index = 0}) => {
 };
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
   late FakeLinkClient client;
   late ProviderContainer container;
   late FakeLibraryLookup lookup;
@@ -413,7 +414,13 @@ void main() {
           artUri: cover.uri.toString(),
         );
         replies[track.title]!.complete(media);
-        await settle();
+        if ((await playback.mediaItems.first)?.title == track.title) {
+          await playback.mediaItems
+              .firstWhere((item) => item?.artUri?.toString() == media.artUri)
+              .timeout(const Duration(seconds: 3));
+        } else {
+          await settle();
+        }
         return media;
       }
 
@@ -436,7 +443,9 @@ void main() {
       );
 
       showTrack(second);
-      await settle();
+      await playback.mediaItems
+          .firstWhere((item) => item?.artUri?.toString() == late.artUri)
+          .timeout(const Duration(seconds: 3));
       expect((await playback.mediaItems.first)!.artUri.toString(), late.artUri);
       client.push({
         'type': LinkMessageTypes.playerState,
@@ -493,8 +502,9 @@ void main() {
         } else {
           reply.complete();
         }
-        await settle();
-        final item = (await playback.mediaItems.first)!;
+        final item = (await playback.mediaItems
+            .firstWhere((item) => item?.artUri != before.artUri)
+            .timeout(const Duration(seconds: 3)))!;
         expect(item.title, track.title);
         expect(item.artUri, failure ? isNull : isNot(before.artUri));
         expect((await playback.queues.first).single.artUri, item.artUri);

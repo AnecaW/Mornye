@@ -27,7 +27,17 @@ class _MusicPrefetch {
     if (key == _key) return;
     _key = key;
     final cache = _cache;
-    if (cache != null) unawaited(_update(cache, ++_revision));
+    if (cache != null) {
+      final revision = ++_revision;
+      unawaited(
+        _update(cache, revision).catchError((Object error) {
+          if (revision == _revision) cache.want(const []);
+          _log.w(
+            'Background prefetch unavailable (${error.runtimeType}); streaming remains active',
+          );
+        }),
+      );
+    }
   }
 
   /// The songs to keep, most needed first. Repeat all wraps to the start of
@@ -55,6 +65,10 @@ class _MusicPrefetch {
   }
 
   Future<void> _update(NetworkPlaybackCache cache, int revision) async {
+    if (!_wanted().any((media) => media.source.startsWith('network://'))) {
+      cache.want(const []);
+      return;
+    }
     final storage = NetworkStorageService.instance;
     final policy = identical(cache, NetworkPlaybackCache.instance)
         ? storage.audioCache

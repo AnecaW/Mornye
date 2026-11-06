@@ -409,5 +409,7 @@ void main() {
       );
       expect(_expectedDigests.keys, unorderedEquals(actual.keys));
     },
+    // Exercises thousands of live and shadow SQL pages across all filters.
+    timeout: const Timeout(Duration(minutes: 4)),
   );
 }

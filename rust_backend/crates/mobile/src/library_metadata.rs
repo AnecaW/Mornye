@@ -159,7 +159,15 @@ mod tests {
             .unwrap();
         let cached = library_cover_slot(root.clone(), key.into()).cached;
         assert_eq!(cached.as_deref(), jpg.to_str());
-        std::fs::write(directory.path().join(LIBRARY_COVER_REGENERATE_MARKER), "").unwrap();
+        let marker = directory.path().join(LIBRARY_COVER_REGENERATE_MARKER);
+        std::fs::write(&marker, "").unwrap();
+        // Separate generations explicitly instead of relying on filesystem clock resolution.
+        File::options()
+            .write(true)
+            .open(&marker)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(1))
+            .unwrap();
         assert_eq!(library_cover_slot(root.clone(), key.into()).cached, None);
         // A regenerated thumbnail may change format; the newer file wins.
         let png = directory.path().join(format!("{}.png", slot.stem));

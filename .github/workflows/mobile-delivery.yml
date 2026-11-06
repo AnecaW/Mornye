@@ -135,9 +135,12 @@ jobs:
           printf 'storeFile=%s\nstorePassword=%s\nkeyPassword=%s\nkeyAlias=mornye-delivery\n' "$RUNNER_TEMP/mornye-delivery.jks" "$password" "$password" > android/key.properties
           chmod 600 android/key.properties "$RUNNER_TEMP/mornye-delivery.jks"
       - run: flutter pub get && dart scripts/prepare_flutter_sdk.dart
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6
+        with:
+          gradle-version: "9.8.2"
       - name: Test native timed radio metadata
         timeout-minutes: 8
-        run: cd android && ./gradlew :audioplayers_android:testDebugUnitTest --tests 'xyz.luan.audioplayers.player.TimedId3MetadataTest' --console=plain
+        run: gradle -p android :audioplayers_android:testDebugUnitTest --tests 'xyz.luan.audioplayers.player.TimedId3MetadataTest' --console=plain
       - name: Restore Android native build cache
         continue-on-error: true
         id: android-rust-cache
@@ -292,13 +295,17 @@ jobs:
           fi
           xcrun simctl boot "$device" || true
           xcrun simctl bootstatus "$device" -b
+          # Resolve and warm the simulator package graph before Flutter's bounded
+          # build-settings query. Release and simulator use separate SDK graphs.
+          xcrun xcodebuild -resolvePackageDependencies -project ios/Runner.xcodeproj -scheme Runner -clonedSourcePackagesDirPath "$PWD/build/ios/SourcePackages" >.tmp/ios-package-resolution.log 2>&1
+          xcrun xcodebuild -project ios/Runner.xcodeproj -scheme Runner -configuration Debug -sdk iphonesimulator -destination "id=$device" -clonedSourcePackagesDirPath "$PWD/build/ios/SourcePackages" -showBuildSettings >.tmp/ios-simulator-settings.log 2>&1
           flutter test integration_test/subsonic_playback_test.dart --no-pub --verbose --timeout=2m -d "$device" --dart-define-from-file=.tmp/audio/test-defines.json 2>&1 | tee .tmp/ios-simulator.log
       - name: Collect simulator diagnostics
         if: always()
         timeout-minutes: 3
         run: |
           mkdir -p .tmp/ios-diagnostics
-          cp .tmp/ios-simulator.log .tmp/ios-diagnostics/ 2>/dev/null || true
+          cp .tmp/ios-simulator.log .tmp/ios-package-resolution.log .tmp/ios-simulator-settings.log .tmp/ios-diagnostics/ 2>/dev/null || true
           xcrun simctl list devices available > .tmp/ios-diagnostics/devices.txt || true
           xcrun simctl spawn booted log show --last 10m --style compact --predicate 'process == "Runner"' > .tmp/ios-diagnostics/runner.log 2>&1 || true
           xcrun simctl io booted screenshot .tmp/ios-diagnostics/simulator.png || true

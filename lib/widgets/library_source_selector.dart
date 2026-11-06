@@ -18,9 +18,14 @@ class LibrarySourceSelector extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final selected = ref.watch(effectiveLibrarySourceProvider);
-    final connections =
+    final activeConnections =
         ref.watch(librarySourceConnectionsProvider).value ??
         const <NetworkConnection>[];
+    // Saved libraries stay discoverable while their shared index is loading or
+    // when disabled. Only enabled, loaded sources can become active playback scopes.
+    final connections =
+        ref.watch(savedLibrarySourceConnectionsProvider).value ??
+        activeConnections;
     final id = musicSourceConnectionId(selected);
     final server = connections.where((c) => c.id == id).firstOrNull;
     final synchronization = ref.watch(librarySourceSyncProvider(selected));
@@ -74,6 +79,9 @@ class LibrarySourceSelector extends ConsumerWidget {
                       for (final connection in connections)
                         CheckedPopupMenuItem(
                           value: serverMusicSource(connection.id),
+                          enabled: activeConnections.any(
+                            (active) => active.id == connection.id,
+                          ),
                           checked: selected == serverMusicSource(connection.id),
                           child: _option(Icons.dns_outlined, connection.name),
                         ),

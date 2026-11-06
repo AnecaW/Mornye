@@ -647,7 +647,7 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      if (live)
+                      if (live && !(mornye && _landscape))
                         Padding(
                           padding: const EdgeInsets.symmetric(vertical: 8),
                           child: Row(
@@ -668,7 +668,7 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
                             ],
                           ),
                         )
-                      else if (mornye && !_landscape)
+                      else if (!live && mornye && !_landscape)
                         FractionallySizedBox(
                           widthFactor: 0.72,
                           child: Row(
@@ -718,7 +718,7 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
                             ],
                           ),
                         )
-                      else if (!mornye)
+                      else if (!live && !mornye)
                         Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 28),
                           child: Row(

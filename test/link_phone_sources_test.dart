@@ -752,7 +752,7 @@ void main() {
         final phone = sources();
         final name = '${_fileId(1)}.flac';
         final pending = phone.metadata(sourceId, name);
-        await pumpEventQueue();
+        await waitForRequests(1);
         expect(sent, hasLength(1));
         final request = sent.single;
         expect(request.deviceId, _phone);
@@ -792,11 +792,11 @@ void main() {
         final name = '${_fileId(1)}.flac';
         final cached = '${received.path}/$name';
         File(cached).writeAsStringSync('cached audio');
-        tags[cached] = {'title': 'Cached', 'lyrics': ''};
+        tags[p.normalize(cached)] = {'title': 'Cached', 'lyrics': ''};
         final phone = sources(lyricsTimeout: const Duration(seconds: 5));
         final first = phone.metadata(sourceId, name);
         final second = phone.metadata(sourceId, name);
-        await pumpEventQueue();
+        await waitForRequests(1);
         expect(sent, hasLength(1));
         final reply = {
           'type': LinkMessageTypes.filesLyrics,
@@ -839,7 +839,7 @@ void main() {
       final phone = sources(lyricsTimeout: const Duration(seconds: 5));
       final name = '${_fileId(1)}.flac';
       final pending = phone.metadata(sourceId, name);
-      await pumpEventQueue();
+      await waitForRequests(1);
       phone.onMessage(_phone, {
         'type': LinkMessageTypes.filesLyrics,
         'requestId': sent.single.message['requestId'],

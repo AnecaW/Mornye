@@ -214,6 +214,7 @@ extension SubsonicStorage on NetworkStorageService {
   SubsonicClient openSubsonic(
     NetworkConnection connection, {
     bool fresh = false,
+    bool dedicatedTransport = false,
   }) {
     connection.validate();
     if (connection.protocol != NetworkProtocol.subsonic) {
@@ -222,8 +223,9 @@ extension SubsonicStorage on NetworkStorageService {
     return SubsonicClient._(
       this,
       connection,
-      _readClient(connection),
+      dedicatedTransport ? _client() : _readClient(connection),
       fresh: fresh,
+      ownsTransport: dedicatedTransport,
     );
   }
 
@@ -246,8 +248,10 @@ class SubsonicClient {
     this.connection,
     this._http, {
     this.fresh = false,
+    this.ownsTransport = false,
   });
   final bool fresh;
+  final bool ownsTransport;
   final NetworkStorageService _storage;
   final NetworkConnection connection;
   final HttpClient _http;
@@ -263,6 +267,7 @@ class SubsonicClient {
       request.abort();
     }
     _requests.clear();
+    if (ownsTransport) _http.close(force: true);
   }
 
   /// Live reads and mutations support repeated Subsonic form parameters.

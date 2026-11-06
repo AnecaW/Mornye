@@ -282,7 +282,7 @@ void main() {
   for (final mornye in [true, false]) {
     for (final landscape in [true, false]) {
       testWidgets(
-        'radio has live-only controls and ordinary tracks recover their transport ($mornye / $landscape)',
+        'radio keeps live transport and exposes lyrics without a seek timeline ($mornye / $landscape)',
         (tester) async {
           await pumpNowPlaying(
             tester,
@@ -314,8 +314,7 @@ void main() {
           expect(find.byTooltip(l.nowPlayingNextTrack), findsNothing);
           expect(find.byTooltip(l.nowPlayingPreviousTrack), findsNothing);
           expect(find.byTooltip(l.nowPlayingUpNext), findsNothing);
-          expect(find.byIcon(CupertinoIcons.quote_bubble), findsNothing);
-          expect(find.byIcon(Icons.lyrics_outlined), findsNothing);
+          expect(find.byTooltip(l.nowPlayingTabLyrics), findsOneWidget);
           expect(tester.takeException(), isNull);
           mediaItems.add(item('first'));
           await tester.pump();

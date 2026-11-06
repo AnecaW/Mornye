@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:path/path.dart' as p;
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -63,7 +64,7 @@ void main() {
         );
         expect(request, {
           'operation': 'directory_stats',
-          'path': '${root.absolute.path}/cover_cache',
+          'path': p.join(root.absolute.path, 'cover_cache'),
           'follow_links': true,
         });
         return {'file_count': 2, 'total_size_bytes': 10};
@@ -122,7 +123,7 @@ void main() {
     },
     skip: Platform.isWindows
         ? 'Creating symlinks requires Windows developer permissions'
-        : false,
+        : null,
   );
 
   test(
@@ -246,7 +247,7 @@ void main() {
       },
       skip: Platform.isWindows
           ? 'Creating symlinks requires Windows developer permissions'
-          : false,
+          : null,
     );
   }, skip: !enabled);
 }

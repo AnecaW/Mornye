@@ -745,7 +745,7 @@ class NetworkStorageService {
     // AVPlayer needs a file-type hint even when a NAS serves generic bytes.
     // Keep names and credentials private behind the unguessable route.
     final opaque = newId();
-    final token = forPlayback && RegExp(r'^[a-z0-9]{1,10}$').hasMatch(suffix)
+    final token = RegExp(r'^[a-z0-9]{1,10}$').hasMatch(suffix)
         ? '$opaque.$suffix'
         : opaque;
     while (_routes.length >= 256) {

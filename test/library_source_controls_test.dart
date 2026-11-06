@@ -148,6 +148,51 @@ void main() {
       );
     },
   );
+  testWidgets(
+    'Library menu shows saved disabled servers while Local Library is off',
+    (tester) async {
+      final storage = NetworkStorageService(
+        read: () async => null,
+        write: (_) async {},
+      );
+      addTearDown(storage.dispose);
+      await storage.save(
+        const NetworkConnection(
+          id: 'fixture',
+          name: 'Music server',
+          protocol: NetworkProtocol.subsonic,
+          address: 'https://music.test',
+        ),
+      );
+      final c = ProviderContainer(
+        overrides: [
+          librarySourceStorageProvider.overrideWithValue(storage),
+          settingsProvider.overrideWith(_Settings.new),
+          localLibraryProvider.overrideWith(_Library.new),
+        ],
+      );
+      addTearDown(c.dispose);
+      c.read(settingsProvider.notifier).setLocalLibraryEnabled(false);
+      (c.read(localLibraryProvider.notifier) as _Library).disable(true);
+      await tester.pumpWidget(app(c, const LibrarySourceSelector()));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(PopupMenuButton<String>));
+      await tester.pumpAndSettle();
+      final option = find.byWidgetPredicate(
+        (widget) =>
+            widget is CheckedPopupMenuItem<String> &&
+            widget.value == serverMusicSource('fixture'),
+      );
+      expect(option, findsOneWidget);
+      expect(
+        tester.widget<CheckedPopupMenuItem<String>>(option).enabled,
+        isFalse,
+      );
+      expect(find.text('Music server'), findsOneWidget);
+      expect(find.byIcon(Icons.smartphone_outlined), findsNothing);
+    },
+  );
+
   testWidgets('disposing a pending source read cancels its deadline', (
     tester,
   ) async {
@@ -223,6 +268,7 @@ void main() {
           settingsProvider.overrideWith(_Settings.new),
           localLibraryProvider.overrideWith(_Library.new),
           librarySourceConnectionsProvider.overrideWith((ref) async => []),
+          savedLibrarySourceConnectionsProvider.overrideWith((ref) async => []),
         ],
       );
       addTearDown(c.dispose);
@@ -255,6 +301,7 @@ void main() {
           settingsProvider.overrideWith(_Settings.new),
           localLibraryProvider.overrideWith(_Library.new),
           librarySourceConnectionsProvider.overrideWith((ref) async => []),
+          savedLibrarySourceConnectionsProvider.overrideWith((ref) async => []),
         ],
       );
       addTearDown(c.dispose);

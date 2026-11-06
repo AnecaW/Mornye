@@ -146,7 +146,10 @@ class NetworkMetadataService {
       lease = null;
     }
     if (lease == null) {
-      lease = _SubsonicLease(_storage.openSubsonic(connection), identity);
+      lease = _SubsonicLease(
+        _storage.openSubsonic(connection, dedicatedTransport: true),
+        identity,
+      );
       _subsonicClients[connection.id] = lease;
       _subsonicLeases.add(lease);
       _unsubscribeRemovals ??= _storage.connectionRemovals.subscribe((

@@ -226,7 +226,7 @@ void main() {
             if (call.method != 'getProviderMetadata') return null;
             final args = call.arguments as Map<Object?, Object?>;
             final id = args['resource_id'] as String;
-            calls.add(id);
+            if (id == artistId || id == next) calls.add(id);
             final albums = id == artistId
                 ? [_album('old', '2010'), _album('middle', '2020')]
                 : [_album('new', '2026'), _album('middle', '2020-12-31')];

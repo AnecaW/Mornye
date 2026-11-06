@@ -295,26 +295,30 @@ class _MornyeLandscapePlayerState extends State<MornyeLandscapePlayer> {
                                               _scheduleHide();
                                             },
                                           ),
-                                          IconButton(
-                                            tooltip:
-                                                context.l10n.nowPlayingUpNext,
-                                            icon: const Icon(
-                                              CupertinoIcons.list_bullet,
+                                          if (widget.live)
+                                            const SizedBox(width: 48),
+                                          if (!widget.live)
+                                            IconButton(
+                                              tooltip:
+                                                  context.l10n.nowPlayingUpNext,
+                                              icon: const Icon(
+                                                CupertinoIcons.list_bullet,
+                                              ),
+                                              isSelected: widget.page == 2,
+                                              color: Colors.white,
+                                              style: IconButton.styleFrom(
+                                                backgroundColor:
+                                                    widget.page == 2
+                                                    ? Colors.white.withValues(
+                                                        alpha: 0.16,
+                                                      )
+                                                    : Colors.transparent,
+                                              ),
+                                              onPressed: () =>
+                                                  widget.onPageChanged(
+                                                    widget.page == 2 ? 0 : 2,
+                                                  ),
                                             ),
-                                            isSelected: widget.page == 2,
-                                            color: Colors.white,
-                                            style: IconButton.styleFrom(
-                                              backgroundColor: widget.page == 2
-                                                  ? Colors.white.withValues(
-                                                      alpha: 0.16,
-                                                    )
-                                                  : Colors.transparent,
-                                            ),
-                                            onPressed: () =>
-                                                widget.onPageChanged(
-                                                  widget.page == 2 ? 0 : 2,
-                                                ),
-                                          ),
                                         ],
                                       ),
                                     ),
