@@ -1,6 +1,11 @@
 name: Native iOS audio diagnostic
 on:
   workflow_dispatch:
+  push:
+    branches: [codex/official-531-integration]
+    paths:
+      - .github/workflows/native-ios-audio-diagnostic.yml
+      - third_party/audioplayers_darwin/tests/IOSRadioProbe.swift
 permissions:
   contents: read
 jobs:
