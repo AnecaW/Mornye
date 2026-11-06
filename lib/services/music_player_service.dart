@@ -1,4 +1,4 @@
-import 'package:mornye/services/discord_artwork_resolver.dart';
+import 'package:mornye/services/radio_catalog_metadata.dart';
 import 'package:mornye/services/radio_metadata.dart';
 import 'package:mornye/services/server_scrobbling.dart';
 import 'dart:async';
@@ -177,7 +177,7 @@ class MusicPlayerHandler extends BaseAudioHandler
   int _networkRecoveries = 0;
   bool _recoveringNetwork = false;
   int? _waitingForNetworkGeneration;
-  final _radioArtwork = DiscordArtworkResolver();
+  final _radioCatalog = RadioCatalogMetadata();
   RadioMetadataMonitor? _radioMetadata;
 
   int _nextPlayGeneration() {
@@ -1934,7 +1934,8 @@ class MusicPlayerHandler extends BaseAudioHandler
       }
     } catch (_) {
       if (!_isCurrentPlayRequest(generation, media)) rethrow;
-      final copy = await _formats.afterFailure(media, path);
+      final recovery = _formats.afterFailure(media, path);
+      final copy = load == null ? await recovery : await load.wait(recovery);
       if (copy == null || !_isCurrentPlayRequest(generation, media)) rethrow;
       return _startResolvedSource(
         copy,
@@ -2279,7 +2280,13 @@ class MusicPlayerHandler extends BaseAudioHandler
         await _player.setVolume(normalizationVolume);
         if (!_isCurrentPlayRequest(generation, media)) return;
         _normalizationVolume = normalizationVolume;
-        await _startResolvedSource(fallback, generation, media, startAt);
+        await _startResolvedSource(
+          fallback,
+          generation,
+          media,
+          startAt,
+          startPaused: startPaused,
+        );
       }
       if (!_isCurrentPlayRequest(generation, media)) return;
       _sourceReady = true;
@@ -2298,6 +2305,9 @@ class MusicPlayerHandler extends BaseAudioHandler
               title: track.title.isEmpty ? station.title : track.title,
               artist: track.title.isEmpty ? station.artist : track.artist,
               album: track.title.isEmpty ? station.album : track.album,
+              artUri: track.artwork == null
+                  ? station.artUri
+                  : Uri.tryParse(track.artwork!),
               extras: {
                 ...?station.extras,
                 'radioTrackKey': track.title.isEmpty ? null : track.key,
@@ -2306,21 +2316,24 @@ class MusicPlayerHandler extends BaseAudioHandler
             );
             // Publish first so artwork and lyrics of the outgoing track vanish.
             mediaItem.add(current);
-            if (track.title.isEmpty || track.artist.isEmpty) return;
+            if (track.title.isEmpty || track.artist.isEmpty) {
+              return;
+            }
             unawaited(() async {
-              final artwork = await _radioArtwork.resolve(
-                MediaItem(
-                  id: track.key,
-                  title: track.title,
-                  artist: track.artist,
-                  album: track.album,
-                ),
-              );
+              final details = await _radioCatalog.lookup(track);
               if (!_isCurrentPlayRequest(generation, media) ||
                   mediaItem.value?.extras?['radioTrackKey'] != track.key)
                 return;
-              if (artwork != null)
-                mediaItem.add(current.copyWith(artUri: Uri.parse(artwork)));
+              if (details.artwork != null || details.album != null) {
+                mediaItem.add(
+                  current.copyWith(
+                    album: track.album.isEmpty ? details.album : track.album,
+                    artUri: track.artwork != null
+                        ? current.artUri
+                        : details.artwork ?? current.artUri,
+                  ),
+                );
+              }
             }());
           },
         )..start();

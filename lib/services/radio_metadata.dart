@@ -9,8 +9,10 @@ class RadioTrackMetadata {
     required this.title,
     this.artist = '',
     this.album = '',
+    this.artwork,
   });
   final String title, artist, album;
+  final String? artwork;
   String get key => jsonEncode([title, artist, album]);
   factory RadioTrackMetadata.fromFields(Map<String, String> fields) {
     final raw = fields['streamTitle'];
@@ -25,6 +27,7 @@ class RadioTrackMetadata {
       title: fields['title'] ?? '',
       artist: fields['artist'] ?? '',
       album: fields['album'] ?? '',
+      artwork: fields['artwork'],
     );
   }
 }
@@ -110,8 +113,9 @@ class RadioMetadataMonitor {
         !(fields.containsKey('title') || fields.containsKey('streamTitle')))
       return;
     final value = RadioTrackMetadata.fromFields(fields);
-    if (_key == value.key) return;
-    _key = value.key;
+    final fingerprint = jsonEncode([value.key, value.artwork]);
+    if (_key == fingerprint) return;
+    _key = fingerprint;
     onChanged(value);
   }
 

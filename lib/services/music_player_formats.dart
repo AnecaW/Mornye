@@ -45,6 +45,7 @@ class _MusicFormats {
   /// or of a song it failed to open before, else its resolved source.
   Future<String?> resolve(PlayableMedia media, {PlaybackLoad? load}) async {
     final path = await handler._resolveSource(media, load: load);
+    load?.check();
     if (path == null || !_avPlayer) return path;
     final format = _format(media);
     if (!(format?.never ?? false) && !_copies.has(media.source)) return path;

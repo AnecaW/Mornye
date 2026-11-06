@@ -232,7 +232,7 @@ class LibrarySourceSettingsList extends ConsumerWidget {
                   IconButton(
                     tooltip: context.l10n.libraryManageSources,
                     icon: const Icon(Icons.settings_outlined),
-                    onPressed: () => pushPage(
+                    onPressed: () => pushPage<void>(
                       context,
                       (_) => NetworkStorageScreen(
                         connection: connection,

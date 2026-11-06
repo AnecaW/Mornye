@@ -1,3 +1,4 @@
+import 'package:mornye/providers/library_source_provider.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -98,6 +99,7 @@ Future<void> _mount(
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
+        savedLibrarySourceConnectionsProvider.overrideWith((ref) async => []),
         settingsProvider.overrideWith(
           () => FixedSettingsNotifier(
             const AppSettings(localLibraryEnabled: true),

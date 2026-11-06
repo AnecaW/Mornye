@@ -95,6 +95,10 @@ class _Cancelled implements Exception {
   const _Cancelled();
 }
 
+class _CacheBudgetFull implements Exception {
+  const _CacheBudgetFull();
+}
+
 class _TooLarge implements Exception {
   const _TooLarge();
 }
@@ -461,6 +465,13 @@ class NetworkPlaybackCache {
       job.check();
       final size = await temp.length();
       job.check();
+      await _evict(reserveBytes: size);
+      if (size +
+              _entries.values.fold<int>(0, (sum, entry) => sum + entry.size) >
+          maxBytes) {
+        throw const _CacheBudgetFull();
+      }
+      job.check();
       if ((_epochs[source] ?? 0) != epoch) throw const _Cancelled();
       // A new name for each version keeps a copy the player holds open
       // from blocking its replacement.
@@ -506,11 +517,12 @@ class NetworkPlaybackCache {
 
   /// Drops the least recently used copies over the bounds, never one that
   /// is wanted or was just handed to the player.
-  Future<void> _evict() async {
+  Future<void> _evict({int reserveBytes = 0}) async {
     var bytes = _entries.values.fold<int>(0, (sum, entry) => sum + entry.size);
     final kept = {..._wanted, ..._recent};
     for (final source in _entries.keys.toList()) {
-      if (bytes <= maxBytes && _entries.length <= maxFiles) break;
+      if (bytes + reserveBytes <= maxBytes && _entries.length <= maxFiles)
+        break;
       if (kept.contains(source)) continue;
       final entry = _entries[source]!;
       try {

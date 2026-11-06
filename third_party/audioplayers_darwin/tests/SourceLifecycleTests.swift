@@ -310,8 +310,31 @@ final class DeferredSeekItem: AVPlayerItem {
     }
   }
 
+  @MainActor static func testTimedMetadata() throws {
+    let metadata = StreamMetadata()
+    func field(_ identifier: AVMetadataIdentifier, _ text: String) -> AVMetadataItem {
+      let item = AVMutableMetadataItem()
+      item.identifier = identifier
+      item.value = text as NSString
+      return item
+    }
+    let first = AVTimedMetadataGroup(items: [
+      field(.commonIdentifierTitle, "First"), field(.commonIdentifierArtist, "Artist"),
+      field(.commonIdentifierAlbumName, "Album")],
+      timeRange: CMTimeRange(start: .zero, duration: CMTime(seconds: 1, preferredTimescale: 600)))
+    metadata.metadataOutput(metadata.output, didOutputTimedMetadataGroups: [first], from: nil)
+    guard metadata.values["title"] == "First", metadata.values["artist"] == "Artist",
+      metadata.values["album"] == "Album" else { throw Failure.message("Timed metadata was not decoded") }
+    let next = AVTimedMetadataGroup(items: [field(.commonIdentifierTitle, "Next")],
+      timeRange: CMTimeRange(start: CMTime(seconds: 1, preferredTimescale: 600), duration: .positiveInfinity))
+    metadata.metadataOutput(metadata.output, didOutputTimedMetadataGroups: [next], from: nil)
+    guard metadata.values == ["title": "Next"] else { throw Failure.message("A new broadcast track retained old tags") }
+    print("PASS: native timed metadata updates atomically and clears stale album/artist")
+  }
+
   @MainActor static func main() async {
     do {
+      try testTimedMetadata()
       try testSourceDiagnostics()
       print("PASS: source errors retain native causes without leaking private userInfo")
       let native = DeferredPlayer()

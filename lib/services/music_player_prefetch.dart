@@ -56,7 +56,9 @@ class _MusicPrefetch {
 
   Future<void> _update(NetworkPlaybackCache cache, int revision) async {
     final storage = NetworkStorageService.instance;
-    final policy = storage.audioCache;
+    final policy = identical(cache, NetworkPlaybackCache.instance)
+        ? storage.audioCache
+        : null;
     var upcoming = ahead;
     if (policy != null) {
       await policy.initialize();
