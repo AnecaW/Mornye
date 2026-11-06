@@ -44,7 +44,10 @@ final class AudioPlayersStreamHandler {
         var result: [String: Any] = ["case": name,
           "routeRate": session.sampleRate, "routeChannels": session.outputNumberOfChannels]
         do {
-          try await wrapper.setSourceUrl(url: "http://127.0.0.1:18762/\(path)", isLocal: false)
+          let local = name == "wav-control"
+          let address = local ? Bundle.main.url(forResource: "tone", withExtension: "wav")!.path
+            : "http://127.0.0.1:18762/\(path)"
+          try await wrapper.setSourceUrl(url: address, isLocal: local)
           try await wrapper.setEqualizer(["enabled": true,
             "frequencies": [60.0, 250.0, 1000.0, 4000.0, 16000.0],
             "gains": [0.0, 0.0, 0.0, 0.0, 0.0], "inputGain": -12.0,
@@ -61,9 +64,39 @@ final class AudioPlayersStreamHandler {
           result["hasTap"] = native.currentItem?.audioMix?.inputParameters.first?.audioTapProcessor != nil
         } catch {
           result["errorType"] = String(describing: type(of: error))
+          result["diagnostic"] = String(describing: error)
         }
         results.append(result)
         await wrapper.dispose()
+      }
+      // Compare the identical processor/format before AVPlayer association.
+      // Only attachment timing differs from the wrapper's ready-item path.
+      for path in ["high/live.m3u8", "low/live.m3u8"] {
+        let native = AVPlayer()
+        let item = AVPlayerItem(url: URL(string: "http://127.0.0.1:18762/\(path)")!)
+        item.audioTimePitchAlgorithm = .timeDomain
+        let processor = EqualizerAudioTap()
+        processor.dsp.configure(["enabled": true,
+          "frequencies": [60.0, 250.0, 1000.0, 4000.0, 16000.0],
+          "gains": [0.0, 0.0, 0.0, 0.0, 0.0], "inputGain": -12.0,
+          "limiter": false])
+        var result: [String: Any] = ["case": "before-association-\(path)"]
+        do {
+          try await EqualizerAudioTap.attach(to: item, processor: processor)
+          native.replaceCurrentItem(with: item)
+          native.play()
+          for _ in 0..<160 {
+            if (processor.diagnostics()["processedFrames"] as? Int64 ?? 0) >= 22050 { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+          }
+          result["stats"] = processor.diagnostics()
+          result["status"] = item.status.rawValue
+          result["mixTrack"] = item.audioMix?.inputParameters.first?.trackID
+          result["hasTap"] = item.audioMix?.inputParameters.first?.audioTapProcessor != nil
+        } catch { result["diagnostic"] = String(describing: error) }
+        results.append(result)
+        native.pause()
+        native.replaceCurrentItem(with: nil)
       }
     } catch { results.append(["sessionErrorType": String(describing: type(of: error))]) }
     let output = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]

@@ -29,6 +29,7 @@ jobs:
           native=third_party/audioplayers_darwin/darwin/audioplayers_darwin/Sources/audioplayers_darwin
           app=.tmp/probe/RadioProbe.app
           mkdir -p "$app"
+          cp .tmp/probe/audio/tone.wav "$app/tone.wav"
           python3 - <<'PY'
           import pathlib, plistlib
           info = dict(CFBundleExecutable="RadioProbe", CFBundleIdentifier="com.mornye.radio-probe", CFBundleName="RadioProbe", CFBundlePackageType="APPL", CFBundleVersion="1", CFBundleShortVersionString="1", MinimumOSVersion="27.0", LSRequiresIPhoneOS=True, UILaunchScreen={}, NSAppTransportSecurity=dict(NSAllowsLocalNetworking=True))
@@ -57,7 +58,7 @@ jobs:
           python3 - <<'PY'
           import json
           rows=json.load(open(".tmp/probe/results.json"))
-          assert len(rows)==3, rows
+          assert len(rows)==5, rows
           for row in rows:
               stats=row.get("stats",{})
               assert stats.get("processedFrames",0)>=22050, row
