@@ -36,7 +36,8 @@ final class AudioPlayersStreamHandler {
       try session.setActive(true)
       for (name, path) in [("wav-control", "tone.wav"),
         ("flac-control", "tone.flac"), ("mp3-control", "tone.mp3"),
-        ("hls-44100", "high/live.m3u8"), ("hls-24000", "low/live.m3u8")] {
+        ("hls-44100", "high/live.m3u8"), ("hls-24000", "low/live.m3u8"),
+        ("hls-cmaf", "cmaf/live.m3u8")] {
         let native = AVPlayer()
         let wrapper = WrappedMediaPlayer(reference: AudioplayersDarwinPlugin(),
           eventHandler: AudioPlayersStreamHandler(), player: native,
