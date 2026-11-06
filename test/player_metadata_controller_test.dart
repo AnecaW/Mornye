@@ -64,6 +64,7 @@ void main() {
       expect(requests, 2);
       expect(saves, 0);
       await controller.load(radio('Station', null));
+      expect(controller.canSearchOnline, isFalse);
       expect(controller.rawLyrics, isEmpty);
       expect(requests, 2);
     },

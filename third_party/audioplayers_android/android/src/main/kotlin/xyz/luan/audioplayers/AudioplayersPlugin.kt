@@ -166,6 +166,10 @@ class AudioplayersPlugin : FlutterPlugin {
         val player = getPlayer(playerId, currentPlayers)
         try {
             when (call.method) {
+                "getStreamMetadata" -> {
+                    response.success(player.streamMetadata())
+                    return
+                }
                 "setEqualizer" -> {
                     val configuration = call.argument<Map<String, Any?>>("configuration")
                         ?: error("Equalizer configuration is required")

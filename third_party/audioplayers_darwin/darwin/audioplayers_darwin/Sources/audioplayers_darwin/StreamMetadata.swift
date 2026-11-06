@@ -39,7 +39,7 @@ final class StreamMetadata: NSObject, AVPlayerItemMetadataOutputPushDelegate {
         continue
       }
       guard let text = item.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
-        !text.isEmpty, text.utf8.count <= 4096 else { continue }
+        text.utf8.count <= 4096 else { continue }
       let key = item.commonKey?.rawValue ?? ""
       let identifier = item.identifier?.rawValue ?? ""
       if key == "title" || identifier.hasSuffix("TIT2") { next["title"] = text }

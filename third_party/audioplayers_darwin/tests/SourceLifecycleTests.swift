@@ -329,6 +329,10 @@ final class DeferredSeekItem: AVPlayerItem {
       timeRange: CMTimeRange(start: CMTime(seconds: 1, preferredTimescale: 600), duration: .positiveInfinity))
     metadata.metadataOutput(metadata.output, didOutputTimedMetadataGroups: [next], from: nil)
     guard metadata.values == ["title": "Next"] else { throw Failure.message("A new broadcast track retained old tags") }
+    let empty = AVTimedMetadataGroup(items: [field(.commonIdentifierTitle, "")],
+      timeRange: CMTimeRange(start: CMTime(seconds: 2, preferredTimescale: 600), duration: .positiveInfinity))
+    metadata.metadataOutput(metadata.output, didOutputTimedMetadataGroups: [empty], from: nil)
+    guard metadata.values == ["title": ""] else { throw Failure.message("Empty broadcast title did not restore station fallback") }
     print("PASS: native timed metadata updates atomically and clears stale album/artist")
   }
 

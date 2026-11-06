@@ -48,7 +48,9 @@ const LINK_THUMBNAILS: bool = cfg!(any(target_vendor = "apple", target_os = "lin
 /// Whether a thumbnail written at `modified` may be reused after the
 /// directory's regenerate marker was touched at `regenerate`.
 pub fn library_cover_is_current(modified: SystemTime, regenerate: Option<SystemTime>) -> bool {
-    regenerate.is_none_or(|marker| modified >= marker)
+    // A marker wins ties: coarse filesystem timestamps can otherwise retain
+    // the old picture even though the user explicitly requested regeneration.
+    regenerate.is_none_or(|marker| modified > marker)
 }
 
 struct Entry {
@@ -797,6 +799,21 @@ pub(super) mod tests {
         audio.push(frame.len() as u8);
         audio.extend(frame);
         audio
+    }
+
+    #[test]
+    fn regeneration_marker_invalidates_equal_resolution_timestamps() {
+        let marker = UNIX_EPOCH + Duration::from_secs(10);
+        assert!(!library_cover_is_current(marker, Some(marker)));
+        assert!(!library_cover_is_current(
+            marker - Duration::from_millis(1),
+            Some(marker)
+        ));
+        assert!(library_cover_is_current(
+            marker + Duration::from_millis(1),
+            Some(marker)
+        ));
+        assert!(library_cover_is_current(marker, None));
     }
 
     #[test]

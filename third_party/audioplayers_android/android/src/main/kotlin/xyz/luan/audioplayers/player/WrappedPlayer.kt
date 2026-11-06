@@ -30,6 +30,12 @@ class WrappedPlayer internal constructor(
     /** The player MediaPlayer starts the moment this one completes. */
     private var next: WrappedPlayer? = null
 
+    fun streamMetadata(): Map<String, String> {
+        val current = player as? MediaPlayerWrapper ?: return emptyMap()
+        val address = (source as? xyz.luan.audioplayers.source.UrlSource)?.url ?: return emptyMap()
+        return current.streamMetadata() + ("source" to address)
+    }
+
     fun setEqualizer(configuration: Map<String, Any?>) {
         val output = player as? MediaPlayerWrapper
         if (output != null) output.setEqualizer(configuration)

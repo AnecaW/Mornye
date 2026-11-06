@@ -241,7 +241,7 @@ class AudioplayersPlaybackDeck
 
   @override
   Future<Map<String, String>> streamMetadata() async {
-    if (_disposed || !(Platform.isIOS || Platform.isMacOS)) return const {};
+    if (_disposed || !(Platform.isIOS || Platform.isMacOS || Platform.isAndroid)) return const {};
     final value = await _effects
         .invokeMapMethod<String, String>('getStreamMetadata', {
           'playerId': _ordinary.playerId,

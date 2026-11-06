@@ -227,7 +227,8 @@ class MediaKitSourceException implements Exception {
 ///
 /// Gapless uses the native playlist on this same output, including exclusive
 /// mode. AutoMix still owns separate decks while it is enabled.
-class MediaKitPlaybackDeck implements PlaybackDeck, QueuedPlaybackDeck {
+class MediaKitPlaybackDeck
+    implements PlaybackDeck, QueuedPlaybackDeck, PlaybackStreamMetadataDeck {
   MediaKitPlaybackDeck({required this.playerId, MpvEngine? engine})
     : _engine = engine ?? debugEngineFactory?.call() ?? MediaKitEngine() {
     playbackEqualizer.addListener(_equalizerChanged);
@@ -310,6 +311,44 @@ class MediaKitPlaybackDeck implements PlaybackDeck, QueuedPlaybackDeck {
   int _token = 0;
   bool _disposed = false;
   double _gain = 1;
+
+  @override
+  Future<Map<String, String>> streamMetadata() async {
+    final source = _source;
+    final token = _token;
+    if (_disposed || source == null || _pendingLoad != null) return const {};
+    Future<String> field(String key) async {
+      try {
+        var text = await _engine.getProperty('metadata/by-key/$key');
+        if (text.isEmpty)
+          text = await _engine.getProperty(
+            'metadata/by-key/${key.toUpperCase()}',
+          );
+        return text.length <= 4096 ? text.trim() : '';
+      } catch (_) {
+        return '';
+      }
+    }
+
+    final values = await Future.wait([
+      field('title'),
+      field('artist'),
+      field('album'),
+      field('icy-title'),
+    ]);
+    if (_disposed ||
+        token != _token ||
+        source != _source ||
+        _pendingLoad != null)
+      return const {};
+    return {
+      'source': source,
+      if (values[0].isNotEmpty) 'title': values[0],
+      if (values[1].isNotEmpty) 'artist': values[1],
+      if (values[2].isNotEmpty) 'album': values[2],
+      if (values[0].isEmpty && values[3].isNotEmpty) 'streamTitle': values[3],
+    };
+  }
 
   /// The source last opened, for reopening it when exclusive output fails.
   String? _source;

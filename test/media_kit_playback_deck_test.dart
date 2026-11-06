@@ -33,6 +33,32 @@ void main() {
     playbackOutputVolume.value = 1;
   });
 
+  test(
+    'desktop radio uses native current metadata without retaining old album tags',
+    () async {
+      expect(await deck.streamMetadata(), isEmpty);
+      await deck.setNetworkSource('https://radio.test/live.m3u8');
+      engine.properties.addAll({
+        'metadata/by-key/title': 'First',
+        'metadata/by-key/artist': 'Artist',
+        'metadata/by-key/album': 'Album',
+      });
+      expect(await deck.streamMetadata(), {
+        'source': 'https://radio.test/live.m3u8',
+        'title': 'First',
+        'artist': 'Artist',
+        'album': 'Album',
+      });
+      engine.properties.remove('metadata/by-key/artist');
+      engine.properties.remove('metadata/by-key/album');
+      engine.properties['metadata/by-key/title'] = 'Next';
+      expect(await deck.streamMetadata(), {
+        'source': 'https://radio.test/live.m3u8',
+        'title': 'Next',
+      });
+    },
+  );
+
   test('loads a file paused and reports its duration', () async {
     final durations = <Duration>[];
     deck.onDurationChanged.listen(durations.add);

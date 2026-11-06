@@ -100,6 +100,7 @@ class PlayerMetadataController extends ChangeNotifier {
   final _radioLyrics = <String, String>{};
 
   bool get canSearchOnline =>
+      (!_radio || _item?.extras?['radioTrackKey'] != null) &&
       (_item?.title.trim().isNotEmpty ?? false) &&
       (_item?.artist?.trim().isNotEmpty ?? false);
 

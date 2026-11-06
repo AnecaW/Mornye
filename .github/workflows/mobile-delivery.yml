@@ -135,6 +135,9 @@ jobs:
           printf 'storeFile=%s\nstorePassword=%s\nkeyPassword=%s\nkeyAlias=mornye-delivery\n' "$RUNNER_TEMP/mornye-delivery.jks" "$password" "$password" > android/key.properties
           chmod 600 android/key.properties "$RUNNER_TEMP/mornye-delivery.jks"
       - run: flutter pub get && dart scripts/prepare_flutter_sdk.dart
+      - name: Test native timed radio metadata
+        timeout-minutes: 8
+        run: cd android && ./gradlew :audioplayers_android:testDebugUnitTest --tests 'xyz.luan.audioplayers.player.TimedId3MetadataTest' --console=plain
       - name: Restore Android native build cache
         continue-on-error: true
         id: android-rust-cache

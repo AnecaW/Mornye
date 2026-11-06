@@ -95,6 +95,11 @@ void main() {
     _cover = await recorder.endRecording().toImage(300, 300);
   });
 
+  setUp(() {
+    // SettledBlur intentionally snapshots only a visible foreground surface.
+    TestWidgetsFlutterBinding.ensureInitialized().handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+  });
+
   tearDownAll(() => _cover.dispose());
 
   testWidgets('the Material header blurs its cover once, not per scroll or '

@@ -10,6 +10,14 @@ class MediaPlayerWrapper(
     private val wrappedPlayer: WrappedPlayer,
     private val mediaPlayer: MediaPlayer = MediaPlayer(),
 ) : PlayerWrapper {
+    @Volatile private var timedMetadata: List<Pair<Long, Map<String, String>>> = emptyList()
+    fun streamMetadata(): Map<String, String> {
+        val position = try { mediaPlayer.currentPosition.toLong() * 1000L } catch (_: IllegalStateException) { return emptyMap() }
+        // Android extracts tags ahead of rendering. Publish only metadata whose
+        // presentation timestamp the actual playback clock has reached.
+        return timedMetadata.lastOrNull { it.first <= position }?.second ?: emptyMap()
+    }
+
     private var released = false
     private var equalizer: PlaybackEqualizer? = null
     private val mixedOutput = MixedOutput(wrappedPlayer, mediaPlayer.audioSessionId)
@@ -43,7 +51,29 @@ class MediaPlayerWrapper(
 
     private fun configureMediaPlayer() {
         mediaPlayer.apply {
-            setOnPreparedListener { if (!released) wrappedPlayer.onPrepared() }
+            setOnPreparedListener {
+                if (!released) {
+                    if (Build.VERSION.SDK_INT >= 23) {
+                        try {
+                            trackInfo.forEachIndexed { index, track ->
+                                if (track.trackType == MediaPlayer.TrackInfo.MEDIA_TRACK_TYPE_METADATA) selectTrack(index)
+                            }
+                        } catch (_: RuntimeException) { /* Metadata never prevents audio preparation. */ }
+                    }
+                    wrappedPlayer.onPrepared()
+                }
+            }
+            if (Build.VERSION.SDK_INT >= 23) {
+                setOnTimedMetaDataAvailableListener { _, data ->
+                    if (!released) {
+                        val current = TimedId3Metadata.parse(data.metaData)
+                        if (current.isNotEmpty()) {
+                            timedMetadata = (timedMetadata + (data.timestamp.coerceAtLeast(0L) to current))
+                                .sortedBy { it.first }.takeLast(16)
+                        }
+                    }
+                }
+            }
             setOnCompletionListener { if (!released) wrappedPlayer.onCompletion() }
             setOnSeekCompleteListener { if (!released) wrappedPlayer.onSeekComplete() }
             setOnErrorListener { _, what, extra ->
@@ -85,6 +115,7 @@ class MediaPlayerWrapper(
     }
 
     override fun setSource(source: Source) {
+        timedMetadata = emptyList()
         reset()
         source.setForMediaPlayer(mediaPlayer)
     }
