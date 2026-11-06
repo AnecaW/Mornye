@@ -550,6 +550,17 @@ class SubsonicClient {
     throw const HttpException('Subsonic library is too large');
   }
 
+  /// Records a play on the user's server. [submission] false announces the
+  /// now-playing state; true records it in Recently Played. [time] is the
+  /// play timestamp in milliseconds since the epoch.
+  Future<void> scrobble(String id, {bool submission = true, int? time}) async {
+    await request('scrobble', {
+      'id': id,
+      if (!submission) 'submission': 'false',
+      if (time != null) 'time': '$time',
+    });
+  }
+
   Future<String?> cachedCover(
     SubsonicSong song,
     Directory directory, {

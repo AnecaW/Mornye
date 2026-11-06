@@ -44,6 +44,7 @@ import 'package:mornye/utils/playback_artwork.dart';
 import 'package:mornye/services/downloaded_embedded_cover_resolver.dart';
 import 'package:mornye/utils/logger.dart';
 import 'package:mornye/services/playable_media.dart';
+import 'package:mornye/services/streaming/stream_types.dart';
 
 export 'autoplay_signal.dart';
 export 'music_player_runtime.dart';
@@ -57,6 +58,17 @@ part 'music_player_covers.dart';
 part 'music_player_gapless.dart';
 
 final _log = AppLogger('MusicPlayer');
+
+/// A playback failure whose text is safe to show: no URL, credential or
+/// transport detail.
+class _PlaybackUnavailable implements Exception {
+  const _PlaybackUnavailable(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
 
 /// Muted artwork shares the music session. Recover its Now Playing ownership
 /// after video initialization, including failed or abandoned initialization.
@@ -157,6 +169,7 @@ class MusicPlayerHandler extends BaseAudioHandler
   bool _initialized = false;
   bool _sourceReady = false;
   Object? _playbackError;
+  StreamFailure? _networkFailure;
 
   /// Reloads of the current song after Android's media server died, and
   /// whether the next [_playIndex] is one of them.
@@ -361,6 +374,17 @@ class MusicPlayerHandler extends BaseAudioHandler
                 // or a temporary file.
                 artwork: _covers.reference(item),
               ),
+        playing:
+            state.playing &&
+            state.processingState == AudioProcessingState.ready,
+        ended:
+            state.processingState == AudioProcessingState.completed ||
+            state.processingState == AudioProcessingState.idle,
+      );
+      _dependencies.reportNetworkPlayback(
+        source: item?.extras?['source'] as String?,
+        position: state.position,
+        duration: item?.duration,
         playing:
             state.playing &&
             state.processingState == AudioProcessingState.ready,
@@ -1135,10 +1159,16 @@ class MusicPlayerHandler extends BaseAudioHandler
 
   Future<String?> _resolveSource(PlayableMedia media) async {
     if (media.source.startsWith('network://')) {
+      _networkFailure = null;
       try {
         return await _dependencies.resolveNetworkSource(media.source);
-      } catch (_) {
-        _log.w('Network source is unavailable');
+      } catch (error) {
+        final failure = StreamFailure.classify(error);
+        _networkFailure = failure;
+        _log.w(
+          'Network source is unavailable: ${failure.kind.name}'
+          '${failure.statusCode == null ? '' : '/${failure.statusCode}'}',
+        );
         return null;
       }
     }
@@ -1160,6 +1190,21 @@ class MusicPlayerHandler extends BaseAudioHandler
   }
 
   Future<void> _cleanupPendingResolvedPaths() => _sourceCache.releaseUnpinned();
+
+  /// Prepares the next couple of queued network tracks while this one plays.
+  /// The queue order already reflects shuffle, and only a bounded window is
+  /// prefetched.
+  void _prefetchUpcoming() {
+    if (_media.length <= 1) return;
+    final upcoming = <String>[];
+    for (var offset = 1; offset <= 2; offset++) {
+      final index = _index + offset;
+      if (index < 0 || index >= _media.length) break;
+      final source = _media[index].source;
+      if (source.startsWith('network://')) upcoming.add(source);
+    }
+    if (upcoming.isNotEmpty) _dependencies.prefetchNetworkSources(upcoming);
+  }
 
   void _markSessionQueueChanged() => _sessionWriter.queueChanged();
 
@@ -1698,9 +1743,13 @@ class MusicPlayerHandler extends BaseAudioHandler
       return;
     }
     if (resolved == null) {
+      final failure = _networkFailure;
+      _networkFailure = null;
       _reportPlaybackError(
         _player,
-        StateError('Audio file is unavailable'),
+        failure == null
+            ? StateError('Audio file is unavailable')
+            : _PlaybackUnavailable(failure.userMessage),
         StackTrace.current,
       );
       return;
@@ -1787,6 +1836,7 @@ class MusicPlayerHandler extends BaseAudioHandler
       }
       if (!_isCurrentPlayRequest(generation, media)) return;
       _sourceReady = true;
+      _prefetchUpcoming();
       if (media.source.startsWith('network://')) {
         unawaited(_loadNetworkMetadata(media, generation));
       }
@@ -2134,6 +2184,9 @@ class MusicPlayerHandler extends BaseAudioHandler
         await _persistSession(position: position);
         return;
       }
+      _dependencies.reportNetworkSeek(
+        mediaItem.value?.extras?['source'] as String?,
+      );
       await _player.seek(position);
       if (generation != _playRequestGeneration || _disposed) return;
       _broadcastPosition(position, force: true);
@@ -2537,6 +2590,7 @@ class MusicPlayerHandler extends BaseAudioHandler
       autoMixStatus.value = AutoMixStatus.idle;
     }
     _runtime.detach(this);
+    _dependencies.cancelNetworkStreaming();
     cancelSleepTimer();
     _listeningTimer?.cancel();
     _dependencies.recorder.update(null, playing: false, ended: true);

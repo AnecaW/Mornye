@@ -31,6 +31,8 @@ import 'package:mornye/services/music_player_service.dart';
 import 'package:mornye/services/network_metadata_service.dart';
 import 'package:mornye/services/network_storage_service.dart';
 import 'package:mornye/services/platform_bridge.dart';
+import 'package:mornye/services/streaming/network_streaming.dart';
+import 'package:mornye/services/streaming/stream_types.dart';
 import 'package:mornye/services/playback_deck.dart';
 import 'package:mornye/services/playback_notification.dart';
 import 'package:mornye/services/playback_output_volume.dart';
@@ -50,6 +52,17 @@ final _log = AppLogger('MusicPlayerRuntime');
 /// unless a remote device plays in its place.
 ({SwitchAudioHandler session, MusicPlayerHandler local})? _systemSession;
 
+/// Feeds actual playback state to the network streaming engine so it can
+/// report Recently Played, classify failures and drive its visible phase.
+typedef NetworkPlaybackReporter =
+    void Function({
+      String? source,
+      required Duration position,
+      Duration? duration,
+      required bool playing,
+      required bool ended,
+    });
+
 /// The process services used by a player. Tests can replace effects without
 /// changing the queue, transport, interruption or automation algorithms.
 class PlaybackDependencies {
@@ -61,6 +74,10 @@ class PlaybackDependencies {
     this.readNetworkMetadata = _readNetworkMetadata,
     this.resolveNetworkSource = _resolveNetworkSource,
     this.networkSourceReachable = _networkSourceReachable,
+    this.prefetchNetworkSources = _prefetchNetworkSources,
+    this.reportNetworkPlayback = _reportNetworkPlayback,
+    this.reportNetworkSeek = _reportNetworkSeek,
+    this.cancelNetworkStreaming = _cancelNetworkStreaming,
     this.recoverMissingFile = _recoverMissingFile,
     this.recoverMovedDownload = _recoverMovedDownload,
     this.initializeHandler = _initializeAudioHandler,
@@ -108,6 +125,12 @@ class PlaybackDependencies {
   /// Whether a `network://` Library song can play now, as autoplay asks
   /// before queueing it.
   final Future<bool> Function(String) networkSourceReachable;
+
+  /// Prepares up to a couple of upcoming network tracks in the background.
+  final void Function(List<String> upcoming) prefetchNetworkSources;
+  final NetworkPlaybackReporter reportNetworkPlayback;
+  final void Function(String? source) reportNetworkSeek;
+  final void Function() cancelNetworkStreaming;
 
   /// What plays in place of a local song file that is gone but can be
   /// fetched again, such as a song a paired phone sent that the received
@@ -189,8 +212,47 @@ class PlaybackDependencies {
       SongAnalysis(library: library);
   static Future<Map<String, dynamic>> _readNetworkMetadata(String source) =>
       NetworkMetadataService.instance.read(source);
-  static Future<String> _resolveNetworkSource(String source) =>
-      NetworkStorageService.instance.resolve(source);
+  static Future<String> _resolveNetworkSource(String source) async {
+    final engine = await NetworkStreaming.ensureInitialized();
+    if (engine != null && engine.supports(source)) {
+      try {
+        return await engine.resolve(source);
+      } on Object catch (error) {
+        final failure = StreamFailure.classify(error);
+        // Fall back to the direct authenticated proxy rather than failing the
+        // play when the cache or local server is unavailable.
+        _log.w(
+          'Streaming session unavailable: ${failure.kind.name}'
+          '${failure.statusCode == null ? '' : '/${failure.statusCode}'}',
+        );
+      }
+    }
+    return NetworkStorageService.instance.resolve(source);
+  }
+
+  static void _prefetchNetworkSources(List<String> upcoming) =>
+      NetworkStreaming.active?.prefetchUpcoming(upcoming);
+
+  static void _reportNetworkPlayback({
+    String? source,
+    required Duration position,
+    Duration? duration,
+    required bool playing,
+    required bool ended,
+  }) => NetworkStreaming.active?.reportPlayback(
+    source: source,
+    position: position,
+    duration: duration,
+    playing: playing,
+    ended: ended,
+  );
+
+  static void _reportNetworkSeek(String? source) =>
+      NetworkStreaming.active?.reportSeek(source);
+
+  static void _cancelNetworkStreaming() =>
+      NetworkStreaming.active?.cancel('player disposed');
+
   static Future<bool> _networkSourceReachable(String source) =>
       NetworkStorageService.instance.reachable(source);
   static Future<String?> _recoverMissingFile(String path) async {

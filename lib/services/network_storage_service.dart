@@ -286,6 +286,32 @@ class NetworkMediaUnavailable extends HttpException {
   const NetworkMediaUnavailable(super.message);
 }
 
+/// One authenticated stream read from a connection, with the status and
+/// headers a media player needs. Credentials stay inside
+/// [NetworkStorageService].
+class NetworkStreamHandle {
+  NetworkStreamHandle({
+    required this.statusCode,
+    required this.headers,
+    required this.bytes,
+    required this.discard,
+    required this.close,
+    this.totalSize,
+  });
+
+  final int statusCode;
+  final Map<String, String> headers;
+  final Stream<List<int>> bytes;
+  final Future<void> Function() discard;
+  final Future<void> Function() close;
+
+  /// Total file length when the server announced it.
+  final int? totalSize;
+
+  bool get acceptsRanges =>
+      statusCode == HttpStatus.partialContent || totalSize != null;
+}
+
 class NetworkStorageService {
   NetworkStorageService({
     Future<String?> Function()? read,
@@ -646,6 +672,48 @@ class NetworkStorageService {
     }
     _routes[token] = (id: host, path: path);
     return 'http://127.0.0.1:${server.port}/$token';
+  }
+
+  /// Opens the authenticated bytes of [source] from [start] to [end]
+  /// (exclusive), for the streaming engine. The request uses the user's own
+  /// stored credentials, the connection's certificate pin and its 20-second
+  /// inactivity timeout; no credential appears in the returned handle.
+  Future<NetworkStreamHandle> openStreamRead(
+    String source, {
+    int start = 0,
+    int? end,
+  }) async {
+    if (start < 0) throw const FormatException('Invalid stream offset');
+    final (:host, :path) = _sourceParts(source);
+    final connection = await this.connection(host);
+    final range = 'bytes=$start-${end == null ? '' : end - 1}';
+    final read = await _openRead(connection, path, range: range);
+    return NetworkStreamHandle(
+      statusCode: read.status,
+      headers: read.headers,
+      totalSize: _streamTotalSize(read.headers),
+      bytes: read.bytes,
+      discard: read.discard,
+      close: read.close,
+    );
+  }
+
+  static int? _streamTotalSize(Map<String, String> headers) {
+    for (final entry in headers.entries) {
+      final name = entry.key.toLowerCase();
+      if (name == HttpHeaders.contentRangeHeader.toLowerCase()) {
+        final match = RegExp(r'/\s*(\d+)\s*$').firstMatch(entry.value);
+        if (match != null) return int.tryParse(match.group(1)!);
+      }
+    }
+    for (final entry in headers.entries) {
+      if (entry.key.toLowerCase() ==
+          HttpHeaders.contentLengthHeader.toLowerCase()) {
+        final length = int.tryParse(entry.value);
+        if (length != null && length > 0) return length;
+      }
+    }
+    return null;
   }
 
   /// Marks connection [id] out of reach, as a paired Mornye Link desktop
