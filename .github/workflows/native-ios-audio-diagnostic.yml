@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/native-ios-audio-diagnostic.yml
       - third_party/audioplayers_darwin/tests/IOSRadioProbe.swift
+      - third_party/audioplayers_darwin/tests/ProbeFixtureServer.swift
       - third_party/audioplayers_darwin/darwin/audioplayers_darwin/Sources/audioplayers_darwin/*.swift
 permissions:
   contents: read
@@ -26,24 +27,35 @@ jobs:
           ffmpeg -v error -i .tmp/probe/audio/tone.wav -c:a aac -hls_time 1 -hls_list_size 0 .tmp/probe/audio/high/live.m3u8
           ffmpeg -v error -i .tmp/probe/audio/tone.wav -c:a aac -hls_segment_type fmp4 -hls_time 1 -hls_list_size 0 .tmp/probe/audio/cmaf/live.m3u8
           ffmpeg -v error -f lavfi -i sine=frequency=440:duration=6 -ar 24000 -ac 1 -b:a 16k -c:a aac -hls_time 1 -hls_list_size 0 .tmp/probe/audio/low/live.m3u8
-          python3 -m http.server 18762 --bind 127.0.0.1 --directory .tmp/probe/audio >.tmp/probe/http.log 2>&1 &
       - name: Compile and run standalone iOS audio application
         run: |
           set -euo pipefail
           native=third_party/audioplayers_darwin/darwin/audioplayers_darwin/Sources/audioplayers_darwin
           app=.tmp/probe/RadioProbe.app
           mkdir -p "$app"
-          cp .tmp/probe/audio/tone.wav .tmp/probe/audio/tone.flac .tmp/probe/audio/tone.mp3 "$app/"
+          cp -R .tmp/probe/audio/. "$app/"
           python3 - <<'PY'
           import pathlib, plistlib
-          info = dict(CFBundleExecutable="RadioProbe", CFBundleIdentifier="com.mornye.radio-probe", CFBundleName="RadioProbe", CFBundlePackageType="APPL", CFBundleVersion="1", CFBundleShortVersionString="1", MinimumOSVersion="27.0", LSRequiresIPhoneOS=True, UILaunchScreen={}, NSAppTransportSecurity=dict(NSAllowsLocalNetworking=True))
+          info = dict(CFBundleExecutable="RadioProbe", CFBundleIdentifier="com.mornye.radio-probe", CFBundleName="RadioProbe", CFBundleDisplayName="Mornye EQ-test", CFBundlePackageType="APPL", CFBundleVersion="1", CFBundleShortVersionString="1", MinimumOSVersion="27.0", LSRequiresIPhoneOS=True, UILaunchScreen={}, NSAppTransportSecurity=dict(NSAllowsLocalNetworking=True))
           pathlib.Path(".tmp/probe/RadioProbe.app/Info.plist").write_bytes(plistlib.dumps(info))
           PY
           sdk=$(xcrun --sdk iphonesimulator --show-sdk-path)
           xcrun --sdk iphonesimulator swiftc -parse-as-library -sdk "$sdk" -target "$(uname -m)-apple-ios27.0-simulator" \
             "$native/WrappedMediaPlayer.swift" "$native/Utils.swift" "$native/AudioPlayerError.swift" \
             "$native/EqualizerAudioTap.swift" "$native/EqualizerDSP.swift" "$native/StreamMetadata.swift" \
-            third_party/audioplayers_darwin/tests/IOSRadioProbe.swift -o "$app/RadioProbe"
+            third_party/audioplayers_darwin/tests/IOSRadioProbe.swift third_party/audioplayers_darwin/tests/ProbeFixtureServer.swift -o "$app/RadioProbe"
+          # Build a separate unsigned device IPA so the same counters can be
+          # checked on a real iPhone/Bluetooth route without a Mac or NAS login.
+          physical=.tmp/probe/device/Payload/RadioProbe.app
+          mkdir -p "$physical"
+          cp -R .tmp/probe/audio/. "$physical/"
+          cp "$app/Info.plist" "$physical/Info.plist"
+          sdk_device=$(xcrun --sdk iphoneos --show-sdk-path)
+          xcrun --sdk iphoneos swiftc -parse-as-library -sdk "$sdk_device" -target arm64-apple-ios27.0 \
+            "$native/WrappedMediaPlayer.swift" "$native/Utils.swift" "$native/AudioPlayerError.swift" \
+            "$native/EqualizerAudioTap.swift" "$native/EqualizerDSP.swift" "$native/StreamMetadata.swift" \
+            third_party/audioplayers_darwin/tests/IOSRadioProbe.swift third_party/audioplayers_darwin/tests/ProbeFixtureServer.swift -o "$physical/RadioProbe"
+          (cd .tmp/probe/device && zip -qr ../Mornye-EQ-Diagnostics.ipa Payload)
           device=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; a=[v for k,vs in d.items() if "iOS-27-2" in k for v in vs if v["name"].startswith("iPhone")]; assert a, "No iOS 27.2 iPhone"; print(a[0]["udid"])')
           xcrun simctl boot "$device" || true
           xcrun simctl bootstatus "$device" -b
@@ -69,7 +81,7 @@ jobs:
           python3 - <<'PY'
           import json
           rows=json.load(open(".tmp/probe/results.json"))
-          assert len(rows)==9, rows
+          assert len(rows)==11, rows
           for row in rows:
               stats=row.get("stats",{})
               assert stats.get("processedFrames",0)>=22050, row
@@ -83,6 +95,7 @@ jobs:
           name: native-ios-audio-probe-${{ github.sha }}
           path: |
             .tmp/probe/results.json
+            .tmp/probe/Mornye-EQ-Diagnostics.ipa
             .tmp/probe/http.log
             .tmp/probe/host-audio.json
             .tmp/probe/audio-host.txt
