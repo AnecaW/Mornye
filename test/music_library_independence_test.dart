@@ -122,6 +122,14 @@ void main() {
         c.expected,
       );
       expect((await store.counts(q)).allTrackCount, c.expected.length);
+      final mixRows = await store.mixSongs(
+        includeLocal: q.includeLocal,
+        limit: 100,
+        offset: 0,
+        scope: q,
+      );
+      expect(mixRows.map((r) => r['id']).toSet(), c.expected);
+
       final where = <String>[], args = <Object?>[];
       appendLibrarySourceScope(where, args, q, 'file_path', indexed: true);
       final matches = <String, Map<String, dynamic>>{};

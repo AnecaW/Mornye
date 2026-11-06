@@ -172,28 +172,43 @@ class LibraryQueueStore {
     required bool includeLocal,
     required int limit,
     required int offset,
-  }) => _db.rawQuery(
-    '''
+    QueueLibraryDbQuery? scope,
+  }) {
+    final args = <Object?>[];
+    final historyWhere = <String>[];
+    appendLibrarySourceScope(historyWhere, args, scope, 'h.file_path');
+    final localWhere = <String>[];
+    if (includeLocal)
+      appendLibrarySourceScope(
+        localWhere,
+        args,
+        scope,
+        'l.file_path',
+        indexed: true,
+      );
+    return _db.rawQuery(
+      '''
     SELECT * FROM (
       SELECT 'downloaded' AS source, h.id, h.file_path, h.track_name,
         h.artist_name, h.album_name, h.genre, h.duration, h.release_date,
         h.downloaded_at AS added_at, NULL AS file_mod_time
       FROM history_db.history h
-      WHERE COALESCE(h.file_path, '') != ''
+      WHERE COALESCE(h.file_path, '') != '' ${historyWhere.isEmpty ? '' : 'AND ${historyWhere.join(' AND ')}'}
       ${includeLocal ? '''
       UNION ALL
       SELECT 'local' AS source, l.id, l.file_path, l.track_name,
         l.artist_name, l.album_name, l.genre, l.duration, l.release_date,
         l.scanned_at AS added_at, l.file_mod_time
       FROM ${LibrarySchema.visibleView} l
-      WHERE COALESCE(l.file_path, '') != '' AND ${_notShadowedByHistory('l')}
+      WHERE COALESCE(l.file_path, '') != '' AND ${_notShadowedByHistory('l')} ${localWhere.isEmpty ? '' : 'AND ${localWhere.join(' AND ')}'}
       ''' : ''}
     )
     ORDER BY source, id
     LIMIT ? OFFSET ?
   ''',
-    [limit, offset],
-  );
+      [...args, limit, offset],
+    );
+  }
 
   Future<QueueLibraryCounts> counts(QueueLibraryDbQuery request) async {
     final fastCounts = await _getUnfilteredQueueCounts(request);

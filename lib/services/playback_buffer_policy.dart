@@ -34,11 +34,20 @@ class PlaybackNetworkProfile {
   }
 
   void stalled() => stalls = math.min(6, stalls + 1);
-  PlaybackBufferPolicy get policy {
-    final minimum = (0.35 + firstByteSeconds * 1.5 + stalls * 0.4).clamp(
-      0.35,
-      3.0,
+  PlaybackBufferPolicy get policy => policyFor(null);
+  PlaybackBufferPolicy policyFor(int? bitrate) {
+    final encodedBytesPerSecond = ((bitrate ?? 256) * 1000 / 8).clamp(
+      8000,
+      768000,
     );
+    final throughputRisk = samples >= 2 && bytesPerSecond > 0
+        ? (encodedBytesPerSecond * 1.5 / bytesPerSecond - 1).clamp(0.0, 1.0)
+        : 0.0;
+    final minimum =
+        (0.35 + firstByteSeconds * 1.5 + stalls * 0.4 + throughputRisk).clamp(
+          0.35,
+          3.0,
+        );
     return PlaybackBufferPolicy(
       minimumSeconds: minimum,
       forwardSeconds: (minimum * 4).clamp(4.0, 12.0),
@@ -49,6 +58,6 @@ class PlaybackNetworkProfile {
   int probeBytes(int? bitrate) {
     if (samples == 0 || (firstByteSeconds < 0.25 && stalls == 0)) return 4096;
     final rate = ((bitrate ?? 256) * 1000 / 8).clamp(8000, 768000);
-    return (rate * policy.minimumSeconds).ceil().clamp(4096, 65536);
+    return (rate * policyFor(bitrate).minimumSeconds).ceil().clamp(4096, 65536);
   }
 }

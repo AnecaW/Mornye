@@ -1,3 +1,4 @@
+import 'package:mornye/services/music_library_scope.dart';
 import 'dart:async';
 import 'package:mornye/services/playback_load.dart';
 import 'dart:io';
@@ -312,9 +313,12 @@ class MusicPlayerRuntime {
     history: dependencies.historyDatabase,
     collections: dependencies.collectionsDatabase,
     includeLocal: () => _settings.localLibraryEnabled,
+    scope: () => libraryScope,
     strings: () => appLocalizationsFor(_settings.locale),
     covers: dependencies.coverStore,
   );
+
+  MusicLibraryScope? libraryScope;
 
   AppSettings get settings => _settings;
   MusicPlayerHandler? get handler => _initializing ? null : _handler;

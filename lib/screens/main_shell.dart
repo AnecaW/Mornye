@@ -1,3 +1,4 @@
+import 'package:mornye/providers/library_source_provider.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:ui' show ImageFilter;
@@ -878,6 +879,9 @@ class _MainShellState extends ConsumerState<MainShell>
         shuffleOn: context.l10n.nowPlayingShuffleOn,
         shuffleOff: context.l10n.nowPlayingPlayInOrder,
       )),
+    );
+    ref.read(musicPlayerRuntimeProvider).libraryScope = ref.watch(
+      musicLibraryScopeProvider,
     );
     ref.listen(settingsProvider, (_, settings) {
       ref.read(musicPlayerRuntimeProvider).configure(settings);

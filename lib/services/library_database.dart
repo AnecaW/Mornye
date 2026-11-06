@@ -482,11 +482,13 @@ class LibraryDatabase {
     required bool includeLocal,
     required int limit,
     required int offset,
+    QueueLibraryDbQuery? scope,
   }) => _queueRead(
     (store) => store.mixSongs(
       includeLocal: includeLocal,
       limit: limit,
       offset: offset,
+      scope: scope,
     ),
     includeLocal: includeLocal,
   );

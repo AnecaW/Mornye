@@ -38,31 +38,37 @@ Future<List<PlayableMedia>> loadAutoplayLibrary(
   const pages = 8, pageSize = 48;
   final database = runtime.dependencies.libraryDatabase;
   final includeLocal = runtime.settings.localLibraryEnabled;
-  final query = QueueLibraryDbQuery(includeLocal: includeLocal);
+  QueueLibraryDbQuery scoped(QueueLibraryDbQuery q) =>
+      runtime.libraryScope?.apply(q) ?? q;
+  final query = scoped(QueueLibraryDbQuery(includeLocal: includeLocal));
   final count = (await database.getQueueCounts(query)).allTrackCount;
   final random = Random();
   final whole = count <= pages * pageSize;
   final rows = [
     if (seed.artist.trim().isNotEmpty)
       ...await database.getQueueTrackPage(
-        QueueLibraryDbQuery(
-          includeLocal: includeLocal,
-          searchQuery: seed.artist,
-          limit: 32,
+        scoped(
+          QueueLibraryDbQuery(
+            includeLocal: includeLocal,
+            searchQuery: seed.artist,
+            limit: 32,
+          ),
         ),
       ),
     for (var page = 0; page < (whole ? 1 : pages); page++)
       ...await database.getQueueTrackPage(
-        QueueLibraryDbQuery(
-          includeLocal: includeLocal,
-          // One page from each eighth of the Library.
-          offset: whole
-              ? 0
-              : min(
-                  count - pageSize,
-                  count * page ~/ pages + random.nextInt(count ~/ pages),
-                ),
-          limit: whole ? pages * pageSize : pageSize,
+        scoped(
+          QueueLibraryDbQuery(
+            includeLocal: includeLocal,
+            // One page from each eighth of the Library.
+            offset: whole
+                ? 0
+                : min(
+                    count - pageSize,
+                    count * page ~/ pages + random.nextInt(count ~/ pages),
+                  ),
+            limit: whole ? pages * pageSize : pageSize,
+          ),
         ),
       ),
   ];

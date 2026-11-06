@@ -1,3 +1,4 @@
+import 'package:mornye/services/library_source_scope.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -125,6 +126,22 @@ class _Library implements LibraryDatabase {
         {'filePath': path}
       else
         null,
+  ];
+
+  @override
+  Future<List<Map<String, dynamic>?>> findExistingBatchScoped(
+    List<LocalLibraryBatchLookupRequest> requests,
+    QueueLibraryDbQuery scope,
+  ) async => [
+    for (final row in await findExistingBatch(requests))
+      row != null &&
+              libraryScopeAllowsPath(
+                scope,
+                row['filePath'] as String,
+                indexed: true,
+              )
+          ? row
+          : null,
   ];
 
   @override

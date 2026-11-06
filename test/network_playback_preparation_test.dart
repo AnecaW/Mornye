@@ -110,6 +110,35 @@ void main() {
     await assertion.timeout(const Duration(seconds: 1));
     server.release.complete();
   });
+  test(
+    'shared preparation keeps the remaining subscriber when one cancels',
+    () async {
+      server.blockMethod = 'stream';
+      final first = PlaybackLoad(), second = PlaybackLoad();
+      final a = storage.preparePlayback(source, first);
+      final cancelled = expectLater(a, throwsA(isA<PlaybackSuperseded>()));
+      await server.held.future.timeout(const Duration(seconds: 2));
+      final b = storage.preparePlayback(source, second);
+      final end = DateTime.now().add(const Duration(seconds: 2));
+      while (second.stage == PlaybackPreparationStage.idle ||
+          second.stage == PlaybackPreparationStage.resolvingSource) {
+        if (DateTime.now().isAfter(end)) fail('Second subscriber did not join');
+        await Future<void>.delayed(Duration.zero);
+      }
+      first.cancel();
+      await cancelled;
+      server.release.complete();
+      expect(
+        await b.timeout(const Duration(seconds: 2)),
+        contains('127.0.0.1'),
+      );
+      expect(
+        server.requests.where((r) => r.path.endsWith('/stream.view')),
+        hasLength(1),
+      );
+      expect(second.receivedBytes, greaterThan(0));
+    },
+  );
   test('consecutive audio preparations reuse the same server socket', () async {
     await storage.preparePlayback(source, PlaybackLoad());
     final second = NetworkStorageService.source(

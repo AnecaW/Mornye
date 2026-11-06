@@ -79,6 +79,7 @@ extension NetworkPlaybackPreparation on NetworkStorageService {
     }
     final work = shared;
     work.subscribers++;
+    load.mark(work.load.stage);
     var detached = false;
     void detach() {
       if (detached) return;
@@ -131,7 +132,7 @@ extension NetworkPlaybackPreparation on NetworkStorageService {
     while (_playbackProfiles.length > 16) {
       _playbackProfiles.remove(_playbackProfiles.keys.first);
     }
-    load.bufferPolicy = profile.policy;
+    load.bufferPolicy = profile.policyFor(load.bitrate);
     final probeBytes = profile.probeBytes(load.bitrate);
     final checked = _playbackPrefixes[key];
     if (checked != null && checked.expires.isAfter(DateTime.now())) {
@@ -146,12 +147,13 @@ extension NetworkPlaybackPreparation on NetworkStorageService {
     final client = _readClient(c);
     HttpClientRequest? activeRequest;
     final removeCancellation = load.onCancel(() => activeRequest?.abort());
-    final deadline = Timer(
-      const Duration(seconds: 15),
-      () => activeRequest?.abort(
+    var deadlineExpired = false;
+    final deadline = Timer(const Duration(seconds: 15), () {
+      deadlineExpired = true;
+      activeRequest?.abort(
         const SocketException('Playback preparation timed out'),
-      ),
-    );
+      );
+    });
     StreamIterator<List<int>>? bytes;
     try {
       final target = c.protocol == NetworkProtocol.subsonic
@@ -168,6 +170,10 @@ extension NetworkPlaybackPreparation on NetworkStorageService {
           range: 'bytes=0-${probeBytes - 1}',
           onRequest: (request) {
             activeRequest = request;
+            if (deadlineExpired) {
+              request.abort();
+              throw const PlaybackFailure(PlaybackFailureKind.timeout);
+            }
             if (load.cancelled) request.abort();
             load.check();
           },
@@ -272,7 +278,7 @@ extension NetworkPlaybackPreparation on NetworkStorageService {
         bytes: prefix.length,
         transfer: transferClock.elapsed,
       );
-      load.bufferPolicy = profile.policy;
+      load.bufferPolicy = profile.policyFor(load.bitrate);
       load.receivedBytes = prefix.length;
       setReachable(host, reachable: true);
       return await load.wait(resolve(source, forPlayback: true));

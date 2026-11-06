@@ -1,3 +1,4 @@
+import 'package:mornye/services/music_library_scope.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:math';
@@ -103,6 +104,7 @@ class MediaLibraryBrowser {
     required this.history,
     required this.collections,
     required this.includeLocal,
+    this.scope,
     required this.strings,
     CoverStore? covers,
     Future<BrowserCoverProvider?> Function() coverProvider =
@@ -116,6 +118,11 @@ class MediaLibraryBrowser {
 
   /// Whether scanned songs belong to the Library, as on the Library tab.
   final bool Function() includeLocal;
+  final MusicLibraryScope? Function()? scope;
+  QueueLibraryDbQuery _scoped(QueueLibraryDbQuery q) =>
+      scope?.call()?.apply(q) ?? q;
+  QueueLibraryDbQuery get _query =>
+      _scoped(QueueLibraryDbQuery(includeLocal: includeLocal()));
   final AppLocalizations Function() strings;
 
   final CoverStore? _coverStore;
@@ -331,12 +338,14 @@ class MediaLibraryBrowser {
 
   Future<List<MediaItem>> _albumItems({String? artist}) async {
     final page = await library.getQueueAlbumPageResult(
-      QueueLibraryDbQuery(
-        includeSingleTrackAlbums: true,
-        albumArtist: artist,
-        limit: listLimit,
-        sortMode: 'a-z',
-        includeLocal: includeLocal(),
+      _scoped(
+        QueueLibraryDbQuery(
+          includeSingleTrackAlbums: true,
+          albumArtist: artist,
+          limit: listLimit,
+          sortMode: 'a-z',
+          includeLocal: includeLocal(),
+        ),
       ),
     );
     return [
@@ -353,7 +362,9 @@ class MediaLibraryBrowser {
 
   Future<List<MediaItem>> _artistItems() async {
     final rows = await library.getQueueArtistPage(
-      QueueLibraryDbQuery(limit: listLimit, includeLocal: includeLocal()),
+      _scoped(
+        QueueLibraryDbQuery(limit: listLimit, includeLocal: includeLocal()),
+      ),
     );
     return [
       for (final row in rows)
@@ -391,11 +402,13 @@ class MediaLibraryBrowser {
     for (var offset = 0; limit == null || offset < limit; offset += pageSize) {
       final size = limit == null ? pageSize : min(pageSize, limit - offset);
       final page = await library.getQueueTrackPageResult(
-        QueueLibraryDbQuery(
-          includeLocal: includeLocal(),
-          limit: size,
-          offset: offset,
-          cursor: cursor,
+        _scoped(
+          QueueLibraryDbQuery(
+            includeLocal: includeLocal(),
+            limit: size,
+            offset: offset,
+            cursor: cursor,
+          ),
         ),
       );
       for (final row in page.rows) {
@@ -446,12 +459,14 @@ class MediaLibraryBrowser {
   /// An artist's albums one after another, each in album order.
   Future<List<PlayableMedia>> _artistSongs(String name) async {
     final page = await library.getQueueAlbumPageResult(
-      QueueLibraryDbQuery(
-        includeSingleTrackAlbums: true,
-        albumArtist: name,
-        limit: listLimit,
-        sortMode: 'a-z',
-        includeLocal: includeLocal(),
+      _scoped(
+        QueueLibraryDbQuery(
+          includeSingleTrackAlbums: true,
+          albumArtist: name,
+          limit: listLimit,
+          sortMode: 'a-z',
+          includeLocal: includeLocal(),
+        ),
       ),
     );
     final albums = await Future.wait([
@@ -471,7 +486,8 @@ class MediaLibraryBrowser {
       tracks,
       library: library,
       history: history,
-      includeLocal: includeLocal(),
+      includeLocal: _query.includeLocal,
+      scope: _query,
     );
     return _playable([
       for (var i = 0; i < tracks.length; i++)
@@ -491,7 +507,8 @@ class MediaLibraryBrowser {
     final hits = await library.searchLibrary(
       query: query,
       kind: LibrarySearchKind.songs,
-      includeLocal: includeLocal(),
+      includeLocal: _query.includeLocal,
+      scope: _query,
     );
     final songs = await Future.wait([
       for (final hit in hits)
@@ -535,13 +552,15 @@ class MediaLibraryBrowser {
       library.searchLibrary(
         query: text,
         kind: LibrarySearchKind.albums,
-        includeLocal: includeLocal(),
+        includeLocal: _query.includeLocal,
+        scope: _query,
         limit: 20,
       ),
       library.searchLibrary(
         query: text,
         kind: LibrarySearchKind.artists,
-        includeLocal: includeLocal(),
+        includeLocal: _query.includeLocal,
+        scope: _query,
         limit: 20,
       ),
       _searchPlaylists(text),
@@ -608,7 +627,8 @@ class MediaLibraryBrowser {
       final hits = await library.searchLibrary(
         query: text,
         kind: LibrarySearchKind.albums,
-        includeLocal: includeLocal(),
+        includeLocal: _query.includeLocal,
+        scope: _query,
         limit: 1,
       );
       if (hits.isEmpty) return const [];
@@ -625,7 +645,8 @@ class MediaLibraryBrowser {
       final hits = await library.searchLibrary(
         query: text,
         kind: LibrarySearchKind.artists,
-        includeLocal: includeLocal(),
+        includeLocal: _query.includeLocal,
+        scope: _query,
         limit: 1,
       );
       return hits.isEmpty ? const [] : _artistSongs(hits.first.title);

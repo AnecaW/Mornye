@@ -164,6 +164,42 @@ final class DeferredPlayer: AVPlayer {
     await following.dispose()
   }
 
+  @MainActor static func testRadioEqualizer() async throws {
+    guard let address = ProcessInfo.processInfo.environment["TEST_RADIO_HLS"] else { return }
+    if #available(macOS 27.0, *) {
+      let native = AVPlayer()
+      let wrapper = WrappedMediaPlayer(reference: AudioplayersDarwinPlugin(),
+        eventHandler: AudioPlayersStreamHandler(), player: native)
+      defer { Task { @MainActor in await wrapper.dispose() } }
+      wrapper.setBufferingPolicy(["minimumSeconds": 0.35, "forwardSeconds": 4.0])
+      try await wrapper.setSourceUrl(url: address, isLocal: false)
+      let frequencies: [Double] = [60, 250, 1000, 4000, 16000]
+      let gains: [Double] = [0, 0, 0, 0, 0]
+      try await wrapper.setEqualizer(["enabled": true, "frequencies": frequencies,
+        "gains": gains, "inputGain": -12.0, "limiter": false])
+      wrapper.resume()
+      try await waitFor("HLS decoded PCM never reached the equalizer") {
+        (wrapper.equalizerDiagnostics()["processedFrames"] as? Int64 ?? 0) >= 22050
+      }
+      let stats = wrapper.equalizerDiagnostics()
+      guard let input = stats["inputRms"] as? Double, let output = stats["outputRms"] as? Double,
+        input > 0, output / input > 0.20, output / input < 0.35 else {
+        throw Failure.message("HLS equalizer gain was not applied to actual audio: \(stats)")
+      }
+      let beforeFrames = stats["processedFrames"] as! Int64
+      try await wrapper.setEqualizer(["enabled": true, "frequencies": frequencies,
+        "gains": gains, "inputGain": 0.0, "limiter": false])
+      try await waitFor("Live EQ update stopped processing") {
+        (wrapper.equalizerDiagnostics()["processedFrames"] as? Int64 ?? 0) >= beforeFrames + 22050
+      }
+      guard (wrapper.equalizerDiagnostics()["outputRms"] as! Double) > output else {
+        throw Failure.message("Live preset change did not affect radio samples")
+      }
+      print("PASS: real HLS PCM passes through EQ and live gain updates")
+      await wrapper.dispose()
+    } else { print("SKIP: real HLS mixed tap requires macOS 27") }
+  }
+
   @MainActor static func main() async {
     do {
       let native = DeferredPlayer()
@@ -204,6 +240,7 @@ final class DeferredPlayer: AVPlayer {
 
       try await testNativePreparationAndStaleCompletion()
       print("PASS: native preparation succeeds or fails once, and ignores old completion events")
+      try await testRadioEqualizer()
       try await testNextPlayerStartsOnCompletion()
       print("PASS: a linked next player starts as the current one completes")
     } catch {

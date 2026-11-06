@@ -1,3 +1,5 @@
+import 'package:mornye/providers/library_source_provider.dart';
+import 'package:mornye/services/library_source_scope.dart';
 import 'dart:async';
 import 'dart:convert';
 
@@ -11,7 +13,6 @@ import 'package:mornye/providers/local_library_provider.dart';
 import 'package:mornye/providers/music_player_provider.dart';
 import 'package:mornye/providers/recent_access_provider.dart'
     show RecentAccessItem, RecentAccessType;
-import 'package:mornye/providers/settings_provider.dart';
 import 'package:mornye/services/app_state_database.dart';
 import 'package:mornye/services/autoplay_signal.dart';
 import 'package:mornye/services/history_database.dart';
@@ -30,7 +31,9 @@ final _log = AppLogger('LibraryMixes');
 
 // Versioned so new kinds of mixes replace a cache made before them the
 // same day.
-const _cacheKey = 'home_library_mixes_v2';
+const _cacheKey = 'home_library_mixes_v3';
+String _scopeCacheKey(MusicLibraryScope scope) =>
+    '$_cacheKey/${scope.cacheKey}';
 
 /// The year a release date such as `2019-05-10` or `2019` names, or null.
 int? libraryMixReleaseYear(Object? releaseDate) {
@@ -140,11 +143,10 @@ class _StartupSettled extends Notifier<bool> {
 /// changes enough to matter. Building waits until startup has settled and
 /// no Library scan runs; meanwhile the cached mixes show, if any.
 final libraryMixesProvider = FutureProvider<List<LibraryMixView>>((ref) async {
-  final includeLocal = ref.watch(
-    settingsProvider.select((s) => s.localLibraryEnabled),
-  );
+  final scope = ref.watch(musicLibraryScopeProvider);
+  final includeLocal = scope.apply(const QueueLibraryDbQuery()).includeLocal;
   if (!ref.watch(libraryMixesStartupProvider)) {
-    return _cachedViews(includeLocal);
+    return _cachedViews(scope);
   }
   // A download or a rescan may change what the mixes can hold. The Local
   // Library is only read once startup has settled, so it keeps its own
@@ -153,7 +155,7 @@ final libraryMixesProvider = FutureProvider<List<LibraryMixView>>((ref) async {
   if (includeLocal) {
     ref.watch(localLibraryProvider.select((s) => s.loadedIndexVersion));
     if (ref.watch(localLibraryProvider.select((s) => s.isScanning))) {
-      return _cachedViews(includeLocal);
+      return _cachedViews(scope);
     }
   }
   final now = DateTime.now();
@@ -166,11 +168,11 @@ final libraryMixesProvider = FutureProvider<List<LibraryMixView>>((ref) async {
   ref.onDispose(midnight.cancel);
   try {
     final mixes = await _LibraryMixes.instance.load(
-      includeLocal: includeLocal,
+      scope: scope,
       now: now,
       runtime: ref.read(musicPlayerRuntimeProvider),
     );
-    return await _resolve(mixes, includeLocal);
+    return await _resolve(mixes, scope);
   } on Object catch (error, stack) {
     _log.w('Could not make Library mixes: $error\n$stack');
     return const [];
@@ -178,12 +180,9 @@ final libraryMixesProvider = FutureProvider<List<LibraryMixView>>((ref) async {
 });
 
 /// The cached mixes however old, for while building waits.
-Future<List<LibraryMixView>> _cachedViews(bool includeLocal) async {
+Future<List<LibraryMixView>> _cachedViews(MusicLibraryScope scope) async {
   try {
-    return await _resolve(
-      await _LibraryMixes.instance.cached(includeLocal),
-      includeLocal,
-    );
+    return await _resolve(await _LibraryMixes.instance.cached(scope), scope);
   } on Object catch (error, stack) {
     _log.w('Could not read cached Library mixes: $error\n$stack');
     return const [];
@@ -195,9 +194,10 @@ class _LibraryMixes {
 
   static final instance = _LibraryMixes._();
 
-  Future<List<LibraryMix>> cached(bool includeLocal) async {
+  Future<List<LibraryMix>> cached(MusicLibraryScope scope) async {
+    final includeLocal = scope.apply(const QueueLibraryDbQuery()).includeLocal;
     final prefs = await SharedPreferences.getInstance();
-    final cached = _decode(prefs.getString(_cacheKey));
+    final cached = _decode(prefs.getString(_scopeCacheKey(scope)));
     return cached != null && cached.includeLocal == includeLocal
         ? cached.mixes
         : const [];
@@ -205,23 +205,23 @@ class _LibraryMixes {
 
   /// One load at a time; Library changes during one reuse it.
   Future<List<LibraryMix>>? _building;
-  bool _buildingIncludeLocal = false;
+  String? _buildingScope;
 
   Future<List<LibraryMix>> load({
-    required bool includeLocal,
+    required MusicLibraryScope scope,
     required DateTime now,
     required MusicPlayerRuntime runtime,
   }) async {
     final pending = _building;
     if (pending != null) {
-      if (_buildingIncludeLocal == includeLocal) return pending;
+      if (_buildingScope == scope.cacheKey) return pending;
       // Local Library was switched: the next load starts after this one.
       await pending.then((_) {}, onError: (_) {});
-      return load(includeLocal: includeLocal, now: now, runtime: runtime);
+      return load(scope: scope, now: now, runtime: runtime);
     }
-    final operation = _load(includeLocal, now, runtime);
+    final operation = _load(scope, now, runtime);
     _building = operation;
-    _buildingIncludeLocal = includeLocal;
+    _buildingScope = scope.cacheKey;
     try {
       return await operation;
     } finally {
@@ -230,16 +230,17 @@ class _LibraryMixes {
   }
 
   Future<List<LibraryMix>> _load(
-    bool includeLocal,
+    MusicLibraryScope scope,
     DateTime now,
     MusicPlayerRuntime runtime,
   ) async {
+    final includeLocal = scope.apply(const QueueLibraryDbQuery()).includeLocal;
     final prefs = await SharedPreferences.getInstance();
     final count = (await LibraryDatabase.instance.getQueueCounts(
-      QueueLibraryDbQuery(includeLocal: includeLocal),
+      scope.apply(QueueLibraryDbQuery(includeLocal: includeLocal)),
     )).allTrackCount;
     final day = listeningDay(now);
-    final cached = _decode(prefs.getString(_cacheKey));
+    final cached = _decode(prefs.getString(_scopeCacheKey(scope)));
     if (cached != null &&
         !libraryMixesStale(
           cachedDay: cached.day,
@@ -254,9 +255,9 @@ class _LibraryMixes {
     }
     final mixes = count < libraryMixMinLibrary
         ? const <LibraryMix>[]
-        : await _build(includeLocal, now, runtime);
+        : await _build(scope, now, runtime);
     await prefs.setString(
-      _cacheKey,
+      _scopeCacheKey(scope),
       jsonEncode({
         'day': day,
         'includeLocal': includeLocal,
@@ -293,11 +294,11 @@ class _LibraryMixes {
   }
 
   Future<List<LibraryMix>> _build(
-    bool includeLocal,
+    MusicLibraryScope scope,
     DateTime now,
     MusicPlayerRuntime runtime,
   ) async {
-    final (:songs, :years, :added) = await _songs(includeLocal);
+    final (:songs, :years, :added) = await _songs(scope);
     final (plays, pastPlays) = await _plays(songs, now);
     if (plays.length < libraryMixFavoritesMinPlayed) {
       // Statistics are off or new: what else the app keeps of the
@@ -345,13 +346,15 @@ class _LibraryMixes {
       Map<String, DateTime> added,
     })
   >
-  _songs(bool includeLocal) async {
+  _songs(MusicLibraryScope scope) async {
+    final query = scope.apply(const QueueLibraryDbQuery());
     final songs = <PlayableMedia>[];
     final years = <String, int>{};
     final added = <String, DateTime>{};
     for (var offset = 0; ; offset += _pageSize) {
       final rows = await LibraryDatabase.instance.getMixSongPage(
-        includeLocal: includeLocal,
+        includeLocal: query.includeLocal,
+        scope: query,
         limit: _pageSize,
         offset: offset,
       );
@@ -496,8 +499,10 @@ class _LibraryMixes {
 /// drop out, and a mix left with too few is hidden.
 Future<List<LibraryMixView>> _resolve(
   List<LibraryMix> mixes,
-  bool includeLocal,
+  MusicLibraryScope scope,
 ) async {
+  final query = scope.apply(const QueueLibraryDbQuery());
+  final includeLocal = query.includeLocal;
   if (mixes.isEmpty) return const [];
   final downloaded = <String>{}, local = <String>{};
   for (final mix in mixes) {
@@ -515,13 +520,19 @@ Future<List<LibraryMixView>> _resolve(
   ).wait;
   final items = <String, UnifiedLibraryItem>{
     for (final MapEntry(:key, :value) in history.entries)
-      'dl_$key': UnifiedLibraryItem.fromDownloadHistory(
-        DownloadHistoryItem.fromJson(value),
-      ),
+      if (libraryScopeAllowsPath(query, value['file_path'] as String? ?? ''))
+        'dl_$key': UnifiedLibraryItem.fromDownloadHistory(
+          DownloadHistoryItem.fromJson(value),
+        ),
     for (final row in scanned)
-      'local_${row['id']}': UnifiedLibraryItem.fromLocalLibrary(
-        LocalLibraryItem.fromJson(row),
-      ),
+      if (libraryScopeAllowsPath(
+        query,
+        row['file_path'] as String? ?? '',
+        indexed: true,
+      ))
+        'local_${row['id']}': UnifiedLibraryItem.fromLocalLibrary(
+          LocalLibraryItem.fromJson(row),
+        ),
   };
   return [
     for (final mix in mixes)

@@ -289,6 +289,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ inputs.source_commit || github.sha }}
+      - name: Prepare actual HLS audio fixture
+        run: |
+          set -euo pipefail
+          command -v ffmpeg >/dev/null || brew install ffmpeg
+          mkdir -p .tmp/radio
+          ffmpeg -v error -f lavfi -i sine=frequency=440:duration=15 -c:a aac -hls_time 1 -hls_list_size 0 .tmp/radio/live.m3u8
+          python3 -m http.server 18762 --bind 127.0.0.1 --directory .tmp/radio >.tmp/radio/http.log 2>&1 &
+          echo "TEST_RADIO_HLS=http://127.0.0.1:18762/live.m3u8" >> "$GITHUB_ENV"
       - name: Test native AVPlayer lifecycle
         timeout-minutes: 5
         run: |
