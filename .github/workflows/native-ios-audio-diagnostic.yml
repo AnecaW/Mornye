@@ -1,0 +1,70 @@
+name: Native iOS audio diagnostic
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: xcode-27
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Build real WAV and both HLS controls
+        run: |
+          set -euo pipefail
+          command -v ffmpeg >/dev/null || brew install ffmpeg
+          mkdir -p .tmp/probe/audio/high .tmp/probe/audio/low
+          ffmpeg -v error -f lavfi -i sine=frequency=440:duration=15 -ar 44100 -ac 1 .tmp/probe/audio/tone.wav
+          ffmpeg -v error -i .tmp/probe/audio/tone.wav -c:a aac -hls_time 1 -hls_list_size 0 .tmp/probe/audio/high/live.m3u8
+          ffmpeg -v error -f lavfi -i sine=frequency=440:duration=6 -ar 24000 -ac 1 -b:a 16k -c:a aac -hls_time 1 -hls_list_size 0 .tmp/probe/audio/low/live.m3u8
+          python3 -m http.server 18762 --bind 127.0.0.1 --directory .tmp/probe/audio >.tmp/probe/http.log 2>&1 &
+      - name: Compile and run standalone iOS audio application
+        run: |
+          set -euo pipefail
+          native=third_party/audioplayers_darwin/darwin/audioplayers_darwin/Sources/audioplayers_darwin
+          app=.tmp/probe/RadioProbe.app
+          mkdir -p "$app"
+          python3 - <<'PY'
+          import pathlib, plistlib
+          info = dict(CFBundleExecutable="RadioProbe", CFBundleIdentifier="com.mornye.radio-probe", CFBundleName="RadioProbe", CFBundlePackageType="APPL", CFBundleVersion="1", CFBundleShortVersionString="1", MinimumOSVersion="27.0", LSRequiresIPhoneOS=True, UILaunchScreen={}, NSAppTransportSecurity=dict(NSAllowsLocalNetworking=True))
+          pathlib.Path(".tmp/probe/RadioProbe.app/Info.plist").write_bytes(plistlib.dumps(info))
+          PY
+          sdk=$(xcrun --sdk iphonesimulator --show-sdk-path)
+          xcrun --sdk iphonesimulator swiftc -parse-as-library -sdk "$sdk" -target "$(uname -m)-apple-ios27.0-simulator" \
+            "$native/WrappedMediaPlayer.swift" "$native/Utils.swift" "$native/AudioPlayerError.swift" \
+            "$native/EqualizerAudioTap.swift" "$native/EqualizerDSP.swift" "$native/StreamMetadata.swift" \
+            third_party/audioplayers_darwin/tests/IOSRadioProbe.swift -o "$app/RadioProbe"
+          device=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; a=[v for k,vs in d.items() if k.endswith("iOS-27-1") for v in vs if v["name"].startswith("iPhone")]; assert a, "No iOS 27.1 iPhone"; print(a[0]["udid"])')
+          xcrun simctl boot "$device" || true
+          xcrun simctl bootstatus "$device" -b
+          xcrun simctl install "$device" "$app"
+          xcrun simctl launch "$device" com.mornye.radio-probe
+          data=$(xcrun simctl get_app_container "$device" com.mornye.radio-probe data)
+          for attempt in $(seq 1 120); do
+            if [ -f "$data/Documents/native-audio-results.json" ]; then
+              cp "$data/Documents/native-audio-results.json" .tmp/probe/results.json
+              break
+            fi
+            sleep 0.5
+          done
+          test -f .tmp/probe/results.json
+          cat .tmp/probe/results.json
+          python3 - <<'PY'
+          import json
+          rows=json.load(open(".tmp/probe/results.json"))
+          assert len(rows)==3, rows
+          for row in rows:
+              stats=row.get("stats",{})
+              assert stats.get("processedFrames",0)>=22050, row
+              assert stats.get("inputRms",0)>0, row
+              ratio=stats["outputRms"]/stats["inputRms"]
+              assert 0.20<=ratio<=0.35, row
+          PY
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: native-ios-audio-probe-${{ github.sha }}
+          path: |
+            .tmp/probe/results.json
+            .tmp/probe/http.log
+          if-no-files-found: ignore
