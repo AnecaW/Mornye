@@ -46,7 +46,16 @@ enum ReleaseMode: String {
   private var equalizerAttached = false
   private var equalizerRevision = 0
 
-  func equalizerDiagnostics() -> [String: Any] { equalizer.diagnostics() }
+  func equalizerDiagnostics() -> [String: Any] {
+    var result = equalizer.diagnostics()
+    result["attached"] = equalizerAttached
+    result["playIntent"] = isPlaying
+    result["itemStatus"] = player.currentItem?.status.rawValue ?? -1
+    result["mixTrackID"] = player.currentItem?.audioMix?.inputParameters.first?.trackID ?? -1
+    result["assetAudioTracks"] = player.currentItem?.tracks.compactMap { $0.assetTrack }
+      .filter { $0.mediaType == .audio }.count ?? 0
+    return result
+  }
 
   func setEqualizer(_ configuration: [String: Any]) async throws {
     equalizerConfiguration = configuration
