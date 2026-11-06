@@ -35,6 +35,16 @@ Duration? _retryAfter(String? header) {
 }
 
 extension NetworkPlaybackPreparation on NetworkStorageService {
+  Future<void> recordPlaybackStall(String source) async {
+    final (:host, path: _) = NetworkStorageService._sourceParts(source);
+    final c = await connection(host);
+    final profile = _playbackProfiles[_audioCacheKey(c, '')];
+    profile?.stalled();
+    _playbackLog.d(
+      'Native buffer underflow trackHash=${source.hashCode} profile=${profile != null}',
+    );
+  }
+
   Future<void> invalidatePlaybackPreparation(
     String source, {
     bool corruptCache = false,

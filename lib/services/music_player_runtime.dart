@@ -64,6 +64,7 @@ class PlaybackDependencies {
     Future<String> Function(String)? resolveNetworkSource,
     Future<String> Function(String, PlaybackLoad)? prepareNetworkSource,
     this.networkSourceReachable = _networkSourceReachable,
+    this.onNetworkStall = _onNetworkStall,
     this.recoverMissingFile = _recoverMissingFile,
     this.recoverMovedDownload = _recoverMovedDownload,
     this.initializeHandler = _initializeAudioHandler,
@@ -116,6 +117,7 @@ class PlaybackDependencies {
   /// Whether a `network://` Library song can play now, as autoplay asks
   /// before queueing it.
   final Future<bool> Function(String) networkSourceReachable;
+  final void Function(String) onNetworkStall;
 
   /// What plays in place of a local song file that is gone but can be
   /// fetched again, such as a song a paired phone sent that the received
@@ -203,6 +205,14 @@ class PlaybackDependencies {
   ) => NetworkStorageService.instance.preparePlayback(source, load);
   static Future<String> _resolveNetworkSource(String source) =>
       NetworkStorageService.instance.resolve(source, forPlayback: true);
+  static void _onNetworkStall(String source) {
+    unawaited(
+      NetworkStorageService.instance
+          .recordPlaybackStall(source)
+          .catchError((Object _) {}),
+    );
+  }
+
   static Future<bool> _networkSourceReachable(String source) =>
       NetworkStorageService.instance.reachable(source);
   static Future<String?> _recoverMissingFile(String path) async {

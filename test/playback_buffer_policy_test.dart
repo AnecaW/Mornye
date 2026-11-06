@@ -2,6 +2,25 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mornye/services/playback_buffer_policy.dart';
 
 void main() {
+  test('stable later transfers gradually reduce the stall penalty', () {
+    var now = DateTime(2026);
+    final profile = PlaybackNetworkProfile(now: () => now);
+    profile.stalled();
+    profile.stalled();
+    profile.observe(
+      firstByte: Duration.zero,
+      bytes: 4096,
+      transfer: const Duration(milliseconds: 1),
+    );
+    expect(profile.stalls, 2);
+    now = now.add(const Duration(seconds: 31));
+    profile.observe(
+      firstByte: Duration.zero,
+      bytes: 4096,
+      transfer: const Duration(milliseconds: 1),
+    );
+    expect(profile.stalls, 1);
+  });
   test(
     'starts with a small progressive prefix and bounded native preferences',
     () {

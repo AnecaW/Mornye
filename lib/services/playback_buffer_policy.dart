@@ -17,6 +17,10 @@ class PlaybackBufferPolicy {
 
 /// Bounded, per-account observations; no URLs, authentication or audio is stored.
 class PlaybackNetworkProfile {
+  PlaybackNetworkProfile({DateTime Function()? now})
+    : _now = now ?? DateTime.now;
+  final DateTime Function() _now;
+  DateTime? _lastStall;
   int samples = 0, stalls = 0;
   double firstByteSeconds = 0, bytesPerSecond = 0;
   void observe({
@@ -31,9 +35,18 @@ class PlaybackNetworkProfile {
         : firstByteSeconds * 0.75 + latency * 0.25;
     bytesPerSecond = samples == 0 ? rate : bytesPerSecond * 0.75 + rate * 0.25;
     samples++;
+    if (stalls > 0 &&
+        _lastStall != null &&
+        _now().difference(_lastStall!) >= const Duration(seconds: 30)) {
+      stalls--;
+    }
   }
 
-  void stalled() => stalls = math.min(6, stalls + 1);
+  void stalled() {
+    stalls = math.min(6, stalls + 1);
+    _lastStall = _now();
+  }
+
   PlaybackBufferPolicy get policy => policyFor(null);
   PlaybackBufferPolicy policyFor(int? bitrate) {
     final encodedBytesPerSecond = ((bitrate ?? 256) * 1000 / 8).clamp(

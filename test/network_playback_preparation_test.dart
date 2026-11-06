@@ -166,6 +166,21 @@ void main() {
       expect(second.receivedBytes, greaterThan(0));
     },
   );
+  test(
+    'native underflow changes the next preparation policy for the same account',
+    () async {
+      final first = PlaybackLoad();
+      await storage.preparePlayback(source, first);
+      await storage.recordPlaybackStall(source);
+      final next = PlaybackLoad();
+      await storage.preparePlayback(source, next);
+      expect(
+        next.bufferPolicy.minimumSeconds,
+        greaterThan(first.bufferPolicy.minimumSeconds),
+      );
+      expect(next.bufferPolicy.minimumSeconds, lessThanOrEqualTo(3));
+    },
+  );
   test('consecutive audio preparations reuse the same server socket', () async {
     await storage.preparePlayback(source, PlaybackLoad());
     final second = NetworkStorageService.source(

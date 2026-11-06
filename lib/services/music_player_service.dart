@@ -581,6 +581,18 @@ class MusicPlayerHandler extends BaseAudioHandler
         (player as PlaybackBufferingDeck).onBufferingChanged.listen((_) {
           if (identical(player, _player)) {
             final buffering = (player as PlaybackBufferingDeck).isBuffering;
+            if (_sourceReady && buffering) {
+              final source = _activeLoad?.preparedPath;
+              final original = mediaItem.value?.extras?['source'] as String?;
+              if (original?.startsWith('network://') == true &&
+                  const {
+                    'http',
+                    'https',
+                  }.contains(Uri.tryParse(source ?? '')?.scheme) &&
+                  !_activeLoad!.cancelled) {
+                _runtime.dependencies.onNetworkStall(original!);
+              }
+            }
             if (_sourceReady)
               _activeLoad?.mark(
                 buffering
