@@ -188,6 +188,7 @@ void main() {
       await server.held.future.timeout(const Duration(seconds: 2));
       final b = second.request('getArtists');
       first.close();
+      await cancelled.timeout(const Duration(seconds: 1));
       server.release.complete();
       expect((await b.timeout(const Duration(seconds: 2)))['status'], 'ok');
       await cancelled;

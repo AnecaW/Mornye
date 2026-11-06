@@ -252,10 +252,13 @@ class SubsonicClient {
   final NetworkConnection connection;
   final HttpClient _http;
   bool _closed = false;
+  final _closedSignal = Completer<void>();
   final _requests = <HttpClientRequest>{};
 
   void close() {
+    if (_closed) return;
     _closed = true;
+    _closedSignal.complete();
     for (final request in _requests) {
       request.abort();
     }
@@ -294,9 +297,9 @@ class SubsonicClient {
     if (_closed) throw StateError('Subsonic request cancelled');
     final cache = _storage.metadataCache;
     final account = jsonEncode(connection.toJson());
-    final result = cache == null
-        ? await _requestJson(method, arguments)
-        : await cache.request(account, method, arguments, () async {
+    final response = cache == null
+        ? _requestJson(method, arguments)
+        : cache.request(account, method, arguments, () async {
             if (fresh || !SubsonicResponseCache.isCacheable(method)) {
               return _requestJson(method, arguments);
             }
@@ -309,6 +312,12 @@ class SubsonicClient {
               owner.close();
             }
           }, fresh: fresh);
+    final result = await Future.any<Map<String, dynamic>>([
+      response,
+      _closedSignal.future.then<Map<String, dynamic>>(
+        (_) => throw StateError('Subsonic request cancelled'),
+      ),
+    ]);
     _storage.subsonicCapabilities(connection).observe(result);
     if (method == 'startScan' ||
         (method == 'getScanStatus' &&
