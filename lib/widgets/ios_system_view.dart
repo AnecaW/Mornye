@@ -65,6 +65,16 @@ class _IosSystemViewState extends State<IosSystemView> {
       channel.setMethodCallHandler((call) async {
         if (mounted && call.method == 'changed') {
           widget.onChanged?.call(call.arguments);
+          if (widget.kind == 'switch' ||
+              widget.kind == 'segments' ||
+              widget.kind == 'tabs') {
+            // UIKit updates selection immediately. Reconcile after the caller
+            // has accepted or rejected the change through its existing state.
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) unawaited(_configure());
+            });
+            WidgetsBinding.instance.ensureVisualUpdate();
+          }
         }
       });
       unawaited(_configure());

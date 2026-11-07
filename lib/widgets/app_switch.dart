@@ -233,7 +233,13 @@ class AppSwitchListTile extends StatelessWidget {
         contentPadding: contentPadding,
         enabled: onChanged != null,
         onTap: onChanged == null ? null : () => onChanged!(!value),
-        trailing: AppSwitch(value: value, onChanged: onChanged),
+        trailing: AppSwitch(
+          value: value,
+          onChanged: onChanged,
+          semanticLabel: usesIosSystemViews && title is Text
+              ? (title as Text).data
+              : null,
+        ),
       ),
     );
   }

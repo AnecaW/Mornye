@@ -310,7 +310,13 @@ class MornyeGlass extends ConsumerWidget {
                   ...iosSystemAppearance(context),
                   'glass': level == MornyeGlassLevel.liquid,
                   'clear': !strongTint && clarity >= 0.8,
-                  'tint': tintColor?.toARGB32(),
+                  'tint':
+                      (tintColor ??
+                              Theme.of(
+                                context,
+                              ).extension<MornyeTheme>()?.chromeSurface)
+                          ?.withValues(alpha: tint.a * reveal)
+                          .toARGB32(),
                   'radius': radius,
                   'top': firstInGroup,
                   'bottom': lastInGroup,

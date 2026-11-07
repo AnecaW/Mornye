@@ -19,10 +19,17 @@ final class IosSystemViewFactory: NSObject, FlutterPlatformViewFactory {
 }
 
 private final class IosSystemView: NSObject, FlutterPlatformView, UITabBarDelegate {
+    private struct SurfaceMaterial: Equatable {
+        let glass: Bool
+        let clear: Bool
+        let tint: UInt32?
+    }
+
     private let container: UIView
     private let channel: FlutterMethodChannel
     private let control: UIView
     private var tabSymbols: [String] = []
+    private var surfaceMaterial: SurfaceMaterial?
 
     init(frame: CGRect, id: Int64, args: [String: Any], messenger: FlutterBinaryMessenger) {
         container = UIView(frame: frame)
@@ -31,7 +38,7 @@ private final class IosSystemView: NSObject, FlutterPlatformView, UITabBarDelega
         case "switch": control = UISwitch()
         case "segments": control = UISegmentedControl()
         case "tabs": control = UITabBar()
-        case "menu": control = UIButton(type: .system)
+        case "menu", "back": control = UIButton(type: .system)
         default: control = UIVisualEffectView()
         }
         super.init()
@@ -53,6 +60,9 @@ private final class IosSystemView: NSObject, FlutterPlatformView, UITabBarDelega
         }
         if let segments = control as? UISegmentedControl {
             segments.addTarget(self, action: #selector(segmentChanged(_:)), for: .valueChanged)
+        }
+        if args["kind"] as? String == "back", let button = control as? UIButton {
+            button.addTarget(self, action: #selector(backPressed), for: .primaryActionTriggered)
         }
         (control as? UITabBar)?.delegate = self
         configure(args)
@@ -110,10 +120,12 @@ private final class IosSystemView: NSObject, FlutterPlatformView, UITabBarDelega
             } else {
                 configuration = .plain()
             }
-            configuration.image = UIImage(systemName: "ellipsis")
+            let isBack = values["role"] as? String == "back"
+            configuration.image = UIImage(systemName: isBack ? "chevron.backward" : "ellipsis")
             configuration.baseForegroundColor = .label
             button.configuration = configuration
             button.accessibilityLabel = values["label"] as? String
+            if isBack { return }
             button.showsMenuAsPrimaryAction = true
             let items = values["items"] as? [[String: Any]] ?? []
             button.isEnabled = !items.isEmpty
@@ -127,15 +139,17 @@ private final class IosSystemView: NSObject, FlutterPlatformView, UITabBarDelega
             })
         } else if let surface = control as? UIVisualEffectView {
             container.isUserInteractionEnabled = false
-            let wantsGlass = values["glass"] as? Bool == true
-            if #available(iOS 26.0, *), wantsGlass {
+            let material = SurfaceMaterial(glass: values["glass"] as? Bool == true,
+                clear: values["clear"] as? Bool == true, tint: (values["tint"] as? NSNumber)?.uint32Value)
+            if #available(iOS 26.0, *), material.glass {
                 let radius = (values["radius"] as? NSNumber)?.doubleValue ?? 0
                 let top: UICornerRadius? = values["top"] as? Bool == true ? .fixed(radius) : nil
                 let bottom: UICornerRadius? = values["bottom"] as? Bool == true ? .fixed(radius) : nil
                 surface.cornerConfiguration = .corners(topLeftRadius: top, topRightRadius: top,
                     bottomLeftRadius: bottom, bottomRightRadius: bottom)
-                let glass = UIGlassEffect(style: values["clear"] as? Bool == true ? .clear : .regular)
-                if let tint = (values["tint"] as? NSNumber)?.uint32Value {
+                guard material != surfaceMaterial else { return }
+                let glass = UIGlassEffect(style: material.clear ? .clear : .regular)
+                if let tint = material.tint {
                     glass.tintColor = UIColor(
                         red: CGFloat((tint >> 16) & 255) / 255,
                         green: CGFloat((tint >> 8) & 255) / 255,
@@ -144,9 +158,10 @@ private final class IosSystemView: NSObject, FlutterPlatformView, UITabBarDelega
                     )
                 }
                 surface.effect = glass
-            } else {
+            } else if surfaceMaterial == nil || surfaceMaterial?.glass != material.glass {
                 surface.effect = UIBlurEffect(style: .systemMaterial)
             }
+            surfaceMaterial = material
         }
     }
 
@@ -156,6 +171,10 @@ private final class IosSystemView: NSObject, FlutterPlatformView, UITabBarDelega
 
     @objc private func segmentChanged(_ sender: UISegmentedControl) {
         channel.invokeMethod("changed", arguments: sender.selectedSegmentIndex)
+    }
+
+    @objc private func backPressed() {
+        channel.invokeMethod("changed", arguments: nil)
     }
 
     func tabBar(_ tabBar: UITabBar, didSelect item: UITabBarItem) {

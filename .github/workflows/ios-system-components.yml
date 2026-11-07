@@ -55,10 +55,10 @@ jobs:
       - run: flutter pub get
       - run: dart scripts/prepare_flutter_sdk.dart
       - name: Analyze native presentation adapter
-        run: dart analyze lib/widgets/ios_system_view.dart lib/widgets/app_switch.dart lib/widgets/app_menu_button.dart lib/widgets/app_icon.dart lib/widgets/expressive_navigation_bar.dart lib/widgets/mornye_chrome.dart lib/widgets/mornye_glass_press.dart
+        run: dart analyze lib/widgets/ios_system_view.dart lib/widgets/app_switch.dart lib/widgets/app_menu_button.dart lib/widgets/app_icon.dart lib/widgets/app_sliver_header.dart lib/widgets/expressive_navigation_bar.dart lib/widgets/mornye_chrome.dart lib/widgets/mornye_glass_press.dart
       - name: Verify existing controller behavior and native commands
-        run: flutter test --no-pub test/app_switch_test.dart test/mornye_bottom_bar_test.dart test/mornye_context_menu_test.dart test/mornye_glass_layout_test.dart test/shell_navigation_service_test.dart
-      - name: Typecheck SwiftUI before compiling backend
+        run: flutter test --no-pub test/app_switch_test.dart test/detail_page_navigation_test.dart test/mornye_bottom_bar_test.dart test/mornye_context_menu_test.dart test/mornye_glass_layout_test.dart test/shell_navigation_service_test.dart
+      - name: Typecheck UIKit bridge before compiling backend
         run: |
           set -euo pipefail
           flutter precache --ios
@@ -129,5 +129,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "ios-system-components-${GITHUB_RUN_NUMBER}" dist/*.ipa dist/SHA256SUMS.txt \
-            --target "$GITHUB_SHA" --prerelease --title "Native iPhone preview ${GITHUB_RUN_NUMBER}" \
+            --target "$GITHUB_SHA" --prerelease --title "iOS system components preview ${GITHUB_RUN_NUMBER}" \
             --notes 'UIKit component preview based on official Mornye 5.3.1, retaining the original Flutter routes and controllers. Unsigned IPA requires signing for installation.'

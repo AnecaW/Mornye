@@ -5,6 +5,7 @@ import 'package:mornye/theme/app_tokens.dart';
 import 'package:mornye/theme/mornye_theme.dart';
 import 'package:mornye/widgets/app_icon.dart';
 import 'package:mornye/widgets/app_icon_button.dart';
+import 'package:mornye/widgets/ios_system_view.dart';
 import 'package:mornye/utils/adaptive_layout.dart';
 import 'package:mornye/utils/app_bar_layout.dart';
 
@@ -87,6 +88,24 @@ class AppSliverHeader extends StatelessWidget {
         : shortened;
     final maxHeight = expandedHeight + topPadding;
     final edgeInset = detailHeaderEdgeInset(context);
+    final Widget? systemBack =
+        usesIosSystemViews && showLeading && leading == null
+        ? Center(
+            child: SizedBox.square(
+              dimension: 44,
+              child: IosSystemView(
+                kind: 'back',
+                configuration: {
+                  ...iosSystemAppearance(context),
+                  'role': 'back',
+                  'glass': !MediaQuery.highContrastOf(context),
+                  'label': MaterialLocalizations.of(context).backButtonTooltip,
+                },
+                onChanged: (_) => Navigator.pop(context),
+              ),
+            ),
+          )
+        : null;
 
     return SliverAppBar(
       expandedHeight: maxHeight,
@@ -102,6 +121,7 @@ class AppSliverHeader extends StatelessWidget {
               padding: EdgeInsetsDirectional.only(start: edgeInset),
               child:
                   leading ??
+                  systemBack ??
                   (context.isMornye
                       ? AppIconButton(
                           tooltip: MaterialLocalizations.of(
