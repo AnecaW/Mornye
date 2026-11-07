@@ -100,8 +100,8 @@ import UniformTypeIdentifiers
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
     ) -> Bool {
-        _ = nativeIPhone
         playerEngine.run()
+        _ = nativeIPhone
         configureFlutterEngine(playerEngine.binaryMessenger, registry: playerEngine)
         if let url = launchOptions?[.url] as? URL {
             _ = handleExtensionOAuthRedirect(url: url)

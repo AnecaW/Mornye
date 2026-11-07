@@ -14,6 +14,11 @@ import 'package:mornye/services/platform_bridge.dart';
 import 'package:mornye/services/playable_media.dart';
 import 'package:mornye/controllers/open_audio_controller.dart';
 import 'package:mornye/services/audio_file_open_service.dart';
+import 'package:mornye/controllers/extension_auth_launcher.dart';
+import 'package:mornye/providers/playback_provider.dart' show playbackProvider;
+import 'package:mornye/providers/library_collections_provider.dart';
+import 'package:mornye/controllers/player_metadata_controller.dart';
+import 'package:mornye/providers/track_provider.dart';
 
 /// Presentation adapter only. All commands go through the same controllers as
 /// the cross-platform UI; this layer never implements playback or downloads.
@@ -30,6 +35,7 @@ class _NativeIPhoneRuntimeState extends ConsumerState<NativeIPhoneRuntime> {
   static const channel = MethodChannel('com.zarz.mornye/native_iphone');
   final Map<String, PlayableMedia> _media = {};
   final Map<String, Track> _searchTracks = {};
+  final PlayerMetadataController _metadata = PlayerMetadataController();
   Timer? _publishTimer;
   bool _publishing = false;
   bool _dirty = true;
@@ -87,6 +93,37 @@ class _NativeIPhoneRuntimeState extends ConsumerState<NativeIPhoneRuntime> {
     'duration': item.duration?.inSeconds ?? 0,
   };
 
+  Map<String, Object?> _catalog(Track track) {
+    _searchTracks[track.id] = track;
+    return {
+      'id': track.id,
+      'title': track.name,
+      'artist': track.artistName,
+      'album': track.albumName,
+      'artwork': track.coverUrl ?? '',
+      'duration': track.duration / 1000,
+    };
+  }
+
+  Future<Track> _track(String id) async {
+    final now = ref.read(currentMediaItemProvider).value;
+    if (now != null && now.id == id) {
+      return ref.read(playerCollectionTrackProvider(now).future);
+    }
+    final catalog = _searchTracks[id];
+    if (catalog != null) return catalog;
+    final media = _media[id];
+    if (media == null) throw StateError('This song is no longer available.');
+    return Track(
+      id: media.id,
+      name: media.title,
+      artistName: media.artist,
+      albumName: media.album,
+      coverUrl: media.artUri,
+      duration: media.duration?.inMilliseconds ?? 0,
+    );
+  }
+
   Future<void> _publish() async {
     if (!mounted || _publishing) return;
     _publishing = true;
@@ -98,8 +135,19 @@ class _NativeIPhoneRuntimeState extends ConsumerState<NativeIPhoneRuntime> {
       final extensions = ref.read(extensionProvider);
       final library = ref.read(localLibraryProvider);
       final settings = ref.read(settingsProvider);
+      final collections = ref.read(libraryCollectionsProvider);
       await channel.invokeMethod<void>('state', {
         'ready': true,
+        'playlists': collections.playlists
+            .map(
+              (list) => {
+                'id': list.id,
+                'title': list.name,
+                'count': list.trackCount,
+              },
+            )
+            .toList(),
+        'lovedCount': collections.loved.length,
         'firstLaunch': settings.isFirstLaunch,
         'now': media == null ? null : _now(media),
         'playing': playback?.playing ?? false,
@@ -148,6 +196,8 @@ class _NativeIPhoneRuntimeState extends ConsumerState<NativeIPhoneRuntime> {
             )
             .toList(),
         'scanning': library.isScanning,
+        'libraryRevision':
+            '${library.loadedIndexVersion}:${library.totalCount}:${downloads.items.where((item) => item.status.name == 'completed').length}',
         'settings': {
           'gaplessPlayback': settings.gaplessPlayback,
           'autoplay': settings.autoplay,
@@ -175,6 +225,34 @@ class _NativeIPhoneRuntimeState extends ConsumerState<NativeIPhoneRuntime> {
         _dirty = true;
         await _publish();
         return null;
+      case 'artwork':
+        return ref
+            .read(musicPlayerRuntimeProvider)
+            .dependencies
+            .coverStore
+            .file(args['path'] as String);
+      case 'lyrics':
+      case 'searchLyrics':
+        final item = ref.read(currentMediaItemProvider).value;
+        await _metadata.load(item);
+        if (call.method == 'searchLyrics') await _metadata.searchOnline();
+        final lyrics = _metadata.lyrics;
+        return {
+          'id': _metadata.item?.id ?? '',
+          'synced': lyrics.synced,
+          'plain': lyrics.plainText,
+          'lines': lyrics.lines
+              .map(
+                (line) => {
+                  'text': line.text,
+                  'time': line.time.inMilliseconds,
+                  'translation': line.translation ?? '',
+                },
+              )
+              .toList(),
+        };
+      case 'trackDetails':
+        return _metadata.readDetails(ref.read(currentMediaItemProvider).value);
       case 'library':
         // The existing browser includes both downloaded and scanned music,
         // and applies the user's existing source visibility rules.
@@ -184,25 +262,62 @@ class _NativeIPhoneRuntimeState extends ConsumerState<NativeIPhoneRuntime> {
             .librarySongs();
         _media.clear();
         return songs.map(_song).toList();
+      case 'collection':
+        final notifier = ref.read(libraryCollectionsProvider.notifier);
+        if (id != 'loved') await notifier.ensurePlaylistLoaded(id);
+        final collections = ref.read(libraryCollectionsProvider);
+        final entries = id == 'loved'
+            ? collections.loved
+            : collections.playlistById(id)?.tracks ?? <CollectionTrackEntry>[];
+        return entries.map((entry) => _catalog(entry.track)).toList();
+      case 'createPlaylist':
+        return ref
+            .read(libraryCollectionsProvider.notifier)
+            .createPlaylist(args['name'] as String);
+      case 'addToPlaylist':
+        await ref
+            .read(libraryCollectionsProvider.notifier)
+            .addTrackToPlaylist(args['playlist'] as String, await _track(id));
+      case 'love':
+        await ref
+            .read(libraryCollectionsProvider.notifier)
+            .toggleLoved(await _track(id));
+      case 'playCatalog':
+        final ids = (args['ids'] as List).cast<String>();
+        final tracks = <Track>[];
+        for (final id in ids) {
+          tracks.add(await _track(id));
+        }
+        await ref
+            .read(playbackProvider.notifier)
+            .playTrackList(tracks, startIndex: args['index'] as int? ?? 0);
       case 'play':
         final media = _media[id];
-        if (media == null)
+        if (media == null) {
           throw StateError(
             'This song is no longer available. Refresh your library.',
           );
-        await player.playSingle(media);
+        }
+        await ref
+            .read(playbackProvider.notifier)
+            .playMediaQueue([media], startIndex: 0, externalPath: media.source);
       case 'playAll':
         final ids = (args['ids'] as List).cast<String>();
         final songs = ids
             .map((id) => _media[id])
             .whereType<PlayableMedia>()
             .toList();
-        if (songs.isEmpty)
+        if (songs.isEmpty) {
           throw StateError('No playable songs in this collection.');
-        await player.playAll(
-          songs,
-          initialIndex: (args['index'] as int? ?? 0).clamp(0, songs.length - 1),
-        );
+        }
+        final index = (args['index'] as int? ?? 0).clamp(0, songs.length - 1);
+        await ref
+            .read(playbackProvider.notifier)
+            .playMediaQueue(
+              songs,
+              startIndex: index,
+              externalPath: songs[index].source,
+            );
       case 'toggle':
         await player.ensureInitialized();
         await player.togglePlayPause(ref.read(playbackPlayingProvider));
@@ -227,34 +342,29 @@ class _NativeIPhoneRuntimeState extends ConsumerState<NativeIPhoneRuntime> {
         if (media == null) throw StateError('Refresh your library first.');
         await player.addToQueue(media);
       case 'shuffleLibrary':
-        if (!await player.shuffleLibrary())
+        if (!await player.shuffleLibrary()) {
           throw StateError('Add music to your library first.');
+        }
       case 'search':
         final query = (args['query'] as String).trim();
         if (query.isEmpty) return [];
         await ref.read(extensionProvider.notifier).ensureInitialized();
-        final rows = await PlatformBridge.searchTracksWithMetadataProviders(
-          query,
-          limit: 60,
-        );
-        return rows.map((row) {
-          final track = Track.fromBackendMap(row);
-          _searchTracks[track.id] = track;
-          return {
-            'id': track.id,
-            'title': track.name,
-            'artist': track.artistName,
-            'album': track.albumName,
-            'artwork': track.coverUrl ?? '',
-            'duration': track.duration,
-          };
-        }).toList();
+        await ref
+            .read(trackProvider.notifier)
+            .search(query, filterOverride: 'track');
+        final result = ref.read(trackProvider);
+        if (result.error != null) throw StateError(result.error!);
+        return result.tracks
+            .where((track) => !track.isCollection)
+            .map(_catalog)
+            .toList();
       case 'download':
         final track = _searchTracks[id];
         if (track == null) throw StateError('Search for this song again.');
         final service = ref.read(settingsProvider).defaultService;
-        if (service.isEmpty)
+        if (service.isEmpty) {
           throw StateError('Choose a download provider in Settings first.');
+        }
         ref.read(downloadQueueProvider.notifier).addIndividualTracksToQueue([
           track,
         ], service);
@@ -268,6 +378,55 @@ class _NativeIPhoneRuntimeState extends ConsumerState<NativeIPhoneRuntime> {
         await ref
             .read(extensionProvider.notifier)
             .setExtensionEnabled(id, args['enabled'] as bool);
+      case 'extensionSettings':
+        final extension = ref
+            .read(extensionProvider)
+            .extensions
+            .where((ext) => ext.id == id)
+            .first;
+        final values = await PlatformBridge.getExtensionSettings(id);
+        return {
+          'fields': extension.settings
+              .map(
+                (field) => {
+                  'id': field.key,
+                  'title': field.label,
+                  'type': field.type,
+                  'description': field.description ?? '',
+                  'options': field.options ?? <String>[],
+                  'action': field.action ?? '',
+                  'value': values[field.key] ?? field.defaultValue ?? '',
+                },
+              )
+              .toList(),
+        };
+      case 'saveExtensionSetting':
+        final values = await PlatformBridge.getExtensionSettings(id);
+        if (!await ref.read(extensionProvider.notifier).setExtensionSettings(
+          id,
+          {...values, args['key'] as String: args['value']},
+        )) {
+          throw StateError('Could not save extension settings.');
+        }
+      case 'extensionAction':
+        final result = await PlatformBridge.invokeExtensionAction(
+          id,
+          args['action'] as String,
+          input: args['input'] == null
+              ? null
+              : Map<String, dynamic>.from(args['input'] as Map),
+        );
+        final payload = result['result'] is Map
+            ? Map<String, dynamic>.from(result['result'] as Map)
+            : result;
+        final auth = payload['auth_url'];
+        if (auth is String && auth.isNotEmpty) {
+          await launchExtensionAuthUrl(
+            Uri.parse(auth),
+            browserMode: 'in_app_first',
+          );
+        }
+        return payload;
       case 'store':
         final temp = await getTemporaryDirectory();
         await PlatformBridge.initExtensionRepo(temp.path);
@@ -348,6 +507,7 @@ class _NativeIPhoneRuntimeState extends ConsumerState<NativeIPhoneRuntime> {
     ref.listen(extensionProvider, (_, _) => _dirty = true);
     ref.listen(localLibraryProvider, (_, _) => _dirty = true);
     ref.listen(settingsProvider, (_, _) => _dirty = true);
+    ref.listen(libraryCollectionsProvider, (_, _) => _dirty = true);
     return const SizedBox.shrink();
   }
 
@@ -355,6 +515,7 @@ class _NativeIPhoneRuntimeState extends ConsumerState<NativeIPhoneRuntime> {
   void dispose() {
     _publishTimer?.cancel();
     unawaited(_audioOpen?.cancel());
+    _metadata.dispose();
     channel.setMethodCallHandler(null);
     super.dispose();
   }

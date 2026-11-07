@@ -54,6 +54,8 @@ jobs:
           restore-keys: pub-${{ runner.os }}-
       - run: flutter pub get
       - run: dart scripts/prepare_flutter_sdk.dart
+      - name: Analyze native presentation adapter
+        run: dart analyze lib/native_iphone lib/app.dart lib/main.dart
       - name: Configure pods
         run: |
           find "$HOME/.pub-cache/hosted" -path '*ffmpeg_kit_flutter_new_audio*/scripts/*.sh' -type f -exec perl -pi -e 's/\r$//' {} +
@@ -78,6 +80,29 @@ jobs:
             dist/*.ipa
             dist/SHA256SUMS.txt
           if-no-files-found: error
+      - name: Simulator launch and screenshot
+        continue-on-error: true
+        timeout-minutes: 12
+        run: |
+          set -euo pipefail
+          device=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(v["udid"] for values in d["devices"].values() for v in values if "iPhone" in v["name"]))')
+          xcrun simctl boot "$device" || true
+          xcrun simctl bootstatus "$device" -b
+          flutter build ios --simulator --debug --target lib/main.dart
+          app=build/ios/iphonesimulator/Runner.app
+          bundle=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$app/Info.plist")
+          xcrun simctl install "$device" "$app"
+          xcrun simctl launch --terminate-running-process "$device" "$bundle"
+          sleep 12
+          mkdir -p dist/screenshots
+          xcrun simctl io "$device" screenshot dist/screenshots/iphone-launch.png
+      - name: Upload simulator evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: native-iPhone-simulator-${{ github.sha }}
+          path: dist/screenshots/
+          if-no-files-found: ignore
       - name: Publish preview release
         env:
           GH_TOKEN: ${{ github.token }}

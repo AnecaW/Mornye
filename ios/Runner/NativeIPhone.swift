@@ -18,7 +18,13 @@ final class NativeIPhoneModel: ObservableObject {
         channel.setMethodCallHandler { [weak self] call, result in
             guard let self else { result(nil); return }
             switch call.method {
-            case "state": self.state = call.arguments as? [String: Any] ?? [:]; result(nil)
+            case "state":
+                let previous = self.state["libraryRevision"] as? String
+                self.state = call.arguments as? [String: Any] ?? [:]
+                if previous != nil, previous != self.state["libraryRevision"] as? String {
+                    Task { @MainActor in await self.loadLibrary() }
+                }
+                result(nil)
             case "openPlayer": self.showPlayer = true; result(nil)
             case "error": self.error = (call.arguments as? [String: Any])?["message"] as? String; result(nil)
             default: result(FlutterMethodNotImplemented)
@@ -106,21 +112,30 @@ extension Array where Element == NativeSong {
 }
 
 struct NativeArtwork: View {
+    @EnvironmentObject private var model: NativeIPhoneModel
     let path: String
     var size: CGFloat = 52
+    @State private var resolvedPath: String?
+    private var effectivePath: String { resolvedPath ?? path }
     var body: some View {
         Group {
-            if path.hasPrefix("http"), let url = URL(string: path) {
+            if effectivePath.hasPrefix("http"), let url = URL(string: effectivePath) {
                 AsyncImage(url: url) { image in image.resizable().scaledToFill() }
                     placeholder: { placeholder }
-            } else if !path.isEmpty,
-                let image = UIImage(contentsOfFile: path.hasPrefix("file:") ? URL(string: path)?.path ?? path : path) {
+            } else if !effectivePath.isEmpty,
+                let image = NativeArtworkCache.image(effectivePath) {
                 Image(uiImage: image).resizable().scaledToFill()
             } else { placeholder }
         }
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: size > 100 ? 18 : 8, style: .continuous))
         .accessibilityHidden(true)
+        .task(id: path) {
+            resolvedPath = nil
+            if path.hasPrefix("network://") {
+                resolvedPath = try? await model.request("artwork", ["path": path]) as? String
+            }
+        }
     }
     private var placeholder: some View {
         ZStack {
@@ -128,6 +143,18 @@ struct NativeArtwork: View {
                 startPoint: .topLeading, endPoint: .bottomTrailing)
             Image(systemName: "music.note").font(.system(size: size * 0.32)).foregroundStyle(.secondary)
         }
+    }
+}
+
+private enum NativeArtworkCache {
+    static let images = NSCache<NSString, UIImage>()
+    static func image(_ reference: String) -> UIImage? {
+        if let image = images.object(forKey: reference as NSString) { return image }
+        let path = reference.hasPrefix("file:") ? URL(string: reference)?.path ?? reference : reference
+        guard path.hasPrefix("/"), let image = UIImage(contentsOfFile: path) else { return nil }
+        images.countLimit = 120
+        images.setObject(image, forKey: reference as NSString, cost: Int(image.size.width * image.size.height * 4))
+        return image
     }
 }
 
@@ -164,8 +191,12 @@ struct NativeIPhoneRoot: View {
         } message: { Text(model.error ?? "") }
         .task {
             model.perform("refresh")
-            if model.ready { await model.loadLibrary() }
+            if model.ready {
+                setup = model.state["firstLaunch"] as? Bool ?? false
+                await model.loadLibrary()
+            }
         }
+        .environmentObject(model)
     }
     private var tabs: some View {
         TabView {
@@ -261,6 +292,8 @@ struct NativeLibrary: View {
     @ObservedObject var model: NativeIPhoneModel
     @State private var filter = ""
     @State private var section = 0
+    @State private var creatingPlaylist = false
+    @State private var playlistName = ""
     private var songs: [NativeSong] {
         guard !filter.isEmpty else { return model.songs }
         return model.songs.filter { ($0.title + " " + $0.artist + " " + $0.album).localizedCaseInsensitiveContains(filter) }
@@ -269,8 +302,11 @@ struct NativeLibrary: View {
         NavigationStack {
             List {
                 Picker("View", selection: $section) {
-                    Text("Songs").tag(0); Text("Albums").tag(1); Text("Artists").tag(2)
+                    Text("Songs").tag(0); Text("Albums").tag(1); Text("Artists").tag(2); Text("Playlists").tag(3)
                 }.pickerStyle(.segmented).listRowBackground(Color.clear)
+                NavigationLink {
+                    NativeSavedCollection(model: model, id: "loved", title: "Favorites")
+                } label: { Label("Favorites", systemImage: "heart.fill") }
                 if model.loading { ProgressView("Loading your music…") }
                 if songs.isEmpty && !model.loading {
                     NativeEmpty(title: filter.isEmpty ? "Your library starts here" : "No matches",
@@ -279,7 +315,11 @@ struct NativeLibrary: View {
                 if section == 0 {
                     ForEach(Array(songs.enumerated()), id: \.element.id) { index, song in
                         NativeSongRow(song: song) { model.play(songs, at: index) }
-                            .contextMenu { Button("Add to queue", systemImage: "text.line.last.and.arrowtriangle.forward") { model.perform("enqueue", ["id": song.id]) } }
+                            .contextMenu { Button { model.perform("enqueue", ["id": song.id]) } label: {
+                                Label("Add to queue", systemImage: "text.line.last.and.arrowtriangle.forward")
+                            }
+                                NativeSongActions(model: model, song: song)
+                            }
                     }
                 } else if section == 1 {
                     ForEach(songs.albums) { album in
@@ -288,13 +328,22 @@ struct NativeLibrary: View {
                                 VStack(alignment: .leading) { Text(album.title); Text(album.artist).font(.caption).foregroundStyle(.secondary) } }
                         }
                     }
-                } else {
+                } else if section == 2 {
                     ForEach(Array(Set(songs.map(\.artist))).sorted(), id: \.self) { artist in
                         NavigationLink {
                             NativeCollection(model: model, album: NativeAlbum(id: artist, title: artist, artist: "Artist",
                                 songs: songs.filter { $0.artist == artist }))
                         } label: { Label(artist, systemImage: "person.crop.circle") }
                     }
+                } else {
+                    ForEach(model.rows("playlists"), id: \.nativeID) { row in
+                        NavigationLink {
+                            NativeSavedCollection(model: model, id: row.nativeID, title: row["title"] as? String ?? "Playlist")
+                        } label: {
+                            Label(row["title"] as? String ?? "Playlist", systemImage: "music.note.list")
+                        }
+                    }
+                    Button { creatingPlaylist = true } label: { Label("New playlist", systemImage: "plus") }
                 }
                 Section {
                     Button { model.perform("addFolder") } label: { Label("Add music folder", systemImage: "folder.badge.plus") }
@@ -310,7 +359,59 @@ struct NativeLibrary: View {
             .navigationTitle("Library").searchable(text: $filter, prompt: "Songs, artists, albums")
             .refreshable { await model.loadLibrary() }
             .toolbar { ToolbarItem(placement: .primaryAction) { Button { model.perform("shuffleLibrary") } label: { Image(systemName: "shuffle") }.accessibilityLabel("Shuffle library") } }
+            .alert("New playlist", isPresented: $creatingPlaylist) {
+                TextField("Name", text: $playlistName)
+                Button("Create") {
+                    model.perform("createPlaylist", ["name": playlistName])
+                    playlistName = ""
+                }.disabled(playlistName.trimmingCharacters(in: .whitespaces).isEmpty)
+                Button("Cancel", role: .cancel) { playlistName = "" }
+            }
         }
+    }
+}
+
+struct NativeSongActions: View {
+    @ObservedObject var model: NativeIPhoneModel
+    let song: NativeSong
+    var body: some View {
+        Button { model.perform("love", ["id": song.id]) } label: { Label("Toggle favorite", systemImage: "heart") }
+        if !model.rows("playlists").isEmpty {
+            Menu("Add to playlist") {
+                ForEach(model.rows("playlists"), id: \.nativeID) { row in
+                    Button(row["title"] as? String ?? "Playlist") {
+                        model.perform("addToPlaylist", ["id": song.id, "playlist": row.nativeID])
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct NativeSavedCollection: View {
+    @ObservedObject var model: NativeIPhoneModel
+    let id: String
+    let title: String
+    @State private var songs: [NativeSong] = []
+    @State private var loading = true
+    var body: some View {
+        List {
+            if loading { ProgressView("Loading music…") }
+            if !loading && songs.isEmpty { NativeEmpty(title: "No songs yet", subtitle: "Add songs from your library or search results.", symbol: "music.note.list") }
+            ForEach(Array(songs.enumerated()), id: \.offset) { index, song in
+                NativeSongRow(song: song) {
+                    model.perform("playCatalog", ["ids": songs.map(\.id), "index": index])
+                }.contextMenu { NativeSongActions(model: model, song: song) }
+            }
+        }.navigationTitle(title)
+            .task { await load() }.refreshable { await load() }
+    }
+    @MainActor private func load() async {
+        defer { loading = false }
+        do {
+            let rows = try await model.request("collection", ["id": id]) as? [[String: Any]] ?? []
+            songs = rows.map(NativeSong.init)
+        } catch { model.error = error.localizedDescription }
     }
 }
 
@@ -370,6 +471,7 @@ struct NativeSearch: View {
                 }
                 ForEach(results) { song in
                     NativeSongRow(song: song, symbol: "arrow.down.circle") { model.perform("download", ["id": song.id]) }
+                        .contextMenu { NativeSongActions(model: model, song: song) }
                 }
                 if !results.isEmpty { Text("Tap a song to add it to Downloads.").font(.footnote).foregroundStyle(.secondary) }
             }.navigationTitle("Search")
@@ -478,6 +580,11 @@ struct NativeNowPlaying: View {
                                 }.accessibilityLabel("Repeat").frame(minWidth: 44, minHeight: 44)
                             }.font(.title3)
                             NavigationLink { queue } label: { Label("Playing next", systemImage: "list.bullet") }
+                            HStack(spacing: 28) {
+                                NavigationLink { NativeLyrics(model: model) } label: { Label("Lyrics", systemImage: "quote.bubble") }
+                                Button { model.perform("love", ["id": song.id]) } label: { Image(systemName: "heart") }.accessibilityLabel("Toggle favorite")
+                                NavigationLink { NativeTrackDetails(model: model) } label: { Image(systemName: "info.circle") }.accessibilityLabel("Track details")
+                            }
                         }.padding(.horizontal, 28).padding(.bottom, 30)
                     } else {
                         NativeEmpty(title: "Nothing playing yet", subtitle: "Choose a song from your library.", symbol: "music.note")
@@ -498,6 +605,81 @@ struct NativeNowPlaying: View {
     private func time(_ seconds: Double) -> String {
         let value = max(0, Int(seconds.isFinite ? seconds : 0))
         return String(format: "%d:%02d", value / 60, value % 60)
+    }
+}
+
+struct NativeLyrics: View {
+    @ObservedObject var model: NativeIPhoneModel
+    @State private var lyrics: [String: Any] = [:]
+    @State private var busy = false
+    private var lines: [[String: Any]] { lyrics["lines"] as? [[String: Any]] ?? [] }
+    private var activeIndex: Int? {
+        guard lyrics["synced"] as? Bool == true else { return nil }
+        return lines.lastIndex { (($0["time"] as? NSNumber)?.doubleValue ?? .infinity) <= model.position }
+    }
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    if busy { ProgressView("Loading lyrics…").frame(maxWidth: .infinity) }
+                    if lines.isEmpty {
+                        if let plain = lyrics["plain"] as? String, !plain.isEmpty {
+                            Text(plain).font(.title2.weight(.semibold)).textSelection(.enabled)
+                        } else if !busy {
+                            NativeEmpty(title: "No lyrics yet", subtitle: "Find lyrics using your configured providers.", symbol: "quote.bubble")
+                        }
+                    }
+                    ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
+                        Button {
+                            if lyrics["synced"] as? Bool == true {
+                                model.perform("seek", ["position": (line["time"] as? NSNumber)?.doubleValue ?? 0])
+                            }
+                        } label: {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(line["text"] as? String ?? "").font(.system(.title, design: .rounded, weight: .bold))
+                                if let translation = line["translation"] as? String, !translation.isEmpty { Text(translation).font(.body) }
+                            }.foregroundStyle(activeIndex == nil || activeIndex == index ? Color.primary : Color.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }.buttonStyle(.plain).id(index)
+                    }
+                }.padding(28)
+            }
+            .onChange(of: activeIndex) { index in
+                if let index { withAnimation { proxy.scrollTo(index, anchor: .center) } }
+            }
+        }
+        .navigationTitle("Lyrics")
+        .toolbar { ToolbarItem(placement: .primaryAction) { Button("Find lyrics") { Task { await load(search: true) } }.disabled(busy) } }
+        .task(id: model.now?.id) { await load(search: false) }
+    }
+    @MainActor private func load(search: Bool) async {
+        let id = model.now?.id
+        busy = true
+        defer { busy = false }
+        do {
+            let result = try await model.request(search ? "searchLyrics" : "lyrics") as? [String: Any] ?? [:]
+            if id == model.now?.id { lyrics = result }
+        } catch { model.error = error.localizedDescription }
+    }
+}
+
+struct NativeTrackDetails: View {
+    @ObservedObject var model: NativeIPhoneModel
+    @State private var details: [String: Any] = [:]
+    var body: some View {
+        List {
+            ForEach(details.keys.sorted(), id: \.self) { key in
+                if key != "lyrics", let value = details[key], !String(describing: value).isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(key.replacingOccurrences(of: "_", with: " ").capitalized).font(.caption).foregroundStyle(.secondary)
+                        Text(String(describing: value)).textSelection(.enabled)
+                    }
+                }
+            }
+        }.navigationTitle("Track details").task(id: model.now?.id) {
+            do { details = try await model.request("trackDetails") as? [String: Any] ?? [:] }
+            catch { model.error = error.localizedDescription }
+        }
     }
 }
 
@@ -545,10 +727,10 @@ struct NativeSettings: View {
                 Section("Downloads") {
                     Picker("Provider", selection: Binding(get: { model.settings["defaultService"] as? String ?? "" }, set: { model.setting("defaultService", $0) })) {
                         Text("Choose a provider").tag("")
-                        ForEach(model.rows("extensions"), id: \.nativeID) { row in Text(row["title"] as? String ?? row.nativeID).tag(row.nativeID) }
+                        ForEach(model.rows("extensions").filter { $0["canDownload"] as? Bool == true && $0["enabled"] as? Bool == true }, id: \.nativeID) { row in Text(row["title"] as? String ?? row.nativeID).tag(row.nativeID) }
                     }
                     Picker("Quality", selection: Binding(get: { model.settings["audioQuality"] as? String ?? "" }, set: { model.setting("audioQuality", $0) })) {
-                        ForEach(["HI_RES_LOSSLESS", "LOSSLESS", "HIGH", "LOW"], id: \.self) { Text($0.replacingOccurrences(of: "_", with: " ").capitalized).tag($0) }
+                        ForEach(qualities, id: \.nativeID) { row in Text(row["title"] as? String ?? row.nativeID).tag(row.nativeID) }
                     }
                     toggle("Provider fallback", "autoFallback")
                     toggle("Embed metadata", "embedMetadata")
@@ -557,7 +739,9 @@ struct NativeSettings: View {
                 Section("Extensions") {
                     NavigationLink { NativeExtensionStore(model: model) } label: { Label("Browse extensions", systemImage: "square.grid.2x2") }
                     ForEach(model.rows("extensions"), id: \.nativeID) { row in
-                        Toggle(isOn: Binding(get: { row["enabled"] as? Bool ?? false }, set: { model.perform("toggleExtension", ["id": row.nativeID, "enabled": $0]) })) {
+                        NavigationLink {
+                            NativeExtensionEditor(model: model, id: row.nativeID, title: row["title"] as? String ?? row.nativeID)
+                        } label: {
                             VStack(alignment: .leading) { Text(row["title"] as? String ?? row.nativeID); Text(row["version"] as? String ?? "").font(.caption).foregroundStyle(.secondary) }
                         }
                     }
@@ -569,6 +753,135 @@ struct NativeSettings: View {
                 }
             }.navigationTitle("Settings")
         }
+    }
+    private var qualities: [[String: Any]] {
+        let provider = model.settings["defaultService"] as? String ?? ""
+        let options = model.rows("extensions").first { $0.nativeID == provider }?["qualities"] as? [[String: Any]] ?? []
+        let current = model.settings["audioQuality"] as? String ?? "LOSSLESS"
+        return options.contains { $0.nativeID == current } ? options : [["id": current, "title": current]] + options
+    }
+}
+
+struct NativeExtensionEditor: View {
+    @ObservedObject var model: NativeIPhoneModel
+    let id: String
+    let title: String
+    @State private var fields: [[String: Any]] = []
+    @State private var values: [String: String] = [:]
+    @State private var busy = false
+    @State private var accountForm: [String: Any]?
+    @State private var accountValues: [String: String] = [:]
+    @State private var message: String?
+    var body: some View {
+        Form {
+            Toggle("Enabled", isOn: Binding(get: {
+                model.rows("extensions").first { $0.nativeID == id }?["enabled"] as? Bool ?? false
+            }, set: { model.perform("toggleExtension", ["id": id, "enabled": $0]) }))
+            ForEach(fields, id: \.nativeID) { field in
+                Section {
+                    fieldEditor(field)
+                } footer: { Text(field["description"] as? String ?? "") }
+            }
+            if busy { ProgressView() }
+            if let message { Text(message).foregroundStyle(.secondary) }
+        }
+        .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
+        .task { await load() }
+        .sheet(isPresented: Binding(get: { accountForm != nil }, set: { if !$0 { cancelForm() } })) {
+            NavigationStack {
+                Form {
+                    Text(accountForm?["description"] as? String ?? "")
+                    ForEach(accountForm?["fields"] as? [[String: Any]] ?? [], id: \.accountKey) { field in
+                        let key = field.accountKey
+                        let label = field["label"] as? String ?? key
+                        let binding = Binding(get: { accountValues[key] ?? "" }, set: { accountValues[key] = $0 })
+                        if field["type"] as? String == "password" {
+                            SecureField(label, text: binding).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        } else if field["type"] as? String == "select" {
+                            Picker(label, selection: binding) {
+                                ForEach(field["options"] as? [String] ?? [], id: \.self) { Text($0).tag($0) }
+                            }
+                        } else {
+                            TextField(label, text: binding).textInputAutocapitalization(.never).autocorrectionDisabled()
+                                .keyboardType(field["type"] as? String == "otp" ? .numberPad : .default)
+                        }
+                    }
+                    Button("Continue") { submitForm() }.disabled(busy)
+                }.navigationTitle(accountForm?["title"] as? String ?? "Sign in")
+                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { cancelForm() } } }
+            }.interactiveDismissDisabled(busy)
+        }
+        .onDisappear { values.removeAll(); accountValues.removeAll() }
+    }
+
+    @ViewBuilder private func fieldEditor(_ field: [String: Any]) -> some View {
+        let key = field.nativeID
+        let label = field["title"] as? String ?? key
+        let type = field["type"] as? String ?? "string"
+        let binding = Binding(get: { values[key] ?? "" }, set: { values[key] = $0 })
+        if let action = field["action"] as? String, !action.isEmpty {
+            Button(label) { runAction(action) }.disabled(busy)
+        } else if type == "boolean" || type == "bool" {
+            Toggle(label, isOn: Binding(get: { values[key] == "true" }, set: { value in
+                values[key] = value ? "true" : "false"
+                model.perform("saveExtensionSetting", ["id": id, "key": key, "value": value])
+            }))
+        } else if let options = field["options"] as? [String], !options.isEmpty {
+            Picker(label, selection: Binding(get: { values[key] ?? options[0] }, set: { value in
+                values[key] = value
+                model.perform("saveExtensionSetting", ["id": id, "key": key, "value": value])
+            })) { ForEach(options, id: \.self) { Text($0).tag($0) } }
+        } else {
+            if type == "password" || type == "secret" {
+                SecureField(label, text: binding).textInputAutocapitalization(.never).autocorrectionDisabled()
+            } else {
+                TextField(label, text: binding).textInputAutocapitalization(.never).autocorrectionDisabled()
+            }
+            Button("Save") {
+                let value: Any = type == "number" ? (Double(values[key] ?? "") ?? 0) : (values[key] ?? "")
+                model.perform("saveExtensionSetting", ["id": id, "key": key, "value": value])
+            }
+        }
+    }
+
+    @MainActor private func load() async {
+        do {
+            let result = try await model.request("extensionSettings", ["id": id]) as? [String: Any] ?? [:]
+            fields = result["fields"] as? [[String: Any]] ?? []
+            for field in fields {
+                let value = field["value"]
+                values[field.nativeID] = (value as? Bool).map { $0 ? "true" : "false" } ?? value.map { String(describing: $0) } ?? ""
+            }
+        } catch { model.error = error.localizedDescription }
+    }
+    private func runAction(_ action: String, input: [String: String]? = nil) {
+        busy = true
+        Task { @MainActor in
+            defer { busy = false; accountValues.removeAll() }
+            do {
+                var args: [String: Any] = ["id": id, "action": action]
+                if let input { args["input"] = input }
+                let result = try await model.request("extensionAction", args) as? [String: Any] ?? [:]
+                if let form = (result["action_form"] ?? result["byoa_form"]) as? [String: Any] {
+                    accountForm = form
+                } else {
+                    accountForm = nil
+                    message = result["error"] as? String ?? result["message"] as? String ?? "Done"
+                    await load()
+                }
+            } catch { model.error = error.localizedDescription }
+        }
+    }
+    private func submitForm() {
+        guard let action = accountForm?["submit_action"] as? String else { return }
+        runAction(action, input: accountValues)
+    }
+    private func cancelForm() {
+        if let cancel = accountForm?["cancel_action"] as? String, !cancel.isEmpty {
+            model.perform("extensionAction", ["id": id, "action": cancel])
+        }
+        accountForm = nil
+        accountValues.removeAll()
     }
 }
 
@@ -655,6 +968,7 @@ struct NativeEmpty: View {
 
 extension Dictionary where Key == String, Value == Any {
     var nativeID: String { self["id"] as? String ?? "" }
+    var accountKey: String { self["key"] as? String ?? "" }
 }
 
 /// Retain and attach the existing engine for plugins requiring a view
