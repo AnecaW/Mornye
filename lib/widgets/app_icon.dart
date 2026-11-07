@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:mornye/theme/material_symbols.dart';
 import 'package:mornye/theme/mornye_icons.dart';
 import 'package:mornye/theme/mornye_theme.dart';
+import 'package:mornye/widgets/ios_system_view.dart';
 
 /// [widget] as an [AppIcon] when it is a plain [Icon], so shared components
 /// can adopt Material Symbols without changing every caller.
@@ -63,9 +64,11 @@ class AppIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final icon = this.icon;
-    if (context.isMornye) {
+    if (context.isMornye || usesIosSystemViews) {
       return Icon(
-        _adaptive && icon != null ? mornyeIconFor(icon) : icon,
+        (_adaptive || usesIosSystemViews) && icon != null
+            ? mornyeIconFor(icon)
+            : icon,
         size: size,
         color: color,
         semanticLabel: semanticLabel,

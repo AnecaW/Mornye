@@ -11,6 +11,7 @@ import 'package:mornye/widgets/mornye_selection_pill.dart';
 import 'package:mornye/widgets/mornye_liquid_backdrop.dart';
 import 'package:mornye/widgets/mornye_squircle_border.dart';
 import 'package:mornye/widgets/animation_utils.dart';
+import 'package:mornye/widgets/ios_system_view.dart';
 
 class MornyeSegmentedControl extends ConsumerWidget {
   const MornyeSegmentedControl({
@@ -40,6 +41,27 @@ class MornyeSegmentedControl extends ConsumerWidget {
     final height = compact
         ? scaler.scale(36)
         : (scaler.scale(15) + 36).clamp(56.0, double.infinity);
+    if (usesIosSystemViews) {
+      return Padding(
+        padding: EdgeInsets.symmetric(vertical: compact ? 0 : 8),
+        child: SizedBox(
+          height: height,
+          child: IosSystemView(
+            kind: 'segments',
+            configuration: {
+              ...iosSystemAppearance(context),
+              'labels': labels,
+              'selected': selectedIndex,
+            },
+            onChanged: (value) {
+              if (value is int && value >= 0 && value < labels.length) {
+                onChanged(value);
+              }
+            },
+          ),
+        ),
+      );
+    }
     final contrastBlocked = ref.watch(
       mornyeGlassContrastBlockedProvider(MediaQuery.highContrastOf(context)),
     );
@@ -276,6 +298,30 @@ class MornyeGlass extends ConsumerWidget {
     final insideGlass =
         context.dependOnInheritedWidgetOfExactType<_GlassBackdropScope>() !=
         null;
+    if (usesIosSystemViews && translucent && samplesBackdrop && !insideGlass) {
+      return ClipRRect(
+        borderRadius: shape,
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: IosSystemView(
+                kind: 'surface',
+                configuration: {
+                  ...iosSystemAppearance(context),
+                  'glass': level == MornyeGlassLevel.liquid,
+                  'clear': !strongTint && clarity >= 0.8,
+                  'tint': tintColor?.toARGB32(),
+                  'radius': radius,
+                  'top': firstInGroup,
+                  'bottom': lastInGroup,
+                },
+              ),
+            ),
+            _GlassBackdropScope(child: child),
+          ],
+        ),
+      );
+    }
     // At low clarity the tint obscures almost all detail. In particular, 10%
     // must not suddenly enable backdrop sampling on a mid-range GPU.
     final blurThreshold = level == MornyeGlassLevel.frosted ? 0.5 : 0.2;
@@ -634,7 +680,9 @@ class MornyeTabBar extends ConsumerWidget {
         selectionColor: scheme.primary,
         maskItemForeground: false,
         liquidInteraction:
-            floating && MornyeTheme.glassClarityOf(context) > 0.2,
+            !usesIosSystemViews &&
+            floating &&
+            MornyeTheme.glassClarityOf(context) > 0.2,
         labels: [for (final destination in destinations) destination.label],
         selectedIndex: selectedIndex,
         onChanged: onSelected,

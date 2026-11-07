@@ -4,6 +4,7 @@ import 'package:material_3_expressive/material_3_expressive.dart';
 import 'package:mornye/theme/material_expressive.dart';
 import 'package:mornye/theme/mornye_theme.dart';
 import 'package:mornye/widgets/app_icon.dart';
+import 'package:mornye/widgets/ios_system_view.dart';
 
 /// One switch style for settings, extension controls and editing sheets.
 /// Mornye keeps its wide oval thumb even when glass or motion is disabled.
@@ -23,6 +24,26 @@ class AppSwitch extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (usesIosSystemViews) {
+      return SizedBox(
+        width: 71,
+        height: 44,
+        child: IosSystemView(
+          kind: 'switch',
+          configuration: {
+            ...iosSystemAppearance(context),
+            'value': value,
+            'enabled': onChanged != null,
+            'label': semanticLabel,
+          },
+          onChanged: onChanged == null
+              ? null
+              : (value) {
+                  if (value is bool) onChanged!(value);
+                },
+        ),
+      );
+    }
     if (materialExpressiveEnabled(context)) {
       return MaterialExpressiveScope(
         child: M3ESwitch(
@@ -186,7 +207,9 @@ class AppSwitchListTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (!context.isMornye && !materialExpressiveEnabled(context)) {
+    if (!usesIosSystemViews &&
+        !context.isMornye &&
+        !materialExpressiveEnabled(context)) {
       return adaptive
           ? SwitchListTile.adaptive(
               value: value,

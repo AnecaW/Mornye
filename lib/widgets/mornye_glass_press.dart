@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart';
+import 'package:mornye/widgets/ios_system_view.dart';
 
 /// How far the press value rests while a mouse is over the control.
 const double _hoverLevel = 0.3;
@@ -90,7 +91,7 @@ class _MornyeGlassPressState extends State<MornyeGlassPress>
 
   @override
   Widget build(BuildContext context) {
-    if (!widget.enabled) return widget.child;
+    if (!widget.enabled || usesIosSystemViews) return widget.child;
     final still = MediaQuery.disableAnimationsOf(context);
     final radius = widget.radius;
     return MouseRegion(

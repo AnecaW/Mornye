@@ -171,6 +171,9 @@ import UniformTypeIdentifiers
         )
 
         GeneratedPluginRegistrant.register(with: registry)
+        registry.registrar(forPlugin: "MornyeIosSystemViews")?.register(
+            IosSystemViewFactory(messenger: messenger), withId: "com.zarz.mornye/ios_system_view"
+        )
         playbackNotification = PlaybackNotificationBridge(messenger: messenger)
         linkNowPlaying = LinkNowPlayingBridge(messenger: messenger)
         audioRouteInfo = AudioRouteInfoBridge(messenger: messenger)

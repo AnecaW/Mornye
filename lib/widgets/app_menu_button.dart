@@ -4,6 +4,8 @@ import 'package:mornye/theme/app_motion.dart';
 import 'package:mornye/theme/material_expressive.dart';
 import 'package:mornye/theme/mornye_theme.dart';
 import 'package:mornye/widgets/app_icon_button.dart';
+import 'package:mornye/widgets/app_icon.dart';
+import 'package:mornye/widgets/ios_system_view.dart';
 
 /// One row of an [AppMenuButton].
 class AppMenuItem<T extends Object> {
@@ -51,6 +53,45 @@ class AppMenuButton<T extends Object> extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (usesIosSystemViews &&
+        icon is AppIcon &&
+        (icon as AppIcon).icon == Icons.more_vert &&
+        offset == Offset.zero &&
+        !alignStart &&
+        items.every(
+          (item) => item.leading == null || _menuSymbol(item.leading) != null,
+        )) {
+      return SizedBox.square(
+        dimension: 48,
+        child: IosSystemView(
+          kind: 'menu',
+          configuration: {
+            ...iosSystemAppearance(context),
+            'label':
+                tooltip ?? MaterialLocalizations.of(context).showMenuTooltip,
+            'glass': !MediaQuery.highContrastOf(context),
+            'items': [
+              for (final item in items)
+                {
+                  'id': item.value.toString(),
+                  'label': item.label,
+                  'symbol': _menuSymbol(item.leading),
+                  'selected': item.selected,
+                  'destructive': item.destructive,
+                },
+            ],
+          },
+          onChanged: (id) {
+            for (final item in items) {
+              if (id == item.value.toString()) {
+                onSelected(item.value);
+                return;
+              }
+            }
+          },
+        ),
+      );
+    }
     if (materialExpressiveEnabled(context)) {
       return MaterialExpressiveScope(child: _ExpressiveMenuAnchor<T>(this));
     }
@@ -103,6 +144,14 @@ class AppMenuButton<T extends Object> extends StatelessWidget {
       ],
     );
   }
+
+  static String? _menuSymbol(Widget? icon) => switch (icon) {
+    AppIcon(icon: Icons.tune) => 'slider.horizontal.3',
+    AppIcon(icon: Icons.file_open_outlined) => 'folder',
+    AppIcon(icon: Icons.ios_share || Icons.share) => 'square.and.arrow.up',
+    AppIcon(icon: Icons.delete_outline) => 'trash',
+    _ => null,
+  };
 }
 
 /// Icon button that opens the M3E menu popup, one popup at a time.

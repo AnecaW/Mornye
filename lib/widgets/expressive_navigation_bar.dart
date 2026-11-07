@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:material_3_expressive/material_3_expressive.dart';
 import 'package:mornye/theme/material_expressive.dart';
+import 'package:mornye/widgets/animation_utils.dart';
+import 'package:mornye/widgets/ios_system_view.dart';
 
 class ExpressiveNavigationBar extends StatelessWidget {
   const ExpressiveNavigationBar({
@@ -20,6 +22,44 @@ class ExpressiveNavigationBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // The standard mobile shell has Home, Library, an optional Store, and
+    // Settings. Use its original localized destinations and live badge data.
+    if (usesIosSystemViews &&
+        (destinations.length == 3 || destinations.length == 4)) {
+      final symbols = [
+        'house',
+        'square.stack',
+        if (destinations.length == 4) 'square.grid.2x2',
+        'gearshape',
+      ];
+      return SizedBox(
+        height: (isTablet ? 72 : 64) + MediaQuery.paddingOf(context).bottom,
+        width: double.infinity,
+        child: IosSystemView(
+          kind: 'tabs',
+          configuration: {
+            ...iosSystemAppearance(context),
+            'selected': selectedIndex,
+            'items': [
+              for (final (index, destination) in destinations.indexed)
+                {
+                  'label': destination.label,
+                  'symbol': symbols[index],
+                  'count': switch (destination.icon) {
+                    AnimatedBadge(:final count) => count,
+                    _ => 0,
+                  },
+                },
+            ],
+          },
+          onChanged: (value) {
+            if (value is int && value >= 0 && value < destinations.length) {
+              onDestinationSelected(value);
+            }
+          },
+        ),
+      );
+    }
     if (!materialExpressiveEnabled(context)) {
       return NavigationBar(
         selectedIndex: selectedIndex,

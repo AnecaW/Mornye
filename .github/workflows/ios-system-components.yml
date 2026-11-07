@@ -1,0 +1,133 @@
+name: iOS system components IPA
+on:
+  push:
+    branches: [codex/ios-system-components]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: native-iphone-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  iphone:
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode_27.1.app
+          xcodebuild -version
+          xcrun swiftc -frontend -parse ios/Runner/IosSystemView.swift
+      - name: Confirm backend unchanged from official 5.3.1
+        run: |
+          git fetch origin b37621c931e4891d0bc8d7588595a406e633b71f --depth=1
+          git diff --exit-code b37621c931e4891d0bc8d7588595a406e633b71f -- rust_backend lib/services lib/providers lib/controllers third_party ios/Runner/CoreBackend.swift lib/app.dart lib/main.dart lib/screens
+      - name: Stage official Discord SDK when configured
+        env:
+          DISCORD_MOBILE_SDK_PASSPHRASE: ${{ secrets.DISCORD_MOBILE_SDK_PASSPHRASE }}
+        run: |
+          if [ -n "$DISCORD_MOBILE_SDK_PASSPHRASE" ]; then
+            sdk_dir="$(python3 scripts/prepare_discord_sdk.py)"
+            bash scripts/setup_discord_sdk.sh "$sdk_dir"
+          fi
+      - name: Cache Rust
+        id: rust-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            rust_backend/target
+          key: cargo-${{ runner.os }}-rust-ios-${{ hashFiles('rust_backend/rust-toolchain.toml') }}-${{ hashFiles('rust_backend/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-rust-ios-${{ hashFiles('rust_backend/rust-toolchain.toml') }}-
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          channel: stable
+          flutter-version-file: .fvmrc
+          cache: true
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/.pub-cache
+          key: pub-${{ runner.os }}-${{ hashFiles('pubspec.lock') }}
+          restore-keys: pub-${{ runner.os }}-
+      - run: flutter pub get
+      - run: dart scripts/prepare_flutter_sdk.dart
+      - name: Analyze native presentation adapter
+        run: dart analyze lib/widgets/ios_system_view.dart lib/widgets/app_switch.dart lib/widgets/app_menu_button.dart lib/widgets/app_icon.dart lib/widgets/expressive_navigation_bar.dart lib/widgets/mornye_chrome.dart lib/widgets/mornye_glass_press.dart
+      - name: Verify existing controller behavior and native commands
+        run: flutter test --no-pub test/app_switch_test.dart test/mornye_bottom_bar_test.dart test/mornye_context_menu_test.dart test/mornye_glass_layout_test.dart test/shell_navigation_service_test.dart
+      - name: Typecheck SwiftUI before compiling backend
+        run: |
+          set -euo pipefail
+          flutter precache --ios
+          framework=$(find "$FLUTTER_ROOT/bin/cache/artifacts/engine" -path '*/ios-arm64/Flutter.framework' -type d -print -quit)
+          test -n "$framework"
+          xcrun swiftc -typecheck -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" \
+            -target arm64-apple-ios16.0 -F "$(dirname "$framework")" ios/Runner/IosSystemView.swift
+      - run: bash scripts/build_ios.sh
+      - name: Save compiled backend independently of UI build
+        if: steps.rust-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            rust_backend/target
+          key: ${{ steps.rust-cache.outputs.cache-primary-key }}
+      - name: Configure pods
+        run: |
+          find "$HOME/.pub-cache/hosted" -path '*ffmpeg_kit_flutter_new_audio*/scripts/*.sh' -type f -exec perl -pi -e 's/\r$//' {} +
+          cd ios
+          pod install
+      - name: Build native iPhone app
+        run: flutter build ios --release --no-codesign --target lib/main.dart --dart-define="GIT_COMMIT=$(git rev-parse --short=8 HEAD)"
+      - name: Audit and package
+        run: |
+          set -euo pipefail
+          app=build/ios/iphoneos/Runner.app
+          python3 scripts/check_backend_ios.py "$app" --backend rust --archs arm64 --platform ios --release
+          mkdir -p dist/Payload
+          cp -R "$app" dist/Payload/
+          cd dist
+          zip -qry Mornye-iOS-system-components-unsigned.ipa Payload
+          shasum -a 256 Mornye-iOS-system-components-unsigned.ipa > SHA256SUMS.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: Mornye-iOS-system-components-${{ github.sha }}
+          path: |
+            dist/*.ipa
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+      - name: Simulator launch and screenshot
+        continue-on-error: true
+        timeout-minutes: 12
+        run: |
+          set -euo pipefail
+          device=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(v["udid"] for values in d["devices"].values() for v in values if "iPhone" in v["name"]))')
+          xcrun simctl boot "$device" || true
+          python3 -c 'import subprocess,sys; subprocess.run(["xcrun","simctl","bootstatus",sys.argv[1],"-b"],check=True,timeout=120)' "$device"
+          flutter build ios --simulator --debug --target lib/main.dart
+          app=build/ios/iphonesimulator/Runner.app
+          bundle=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$app/Info.plist")
+          xcrun simctl install "$device" "$app"
+          xcrun simctl launch --terminate-running-process "$device" "$bundle"
+          sleep 12
+          mkdir -p dist/screenshots
+          xcrun simctl io "$device" screenshot dist/screenshots/iphone-launch.png
+      - name: Upload simulator evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: native-iPhone-simulator-${{ github.sha }}
+          path: dist/screenshots/
+          if-no-files-found: ignore
+      - name: Publish preview release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "ios-system-components-${GITHUB_RUN_NUMBER}" dist/*.ipa dist/SHA256SUMS.txt \
+            --target "$GITHUB_SHA" --prerelease --title "Native iPhone preview ${GITHUB_RUN_NUMBER}" \
+            --notes 'UIKit component preview based on official Mornye 5.3.1, retaining the original Flutter routes and controllers. Unsigned IPA requires signing for installation.'
