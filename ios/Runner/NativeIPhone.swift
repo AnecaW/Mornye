@@ -1,6 +1,7 @@
 import SwiftUI
 import Flutter
 import AVKit
+import ImageIO
 
 // This channel carries presentation state and user intent only. The existing
 // Dart controllers continue to own persistence, networking and audio sessions.
@@ -151,9 +152,18 @@ private enum NativeArtworkCache {
     static func image(_ reference: String) -> UIImage? {
         if let image = images.object(forKey: reference as NSString) { return image }
         let path = reference.hasPrefix("file:") ? URL(string: reference)?.path ?? reference : reference
-        guard path.hasPrefix("/"), let image = UIImage(contentsOfFile: path) else { return nil }
-        images.countLimit = 120
-        images.setObject(image, forKey: reference as NSString, cost: Int(image.size.width * image.size.height * 4))
+        guard path.hasPrefix("/"),
+            let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: 1024,
+        ]
+        guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        let image = UIImage(cgImage: thumbnail)
+        images.countLimit = 80
+        images.totalCostLimit = 48 * 1024 * 1024
+        images.setObject(image, forKey: reference as NSString, cost: thumbnail.bytesPerRow * thumbnail.height)
         return image
     }
 }
@@ -190,7 +200,6 @@ struct NativeIPhoneRoot: View {
             Button("OK", role: .cancel) { model.error = nil }
         } message: { Text(model.error ?? "") }
         .task {
-            model.perform("refresh")
             if model.ready {
                 setup = model.state["firstLaunch"] as? Bool ?? false
                 await model.loadLibrary()
@@ -405,6 +414,9 @@ struct NativeSavedCollection: View {
             }
         }.navigationTitle(title)
             .task { await load() }.refreshable { await load() }
+            .onChange(of: model.state["lovedCount"] as? Int) { _ in
+                if id == "loved" { Task { await load() } }
+            }
     }
     @MainActor private func load() async {
         defer { loading = false }
@@ -511,12 +523,13 @@ struct NativeDownloads: View {
                     VStack(alignment: .leading, spacing: 10) {
                         NativeSongRow(song: NativeSong(row), symbol: row["status"] as? String == "failed" ? "arrow.clockwise" : "arrow.down") {
                             if row["status"] as? String == "failed" { model.perform("retryDownload", ["id": row.nativeID]) }
+                            else if row["status"] as? String == "completed" { model.perform("playDownload", ["id": row.nativeID]) }
                         }
                         ProgressView(value: (row["progress"] as? NSNumber)?.doubleValue ?? 0)
-                        Text(row["status"] as? String ?? "").font(.caption).foregroundStyle(.secondary)
+                        Text((row["status"] as? String ?? "").capitalized).font(.caption).foregroundStyle(.secondary)
                         if let error = row["error"] as? String, !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }
                     }.padding(.vertical, 4)
-                    .swipeActions { Button("Cancel", role: .destructive) { model.perform("cancelDownload", ["id": row.nativeID]) } }
+                    .swipeActions { Button(row["status"] as? String == "completed" ? "Remove" : "Cancel", role: .destructive) { model.perform("cancelDownload", ["id": row.nativeID]) } }
                 }
             }.navigationTitle("Downloads")
                 .toolbar { ToolbarItem(placement: .primaryAction) {
@@ -838,7 +851,20 @@ struct NativeExtensionEditor: View {
                 TextField(label, text: binding).textInputAutocapitalization(.never).autocorrectionDisabled()
             }
             Button("Save") {
-                let value: Any = type == "number" ? (Double(values[key] ?? "") ?? 0) : (values[key] ?? "")
+                let value: Any
+                if type == "number" {
+                    guard let number = Double(values[key] ?? ""), number.isFinite else {
+                        model.error = "Enter a valid number."
+                        return
+                    }
+                    value = number
+                } else if type == "integer" || type == "int" {
+                    guard let number = Int(values[key] ?? "") else {
+                        model.error = "Enter a whole number."
+                        return
+                    }
+                    value = number
+                } else { value = values[key] ?? "" }
                 model.perform("saveExtensionSetting", ["id": id, "key": key, "value": value])
             }
         }
@@ -850,7 +876,10 @@ struct NativeExtensionEditor: View {
             fields = result["fields"] as? [[String: Any]] ?? []
             for field in fields {
                 let value = field["value"]
-                values[field.nativeID] = (value as? Bool).map { $0 ? "true" : "false" } ?? value.map { String(describing: $0) } ?? ""
+                let type = field["type"] as? String ?? "string"
+                values[field.nativeID] = type == "boolean" || type == "bool"
+                    ? ((value as? Bool ?? false) ? "true" : "false")
+                    : value.map { String(describing: $0) } ?? ""
             }
         } catch { model.error = error.localizedDescription }
     }
@@ -890,9 +919,27 @@ struct NativeExtensionStore: View {
     @State private var rows: [[String: Any]] = []
     @State private var loading = true
     @State private var installing: String?
+    @State private var registry = ""
     var body: some View {
         List {
+            Section("Extension registry") {
+                TextField("Registry URL", text: $registry).keyboardType(.URL)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                Button("Save registry") {
+                    loading = true
+                    Task { @MainActor in
+                        defer { loading = false }
+                        do {
+                            _ = try await model.request("setRegistry", ["url": registry])
+                            await load()
+                        } catch { model.error = error.localizedDescription }
+                    }
+                }.disabled(loading || registry.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
             if loading { ProgressView("Loading extensions…") }
+            if !loading && rows.isEmpty {
+                Text("Add the registry URL from your extension provider to browse available extensions.").foregroundStyle(.secondary)
+            }
             ForEach(rows, id: \.nativeID) { row in
                 HStack {
                     VStack(alignment: .leading, spacing: 6) {
@@ -900,24 +947,32 @@ struct NativeExtensionStore: View {
                         Text(row["description"] as? String ?? "").font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
-                    if model.rows("extensions").contains(where: { $0.nativeID == row.nativeID }) {
+                    if row["requiresNewerApp"] as? Bool == true {
+                        Text("Update Mornye").font(.caption).foregroundStyle(.secondary)
+                    } else if row["hasUpdate"] as? Bool == true {
+                        Button("Update") { install(row.nativeID) }.buttonStyle(.bordered).disabled(installing != nil)
+                    } else if model.rows("extensions").contains(where: { $0.nativeID == row.nativeID }) {
                         Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).accessibilityLabel("Installed")
                     } else if installing == row.nativeID { ProgressView() }
                     else { Button("Get") { install(row.nativeID) }.buttonStyle(.bordered).disabled(installing != nil) }
                 }.padding(.vertical, 4)
             }
         }.navigationTitle("Extensions")
-            .task {
-                defer { loading = false }
-                do { rows = try await model.request("store") as? [[String: Any]] ?? [] }
-                catch { model.error = error.localizedDescription }
-            }
+            .task { await load() }
+    }
+    @MainActor private func load() async {
+        defer { loading = false }
+        do {
+            let store = try await model.request("store") as? [String: Any] ?? [:]
+            rows = store["rows"] as? [[String: Any]] ?? []
+            registry = store["registry"] as? String ?? ""
+        } catch { model.error = error.localizedDescription }
     }
     private func install(_ id: String) {
         installing = id
         Task { @MainActor in
             defer { installing = nil }
-            do { _ = try await model.request("install", ["id": id]) }
+            do { _ = try await model.request("install", ["id": id]); await load() }
             catch { model.error = error.localizedDescription }
         }
     }

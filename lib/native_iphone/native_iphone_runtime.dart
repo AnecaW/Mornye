@@ -19,6 +19,7 @@ import 'package:mornye/providers/playback_provider.dart' show playbackProvider;
 import 'package:mornye/providers/library_collections_provider.dart';
 import 'package:mornye/controllers/player_metadata_controller.dart';
 import 'package:mornye/providers/track_provider.dart';
+import 'package:mornye/providers/repo_provider.dart';
 
 /// Presentation adapter only. All commands go through the same controllers as
 /// the cross-platform UI; this layer never implements playback or downloads.
@@ -39,6 +40,7 @@ class _NativeIPhoneRuntimeState extends ConsumerState<NativeIPhoneRuntime> {
   Timer? _publishTimer;
   bool _publishing = false;
   bool _dirty = true;
+  int _libraryGeneration = 0;
   StreamSubscription<List<OpenAudioFile>>? _audioOpen;
 
   @override
@@ -256,10 +258,12 @@ class _NativeIPhoneRuntimeState extends ConsumerState<NativeIPhoneRuntime> {
       case 'library':
         // The existing browser includes both downloaded and scanned music,
         // and applies the user's existing source visibility rules.
+        final generation = ++_libraryGeneration;
         final songs = await ref
             .read(musicPlayerRuntimeProvider)
             .browser
             .librarySongs();
+        if (generation != _libraryGeneration) return [];
         _media.clear();
         return songs.map(_song).toList();
       case 'collection':
@@ -303,6 +307,11 @@ class _NativeIPhoneRuntimeState extends ConsumerState<NativeIPhoneRuntime> {
             .playMediaQueue([media], startIndex: 0, externalPath: media.source);
       case 'playAll':
         final ids = (args['ids'] as List).cast<String>();
+        if (ids.any((id) => !_media.containsKey(id))) {
+          throw StateError(
+            'Your library changed. Refresh it before playing this collection.',
+          );
+        }
         final songs = ids
             .map((id) => _media[id])
             .whereType<PlayableMedia>()
@@ -373,7 +382,14 @@ class _NativeIPhoneRuntimeState extends ConsumerState<NativeIPhoneRuntime> {
       case 'retryDownload':
         await ref.read(downloadQueueProvider.notifier).retryItem(id);
       case 'cancelDownload':
-        ref.read(downloadQueueProvider.notifier).cancelItem(id);
+        ref.read(downloadQueueProvider.notifier).dismissItem(id);
+      case 'playDownload':
+        final item = ref
+            .read(downloadQueueProvider)
+            .items
+            .where((item) => item.id == id)
+            .first;
+        await ref.read(playbackProvider.notifier).playTrackList([item.track]);
       case 'toggleExtension':
         await ref
             .read(extensionProvider.notifier)
@@ -428,16 +444,48 @@ class _NativeIPhoneRuntimeState extends ConsumerState<NativeIPhoneRuntime> {
         }
         return payload;
       case 'store':
-        final temp = await getTemporaryDirectory();
-        await PlatformBridge.initExtensionRepo(temp.path);
-        final rows = await PlatformBridge.getRepoExtensions();
-        return rows;
+        final cache = await getApplicationCacheDirectory();
+        final repo = ref.read(repoProvider.notifier);
+        await repo.initialize(cache.path);
+        if (ref.read(repoProvider).registryUrl.isNotEmpty) await repo.refresh();
+        final store = ref.read(repoProvider);
+        if (store.error != null) throw StateError(store.error!);
+        return {
+          'registry': store.registryUrl,
+          'rows': store.extensions
+              .map(
+                (extension) => {
+                  'id': extension.id,
+                  'name': extension.displayName,
+                  'description': extension.description,
+                  'version': extension.version,
+                  'requiresNewerApp': extension.requiresNewerApp,
+                  'installed': extension.isInstalled,
+                  'hasUpdate': extension.hasUpdate,
+                },
+              )
+              .toList(),
+        };
+      case 'setRegistry':
+        await ref
+            .read(repoProvider.notifier)
+            .setRegistryUrl(args['url'] as String);
+        final error = ref.read(repoProvider).error;
+        if (error != null) throw StateError(error);
       case 'install':
-        final temp = await getTemporaryDirectory();
-        final path = await PlatformBridge.downloadRepoExtension(id, temp.path);
-        if (!await ref
-            .read(extensionProvider.notifier)
-            .installExtension(path)) {
+        final repo = ref.read(repoProvider.notifier);
+        final extension = ref
+            .read(repoProvider)
+            .extensions
+            .where((extension) => extension.id == id)
+            .first;
+        if (extension.requiresNewerApp) {
+          throw StateError('This extension requires a newer Mornye version.');
+        }
+        final installed = extension.isInstalled
+            ? await repo.updateExtensionToDefaultPaths(id)
+            : await repo.installExtensionToDefaultPaths(id);
+        if (!installed) {
           throw StateError('The extension could not be installed.');
         }
       case 'addFolder':

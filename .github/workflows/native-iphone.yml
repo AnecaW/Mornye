@@ -32,7 +32,8 @@ jobs:
             bash scripts/setup_discord_sdk.sh "$sdk_dir"
           fi
       - name: Cache Rust
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        id: rust-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: |
             ~/.cargo/registry/index
@@ -41,7 +42,6 @@ jobs:
             rust_backend/target
           key: cargo-${{ runner.os }}-rust-ios-${{ hashFiles('rust_backend/rust-toolchain.toml') }}-${{ hashFiles('rust_backend/Cargo.lock') }}
           restore-keys: cargo-${{ runner.os }}-rust-ios-${{ hashFiles('rust_backend/rust-toolchain.toml') }}-
-      - run: bash scripts/build_ios.sh
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
         with:
           channel: stable
@@ -56,6 +56,27 @@ jobs:
       - run: dart scripts/prepare_flutter_sdk.dart
       - name: Analyze native presentation adapter
         run: dart analyze lib/native_iphone lib/app.dart lib/main.dart
+      - name: Verify existing controller behavior and native commands
+        run: flutter test --no-pub test/native_iphone_runtime_test.dart test/player_metadata_controller_test.dart test/library_collections_mutation_test.dart test/track_provider_context_test.dart
+      - name: Typecheck SwiftUI before compiling backend
+        run: |
+          set -euo pipefail
+          flutter precache --ios
+          framework=$(find "$FLUTTER_ROOT/bin/cache/artifacts/engine" -path '*/ios-arm64/Flutter.framework' -type d -print -quit)
+          test -n "$framework"
+          xcrun swiftc -typecheck -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" \
+            -target arm64-apple-ios16.0 -F "$(dirname "$framework")" ios/Runner/NativeIPhone.swift
+      - run: bash scripts/build_ios.sh
+      - name: Save compiled backend independently of UI build
+        if: steps.rust-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            rust_backend/target
+          key: ${{ steps.rust-cache.outputs.cache-primary-key }}
       - name: Configure pods
         run: |
           find "$HOME/.pub-cache/hosted" -path '*ffmpeg_kit_flutter_new_audio*/scripts/*.sh' -type f -exec perl -pi -e 's/\r$//' {} +
