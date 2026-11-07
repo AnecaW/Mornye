@@ -1,4 +1,6 @@
 import 'package:flutter/foundation.dart';
+import 'dart:io';
+import 'package:mornye/native_iphone/native_iphone_runtime.dart';
 import 'package:flutter/material.dart';
 import 'package:material_ui/material_ui.dart' as material_ui;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -266,6 +268,7 @@ class MornyeApp extends ConsumerWidget {
       ref.listen(linkPhoneFeaturesProvider, (_, _) {});
       ref.listen(linkTransferOfferNoticesProvider, (_, _) {});
     }
+    if (Platform.isIOS) return const NativeIPhoneRuntime();
     final router = ref.watch(_routerProvider);
     final localeString = ref.watch(settingsProvider.select((s) => s.locale));
     final heroAnimationsEnabled = ref.watch(

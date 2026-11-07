@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        A1F000000000000000000001 /* NativeIPhone.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1F000000000000000000002 /* NativeIPhone.swift */; };
 		A02700000000000000000011 /* LinkNowPlayingState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A02700000000000000000001 /* LinkNowPlayingState.swift */; };
 		A02700000000000000000012 /* LinkNowPlayingBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A02700000000000000000004 /* LinkNowPlayingBridge.swift */; };
 		A02700000000000000000013 /* LinkNowPlayingState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A02700000000000000000001 /* LinkNowPlayingState.swift */; };
@@ -89,6 +90,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+        A1F000000000000000000002 /* NativeIPhone.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeIPhone.swift; sourceTree = "<group>"; };
 		A02700000000000000000001 /* LinkNowPlayingState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkNowPlayingState.swift; sourceTree = "<group>"; };
 		A02700000000000000000002 /* LinkNowPlayingClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkNowPlayingClient.swift; sourceTree = "<group>"; };
 		A02700000000000000000003 /* LinkNowPlayingExtension.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkNowPlayingExtension.swift; sourceTree = "<group>"; };
@@ -249,6 +251,7 @@
 				1498D2321E8E86230040F4C2 /* GeneratedPluginRegistrant.h */,
 				1498D2331E8E89220040F4C2 /* GeneratedPluginRegistrant.m */,
 				74858FAE1ED2DC5600515810 /* AppDelegate.swift */,
+                A1F000000000000000000002 /* NativeIPhone.swift */,
 				A02700000000000000000004 /* LinkNowPlayingBridge.swift */,
 				F59500000000000000000004 /* PlayerWidgetBridge.swift */,
 				A0D100000000000000000002 /* AudioOutputView.swift */,
@@ -529,6 +532,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */,
+                A1F000000000000000000001 /* NativeIPhone.swift in Sources */,
 				A02700000000000000000011 /* LinkNowPlayingState.swift in Sources */,
 				A02700000000000000000012 /* LinkNowPlayingBridge.swift in Sources */,
 				F59500000000000000000011 /* PlayerWidgetState.swift in Sources */,
@@ -645,7 +649,7 @@
 				MTL_ENABLE_DEBUG_INFO = NO;
 				SDKROOT = iphoneos;
 				SUPPORTED_PLATFORMS = iphoneos;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 				VALIDATE_PRODUCT = YES;
 			};
 			name = Profile;
@@ -776,7 +780,7 @@
 				MTL_ENABLE_DEBUG_INFO = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Debug;
 		};
@@ -829,7 +833,7 @@
 				SUPPORTED_PLATFORMS = iphoneos;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 				VALIDATE_PRODUCT = YES;
 			};
 			name = Release;

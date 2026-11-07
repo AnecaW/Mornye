@@ -1,0 +1,87 @@
+name: Native iPhone IPA
+on:
+  push:
+    branches: [codex/native-iphone]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: native-iphone-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  iphone:
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode_27.1.app
+          xcodebuild -version
+          xcrun swiftc -frontend -parse ios/Runner/NativeIPhone.swift
+      - name: Confirm backend unchanged from official 5.3.1
+        run: |
+          git fetch origin b37621c931e4891d0bc8d7588595a406e633b71f --depth=1
+          git diff --exit-code b37621c931e4891d0bc8d7588595a406e633b71f -- rust_backend lib/services lib/providers lib/controllers third_party ios/Runner/CoreBackend.swift
+      - name: Stage official Discord SDK when configured
+        env:
+          DISCORD_MOBILE_SDK_PASSPHRASE: ${{ secrets.DISCORD_MOBILE_SDK_PASSPHRASE }}
+        run: |
+          if [ -n "$DISCORD_MOBILE_SDK_PASSPHRASE" ]; then
+            sdk_dir="$(python3 scripts/prepare_discord_sdk.py)"
+            bash scripts/setup_discord_sdk.sh "$sdk_dir"
+          fi
+      - name: Cache Rust
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            rust_backend/target
+          key: cargo-${{ runner.os }}-rust-ios-${{ hashFiles('rust_backend/rust-toolchain.toml') }}-${{ hashFiles('rust_backend/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-rust-ios-${{ hashFiles('rust_backend/rust-toolchain.toml') }}-
+      - run: bash scripts/build_ios.sh
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          channel: stable
+          flutter-version-file: .fvmrc
+          cache: true
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/.pub-cache
+          key: pub-${{ runner.os }}-${{ hashFiles('pubspec.lock') }}
+          restore-keys: pub-${{ runner.os }}-
+      - run: flutter pub get
+      - run: dart scripts/prepare_flutter_sdk.dart
+      - name: Configure pods
+        run: |
+          find "$HOME/.pub-cache/hosted" -path '*ffmpeg_kit_flutter_new_audio*/scripts/*.sh' -type f -exec perl -pi -e 's/\r$//' {} +
+          cd ios
+          pod install
+      - name: Build native iPhone app
+        run: flutter build ios --release --no-codesign --target lib/main.dart --dart-define="GIT_COMMIT=$(git rev-parse --short=8 HEAD)"
+      - name: Audit and package
+        run: |
+          set -euo pipefail
+          app=build/ios/iphoneos/Runner.app
+          python3 scripts/check_backend_ios.py "$app" --backend rust --archs arm64 --platform ios --release
+          mkdir -p dist/Payload
+          cp -R "$app" dist/Payload/
+          cd dist
+          zip -qry Mornye-native-iPhone-unsigned.ipa Payload
+          shasum -a 256 Mornye-native-iPhone-unsigned.ipa > SHA256SUMS.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: Mornye-native-iPhone-${{ github.sha }}
+          path: |
+            dist/*.ipa
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+      - name: Publish preview release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "native-iphone-${GITHUB_RUN_NUMBER}" dist/*.ipa dist/SHA256SUMS.txt \
+            --target "$GITHUB_SHA" --prerelease --title "Native iPhone preview ${GITHUB_RUN_NUMBER}" \
+            --notes 'SwiftUI iPhone preview based on official Mornye 5.3.1. Core backend files unchanged. Unsigned IPA requires signing for installation. See docs/native-iphone.md for coverage.'

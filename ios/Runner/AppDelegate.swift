@@ -8,6 +8,7 @@ import UniformTypeIdentifiers
     // Widget playback intents can launch the process before any scene exists.
     // Keep one headless-capable engine and attach that same player to the UI.
     lazy var playerEngine = FlutterEngine(name: "mornye-player", project: nil, allowHeadlessExecution: true)
+    lazy var nativeIPhone = NativeIPhoneModel(messenger: playerEngine.binaryMessenger)
     private let CHANNEL = "com.zarz.mornye/backend"
     private let DOWNLOAD_PROGRESS_STREAM_CHANNEL = "com.zarz.mornye/download_progress_stream"
     private let LIBRARY_SCAN_PROGRESS_STREAM_CHANNEL = "com.zarz.mornye/library_scan_progress_stream"
@@ -99,6 +100,7 @@ import UniformTypeIdentifiers
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
     ) -> Bool {
+        _ = nativeIPhone
         playerEngine.run()
         configureFlutterEngine(playerEngine.binaryMessenger, registry: playerEngine)
         if let url = launchOptions?[.url] as? URL {
@@ -885,7 +887,7 @@ class SceneDelegate: FlutterSceneDelegate {
     ) {
         if let windowScene = scene as? UIWindowScene, let appDelegate {
             let window = UIWindow(windowScene: windowScene)
-            window.rootViewController = FlutterViewController(engine: appDelegate.playerEngine, nibName: nil, bundle: nil)
+            window.rootViewController = NativeIPhoneController(engine: appDelegate.playerEngine, model: appDelegate.nativeIPhone)
             self.window = window
             window.makeKeyAndVisible()
         }

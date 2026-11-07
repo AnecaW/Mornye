@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:mornye/native_iphone/native_iphone_runtime.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:mornye/services/audio_file_open_service.dart';
@@ -233,6 +234,10 @@ void main() {
             await restorePersistedPlaybackSession();
             final handler = await initMusicPlayer();
             if (command == 'open') {
+              if (Platform.isIOS) {
+                await NativeIPhoneRuntime.openPlayer();
+                return;
+              }
               await WidgetsBinding.instance.endOfFrame;
               final navigator =
                   AppNavigationService.rootNavigatorKey.currentState;
