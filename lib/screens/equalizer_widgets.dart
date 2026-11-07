@@ -398,8 +398,9 @@ class _BandEditor extends ConsumerWidget {
               'selected': counts.indexOf(count),
             },
             onChanged: (index) {
-              if (index is int && index >= 0 && index < counts.length)
+              if (index is int && index >= 0 && index < counts.length) {
                 select(index);
+              }
             },
           ),
         ),

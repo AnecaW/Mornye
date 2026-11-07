@@ -1,4 +1,5 @@
 import 'package:mornye/widgets/app_progress_indicator.dart';
+import 'package:mornye/widgets/ios_system_view.dart';
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -490,7 +491,7 @@ class _MiniPlayerProgress extends ConsumerWidget {
     final progress = durationMs > 0
         ? (positionMs / durationMs).clamp(0.0, 1.0)
         : 0.0;
-    if (!materialExpressiveEnabled(context)) {
+    if (usesIosVisualStyle || !materialExpressiveEnabled(context)) {
       return AppProgressIndicator.linear(
         plainFallback: true,
         value: progress,

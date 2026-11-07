@@ -5,8 +5,40 @@ import 'package:mornye/utils/playback_seek_preview.dart';
 import 'package:mornye/widgets/app_search_field.dart';
 import 'package:mornye/widgets/app_text_field.dart';
 import 'package:mornye/widgets/playback_seek_slider.dart';
+import 'package:mornye/widgets/settings_group.dart';
 
 void main() {
+  testWidgets('iOS settings segment order and value callbacks stay intact', (
+    tester,
+  ) async {
+    final changes = <int>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SettingsSegmentedChoice<int>(
+            options: const [
+              SettingsSegmentOption(value: 10, label: 'First'),
+              SettingsSegmentOption(value: 30, label: 'Second'),
+              SettingsSegmentOption(value: 20, label: 'Third'),
+            ],
+            selected: 10,
+            onChanged: changes.add,
+          ),
+        ),
+      ),
+    );
+    expect(
+      tester.getCenter(find.text('First')).dx,
+      lessThan(tester.getCenter(find.text('Second')).dx),
+    );
+    expect(
+      tester.getCenter(find.text('Second')).dx,
+      lessThan(tester.getCenter(find.text('Third')).dx),
+    );
+    await tester.tap(find.text('Second'));
+    await tester.pumpAndSettle();
+    expect(changes, [30]);
+  }, variant: const TargetPlatformVariant({TargetPlatform.iOS}));
   testWidgets('Cupertino seek previews movement and commits a single target', (
     tester,
   ) async {

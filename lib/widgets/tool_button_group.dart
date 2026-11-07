@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart' show clampDouble;
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/rendering.dart';
 import 'package:material_3_expressive/material_3_expressive.dart'
     show
@@ -11,6 +12,7 @@ import 'package:material_3_expressive/material_3_expressive.dart'
 import 'package:mornye/theme/app_tokens.dart';
 import 'package:mornye/theme/material_expressive.dart';
 import 'package:mornye/utils/desktop_platform.dart';
+import 'package:mornye/widgets/ios_system_view.dart';
 
 /// One tool in a [ToolButtonGroup].
 class ToolButton {
@@ -91,28 +93,73 @@ class _ToolButtonGroupState extends State<ToolButtonGroup> {
       excludeFromSemantics: true,
       child: _TouchTargetPadding(
         minHeight: context.tokens.minTouchTarget,
-        child: MaterialExpressiveScope(
-          skipAutofocus: true,
-          child: M3EButtonGroup(
-            type: M3EButtonGroupType.connected,
-            style: M3EButtonStyle.filled,
-            size: M3EButtonSize.sm.copyWith(height: height),
-            // Tools are actions, not options: nothing stays selected, and a
-            // press reports the tool through the selection callback.
-            onSelectedIndexChanged: (index) {
-              if (index != null) tools[index].onPressed(_toolContext(index));
-            },
-            actions: [
-              for (final (index, tool) in tools.indexed)
-                M3EButtonGroupAction(
-                  icon: tool.icon,
-                  label: tool.label == null ? null : Text(tool.label!),
-                  tooltip: tool.tooltip,
-                  focusNode: _focusNodeAt(index),
+        child: usesIosVisualStyle
+            ? Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (final (index, tool) in tools.indexed) ...[
+                    if (index > 0) const SizedBox(width: 2),
+                    Flexible(
+                      child: Tooltip(
+                        message: tool.tooltip ?? tool.label ?? '',
+                        child: SizedBox(
+                          height: height,
+                          child: CupertinoButton(
+                            focusNode: _focusNodeAt(index),
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            minimumSize: Size.zero,
+                            borderRadius: BorderRadius.circular(height / 2),
+                            color: CupertinoColors.tertiarySystemFill
+                                .resolveFrom(context),
+                            onPressed: () =>
+                                tool.onPressed(_toolContext(index)),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                tool.icon,
+                                if (tool.label case final label?) ...[
+                                  const SizedBox(width: 6),
+                                  Flexible(
+                                    child: Text(
+                                      label,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              )
+            : MaterialExpressiveScope(
+                skipAutofocus: true,
+                child: M3EButtonGroup(
+                  type: M3EButtonGroupType.connected,
+                  style: M3EButtonStyle.filled,
+                  size: M3EButtonSize.sm.copyWith(height: height),
+                  // Tools are actions, not options: nothing stays selected, and a
+                  // press reports the tool through the selection callback.
+                  onSelectedIndexChanged: (index) {
+                    if (index != null) {
+                      tools[index].onPressed(_toolContext(index));
+                    }
+                  },
+                  actions: [
+                    for (final (index, tool) in tools.indexed)
+                      M3EButtonGroupAction(
+                        icon: tool.icon,
+                        label: tool.label == null ? null : Text(tool.label!),
+                        tooltip: tool.tooltip,
+                        focusNode: _focusNodeAt(index),
+                      ),
+                  ],
                 ),
-            ],
-          ),
-        ),
+              ),
       ),
     );
   }

@@ -10,6 +10,7 @@ import 'package:mornye/widgets/app_bottom_sheet.dart';
 import 'package:mornye/widgets/app_icon.dart';
 import 'package:mornye/widgets/expressive_button.dart';
 import 'package:mornye/widgets/mornye_chrome.dart';
+import 'package:mornye/widgets/ios_system_view.dart';
 
 /// Dialog presentation follows the selected design, including on Android.
 Future<T?> showAppDialog<T>({
@@ -27,6 +28,16 @@ Future<T?> showAppDialog<T>({
         builder: (context) => themes.wrap(Builder(builder: builder)),
         barrierDismissible: barrierDismissible,
       ),
+    );
+  }
+  if (usesIosVisualStyle) {
+    final navigator = Navigator.of(context, rootNavigator: useRootNavigator);
+    final themes = InheritedTheme.capture(from: context, to: navigator.context);
+    return showCupertinoDialog<T>(
+      context: context,
+      barrierDismissible: barrierDismissible,
+      useRootNavigator: useRootNavigator,
+      builder: (context) => themes.wrap(Builder(builder: builder)),
     );
   }
   if (materialExpressiveEnabled(context)) {

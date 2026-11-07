@@ -4,6 +4,39 @@ extension _SetupScreenSteps on _SetupScreenState {
   /// Expressive FABs keep their icon leading and show loading in its place.
   Widget _buildExpressiveFab(ColorScheme colorScheme) {
     final isLastStep = _currentStep >= _totalSteps - 1;
+    if (usesIosVisualStyle) {
+      return CupertinoButton(
+        minimumSize: const Size(48, 56),
+        borderRadius: BorderRadius.circular(28),
+        color: colorScheme.primary,
+        onPressed: _isLoading
+            ? null
+            : isLastStep
+            ? _completeSetup
+            : _isStepCompleted(_currentStep)
+            ? _nextPage
+            : null,
+        child: IconTheme.merge(
+          data: IconThemeData(color: colorScheme.onPrimary, size: 24),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (isLastStep && _isLoading)
+                AppLoadingIndicator(size: 24, color: colorScheme.onPrimary)
+              else
+                AppIcon(isLastStep ? Icons.check : Icons.arrow_forward),
+              const SizedBox(width: 8),
+              Text(
+                isLastStep
+                    ? context.l10n.setupGetStarted
+                    : context.l10n.setupNext,
+                style: TextStyle(color: colorScheme.onPrimary),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     return MaterialExpressiveScope(
       child: isLastStep
           ? M3EExtendedFab(

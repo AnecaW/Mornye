@@ -2,7 +2,8 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/cupertino.dart' show CupertinoColors, CupertinoIcons;
+import 'package:flutter/cupertino.dart'
+    show CupertinoColors, CupertinoIcons, CupertinoSlidingSegmentedControl;
 import 'package:material_3_expressive/material_3_expressive.dart';
 import 'package:mornye/theme/app_motion.dart';
 import 'package:mornye/theme/material_expressive.dart';
@@ -302,7 +303,8 @@ class SettingsGroup extends StatelessWidget {
       return inset(MornyeGlassPanel(samplesBackdrop: false, child: child));
     }
 
-    final expressive = materialExpressiveEnabled(context);
+    final expressive =
+        !usesIosVisualStyle && materialExpressiveEnabled(context);
     // Only groups of standard rows split into connected tiles. Forms and
     // custom content keep one card, so spacers never become empty tiles.
     final standardRows =
@@ -889,6 +891,42 @@ class SettingsSegmentedChoice<T> extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (usesIosVisualStyle && !context.isMornye && options.isNotEmpty) {
+      final index = options.indexWhere((option) => option.value == selected);
+      return Semantics(
+        label: semanticLabel,
+        child: SizedBox(
+          height: 48,
+          width: double.infinity,
+          child: CupertinoSlidingSegmentedControl<int>(
+            groupValue: index < 0 ? null : index,
+            children: {
+              for (final (index, option) in options.indexed)
+                index: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    if (option.icon != null) ...[
+                      AppIcon.adaptive(option.icon!, size: 18),
+                      const SizedBox(width: 6),
+                    ],
+                    Flexible(
+                      child: Text(
+                        option.label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+            },
+            onValueChanged: (index) {
+              if (index != null) onChanged(options[index].value);
+            },
+          ),
+        ),
+      );
+    }
     if (materialExpressiveEnabled(context)) {
       final index = options.indexWhere((option) => option.value == selected);
       return MaterialExpressiveScope(
