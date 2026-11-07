@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
+import 'package:mornye/widgets/ios_system_view.dart';
 
 /// A continuous player track with no thumb in either gesture state.
 class MornyePlayerSlider extends StatelessWidget {
@@ -38,25 +40,40 @@ class MornyePlayerSlider extends StatelessWidget {
   @override
   Widget build(BuildContext context) => SizedBox(
     height: height,
-    child: SliderTheme(
-      data: SliderTheme.of(context).copyWith(
-        trackHeight: trackHeight,
-        trackGap: 0,
-        trackShape: const RoundedRectSliderTrackShape(),
-        thumbShape: SliderComponentShape.noThumb,
-        overlayShape: SliderComponentShape.noOverlay,
-        showValueIndicator: ShowValueIndicator.never,
-      ),
-      child: Slider(
-        padding: EdgeInsets.symmetric(horizontal: inset),
-        value: value,
-        max: max,
-        activeColor: activeColor,
-        inactiveColor: inactiveColor,
-        onChanged: onChanged,
-        onChangeStart: onChangeStart,
-        onChangeEnd: onChangeEnd,
-      ),
-    ),
+    child: usesIosVisualStyle && height >= 40
+        ? Padding(
+            padding: EdgeInsets.symmetric(horizontal: inset),
+            child: SizedBox(
+              width: double.infinity,
+              child: CupertinoSlider(
+                value: value,
+                max: max,
+                activeColor: activeColor,
+                onChangeStart: onChangeStart,
+                onChanged: onChanged,
+                onChangeEnd: onChangeEnd,
+              ),
+            ),
+          )
+        : SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              trackHeight: trackHeight,
+              trackGap: 0,
+              trackShape: const RoundedRectSliderTrackShape(),
+              thumbShape: SliderComponentShape.noThumb,
+              overlayShape: SliderComponentShape.noOverlay,
+              showValueIndicator: ShowValueIndicator.never,
+            ),
+            child: Slider(
+              padding: EdgeInsets.symmetric(horizontal: inset),
+              value: value,
+              max: max,
+              activeColor: activeColor,
+              inactiveColor: inactiveColor,
+              onChanged: onChanged,
+              onChangeStart: onChangeStart,
+              onChangeEnd: onChangeEnd,
+            ),
+          ),
   );
 }

@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/cupertino.dart' show CupertinoIcons;
+import 'package:flutter/cupertino.dart' show CupertinoColors, CupertinoIcons;
 import 'package:material_3_expressive/material_3_expressive.dart';
 import 'package:mornye/theme/app_motion.dart';
 import 'package:mornye/theme/material_expressive.dart';
@@ -13,10 +13,16 @@ import 'package:mornye/theme/mornye_theme.dart';
 import 'package:mornye/theme/mornye_icons.dart';
 import 'package:mornye/widgets/mornye_chrome.dart';
 import 'package:mornye/utils/adaptive_layout.dart';
+import 'package:mornye/widgets/ios_system_view.dart';
 
 /// The neutral grouped fill used in Settings, including AMOLED themes.
 Color settingsGroupColor(BuildContext context) {
   final colorScheme = Theme.of(context).colorScheme;
+  if (usesIosVisualStyle && !context.isMornye) {
+    return CupertinoColors.secondarySystemGroupedBackground.resolveFrom(
+      context,
+    );
+  }
   if (context.isMornye) return colorScheme.surfaceContainer;
   final isDark = Theme.of(context).brightness == Brightness.dark;
   return isDark
@@ -263,7 +269,9 @@ class SettingsGroup extends StatelessWidget {
       border: context.isMornye
           ? null
           : Border.all(
-              color: colorScheme.outlineVariant.withValues(alpha: 0.5),
+              color: usesIosVisualStyle
+                  ? Colors.transparent
+                  : colorScheme.outlineVariant.withValues(alpha: 0.5),
             ),
     );
     final child = Material(

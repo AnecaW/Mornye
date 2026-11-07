@@ -890,11 +890,12 @@ class _HomeContinueListeningProgress extends ConsumerWidget {
     return RepaintBoundary(
       child: ClipRRect(
         borderRadius: BorderRadius.circular(2),
-        child: LinearProgressIndicator(
+        child: AppProgressIndicator.linear(
+          plainFallback: true,
           value: progress,
           minHeight: 4,
           color: neutral ? colorScheme.onSurface : colorScheme.primary,
-          backgroundColor:
+          trackColor:
               (neutral ? colorScheme.onSurface : colorScheme.onPrimaryContainer)
                   .withValues(alpha: 0.16),
         ),

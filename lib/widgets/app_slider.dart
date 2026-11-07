@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:material_3_expressive/material_3_expressive.dart';
 import 'package:mornye/theme/material_expressive.dart';
+import 'package:mornye/widgets/ios_system_view.dart';
+import 'package:mornye/widgets/mornye_level_slider.dart';
 
 /// Settings slider with the Material 3 Expressive track and handle.
 /// Mornye and reduced motion keep the standard [Slider].
@@ -60,6 +63,37 @@ class AppSlider extends StatelessWidget {
   }
 
   Widget _buildSlider(BuildContext context) {
+    if (usesIosVisualStyle &&
+        centered &&
+        divisions == null &&
+        onChangeEnd == null) {
+      return MornyeLevelSlider(
+        value: value,
+        min: min,
+        max: max,
+        origin: (min + max) / 2,
+        vertical: vertical,
+        onChanged: onChanged,
+        semanticLabel: semanticLabel,
+        semanticFormatterCallback: semanticFormatterCallback,
+      );
+    }
+    if (usesIosVisualStyle && !centered) {
+      final slider = SizedBox(
+        height: 48,
+        width: double.infinity,
+        child: CupertinoSlider(
+          value: value,
+          min: min,
+          max: max,
+          divisions: divisions,
+          activeColor: Theme.of(context).colorScheme.primary,
+          onChanged: onChanged,
+          onChangeEnd: onChangeEnd,
+        ),
+      );
+      return vertical ? RotatedBox(quarterTurns: 3, child: slider) : slider;
+    }
     if (!materialExpressiveEnabled(context)) {
       final slider = Slider(
         value: value,

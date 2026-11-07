@@ -92,7 +92,7 @@ class AppMenuButton<T extends Object> extends StatelessWidget {
         ),
       );
     }
-    if (materialExpressiveEnabled(context)) {
+    if (!usesIosVisualStyle && materialExpressiveEnabled(context)) {
       return MaterialExpressiveScope(child: _ExpressiveMenuAnchor<T>(this));
     }
     final colorScheme = Theme.of(context).colorScheme;

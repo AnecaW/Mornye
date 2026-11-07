@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:material_3_expressive/material_3_expressive.dart';
 import 'package:mornye/theme/material_expressive.dart';
@@ -7,6 +8,7 @@ import 'package:mornye/widgets/app_icon.dart';
 import 'package:mornye/widgets/app_loading_indicator.dart';
 import 'package:mornye/widgets/expressive_button_group.dart';
 import 'package:mornye/widgets/expressive_icon_button.dart';
+import 'package:mornye/widgets/ios_system_view.dart';
 
 /// Material 3 Expressive previous / play-pause / next row.
 ///
@@ -217,6 +219,26 @@ class _ExpressivePlaybackTransportState
       data: IconThemeData(size: iconSize),
       child: icon,
     );
+    if (usesIosVisualStyle) {
+      return Tooltip(
+        message: tooltip,
+        child: Semantics(
+          selected: selected,
+          child: CupertinoButton(
+            padding: EdgeInsets.zero,
+            minimumSize: Size.zero,
+            borderRadius: BorderRadius.circular(round ? 100 : 16),
+            color: background,
+            disabledColor: scheme.onSurface.withValues(alpha: 0.12),
+            onPressed: onPressed,
+            child: IconTheme.merge(
+              data: IconThemeData(color: foreground),
+              child: sized(selected == true ? selectedIcon ?? icon : icon),
+            ),
+          ),
+        ),
+      );
+    }
     return Tooltip(
       message: tooltip,
       excludeFromSemantics: true,

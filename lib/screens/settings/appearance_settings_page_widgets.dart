@@ -324,17 +324,40 @@ class _MornyeGlassClaritySlider extends ConsumerWidget {
           ),
           Semantics(
             label: l10n.appearanceGlassClarity,
-            child: Slider(
-              key: const ValueKey('mornye-glass-clarity'),
-              value: clarity,
-              divisions: 20,
-              label: '${(clarity * 100).round()}%',
-              onChanged: adjustable
-                  ? (value) =>
-                        notifier.setMornyeGlassClarity(value, persist: false)
-                  : null,
-              onChangeEnd: adjustable ? notifier.setMornyeGlassClarity : null,
-            ),
+            child: usesIosVisualStyle
+                ? SizedBox(
+                    height: 48,
+                    width: double.infinity,
+                    child: CupertinoSlider(
+                      key: const ValueKey('mornye-glass-clarity'),
+                      value: clarity,
+                      divisions: 20,
+                      onChanged: adjustable
+                          ? (value) => notifier.setMornyeGlassClarity(
+                              value,
+                              persist: false,
+                            )
+                          : null,
+                      onChangeEnd: adjustable
+                          ? notifier.setMornyeGlassClarity
+                          : null,
+                    ),
+                  )
+                : Slider(
+                    key: const ValueKey('mornye-glass-clarity'),
+                    value: clarity,
+                    divisions: 20,
+                    label: '${(clarity * 100).round()}%',
+                    onChanged: adjustable
+                        ? (value) => notifier.setMornyeGlassClarity(
+                            value,
+                            persist: false,
+                          )
+                        : null,
+                    onChangeEnd: adjustable
+                        ? notifier.setMornyeGlassClarity
+                        : null,
+                  ),
           ),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,

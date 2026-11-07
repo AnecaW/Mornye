@@ -6,6 +6,8 @@ import 'package:mornye/providers/custom_font_provider.dart';
 import 'package:mornye/theme/app_theme.dart';
 import 'package:mornye/models/theme_settings.dart';
 import 'package:mornye/theme/mornye_theme.dart';
+import 'package:mornye/theme/ios_visual_theme.dart';
+import 'package:mornye/widgets/ios_system_view.dart';
 
 class DynamicColorWrapper extends ConsumerWidget {
   final Widget Function(ThemeData light, ThemeData dark, ThemeMode mode)
@@ -15,6 +17,10 @@ class DynamicColorWrapper extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    Widget buildThemes(ThemeData light, ThemeData dark, ThemeMode mode) =>
+        usesIosVisualStyle
+        ? builder(iosVisualTheme(light), iosVisualTheme(dark), mode)
+        : builder(light, dark, mode);
     // Lyrics size and font names live in ThemeSettings but not in ThemeData.
     final themeSettings = ref.watch(
       themeProvider.select(
@@ -43,7 +49,7 @@ class DynamicColorWrapper extends ConsumerWidget {
       colors: ref.watch(initialDynamicColorsProvider),
       builder: (lightDynamic, darkDynamic) {
         if (themeSettings.style == AppThemeStyle.mornye) {
-          return builder(
+          return buildThemes(
             MornyeTheme.build(
               Brightness.light,
               accent: themeSettings.mornyeAccent,
@@ -100,7 +106,7 @@ class DynamicColorWrapper extends ConsumerWidget {
           fontFamily: fontFamily,
         );
 
-        return builder(lightTheme, darkTheme, themeSettings.themeMode);
+        return buildThemes(lightTheme, darkTheme, themeSettings.themeMode);
       },
     );
   }

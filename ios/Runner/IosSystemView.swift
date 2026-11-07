@@ -38,6 +38,7 @@ private final class IosSystemView: NSObject, FlutterPlatformView, UITabBarDelega
         case "switch": control = UISwitch()
         case "segments": control = UISegmentedControl()
         case "tabs": control = UITabBar()
+        case "progress": control = UIProgressView(progressViewStyle: .default)
         case "menu", "back": control = UIButton(type: .system)
         default: control = UIVisualEffectView()
         }
@@ -113,6 +114,13 @@ private final class IosSystemView: NSObject, FlutterPlatformView, UITabBarDelega
             if let index = values["selected"] as? Int, let items = tabs.items, items.indices.contains(index) {
                 tabs.selectedItem = items[index]
             }
+        } else if let progress = control as? UIProgressView {
+            container.isUserInteractionEnabled = false
+            progress.progress = (values["value"] as? NSNumber)?.floatValue ?? 0
+            progress.accessibilityLabel = values["label"] as? String
+            progress.accessibilityValue = values["description"] as? String
+            progress.progressTintColor = color(values["tint"])
+            progress.trackTintColor = color(values["trackTint"])
         } else if let button = control as? UIButton {
             var configuration: UIButton.Configuration
             if #available(iOS 26.0, *) {
@@ -149,20 +157,20 @@ private final class IosSystemView: NSObject, FlutterPlatformView, UITabBarDelega
                     bottomLeftRadius: bottom, bottomRightRadius: bottom)
                 guard material != surfaceMaterial else { return }
                 let glass = UIGlassEffect(style: material.clear ? .clear : .regular)
-                if let tint = material.tint {
-                    glass.tintColor = UIColor(
-                        red: CGFloat((tint >> 16) & 255) / 255,
-                        green: CGFloat((tint >> 8) & 255) / 255,
-                        blue: CGFloat(tint & 255) / 255,
-                        alpha: CGFloat(tint >> 24) / 255
-                    )
-                }
+                glass.tintColor = color(values["tint"])
                 surface.effect = glass
             } else if surfaceMaterial == nil || surfaceMaterial?.glass != material.glass {
                 surface.effect = UIBlurEffect(style: .systemMaterial)
             }
             surfaceMaterial = material
         }
+    }
+
+    private func color(_ value: Any?) -> UIColor? {
+        guard let tint = (value as? NSNumber)?.uint32Value else { return nil }
+        return UIColor(red: CGFloat((tint >> 16) & 255) / 255,
+            green: CGFloat((tint >> 8) & 255) / 255,
+            blue: CGFloat(tint & 255) / 255, alpha: CGFloat(tint >> 24) / 255)
     }
 
     @objc private func toggleChanged(_ sender: UISwitch) {

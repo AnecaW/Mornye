@@ -1,3 +1,4 @@
+import 'package:mornye/widgets/app_text_field.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:mornye/l10n/l10n.dart';
@@ -345,7 +346,8 @@ class _AccountFormDialogState extends State<_AccountFormDialog> {
         ),
       );
     } else {
-      input = TextFormField(
+      input = AppTextField(
+        forcePlain: true,
         controller: _controllers[key],
         obscureText: secret,
         autocorrect: false,
@@ -354,7 +356,7 @@ class _AccountFormDialogState extends State<_AccountFormDialog> {
         maxLength: 4096,
         keyboardType: keyboard,
         textInputAction: last ? TextInputAction.done : TextInputAction.next,
-        onFieldSubmitted: (_) =>
+        onSubmitted: (_) =>
             last ? _submit() : FocusScope.of(context).nextFocus(),
         decoration: decoration,
         validator: (value) => _validate(field, value),

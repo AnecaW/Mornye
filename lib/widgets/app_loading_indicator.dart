@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:material_3_expressive/material_3_expressive.dart';
 import 'package:mornye/theme/material_expressive.dart';
 import 'package:mornye/theme/mornye_theme.dart';
+import 'package:mornye/widgets/ios_system_view.dart';
 
 /// Indeterminate loading only. Downloads/analysis keep their real progress.
 class AppLoadingIndicator extends StatelessWidget {
@@ -25,6 +27,19 @@ class AppLoadingIndicator extends StatelessWidget {
     final animate =
         !MediaQuery.disableAnimationsOf(context) &&
         TickerMode.valuesOf(context).enabled;
+    if (usesIosVisualStyle) {
+      return SizedBox.square(
+        dimension: size,
+        child: Semantics(
+          label: semanticLabel,
+          child: CupertinoActivityIndicator(
+            radius: size / 2,
+            color: color,
+            animating: animate,
+          ),
+        ),
+      );
+    }
     return SizedBox.square(
       dimension: size,
       child: !context.isMornye

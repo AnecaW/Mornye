@@ -384,6 +384,27 @@ class _BandEditor extends ConsumerWidget {
         ),
       );
     }
+    if (usesIosSystemViews) {
+      return Semantics(
+        label: context.l10n.equalizerBands,
+        child: SizedBox(
+          height: 48,
+          width: double.infinity,
+          child: IosSystemView(
+            kind: 'segments',
+            configuration: {
+              ...iosSystemAppearance(context),
+              'labels': [for (final value in counts) '$value'],
+              'selected': counts.indexOf(count),
+            },
+            onChanged: (index) {
+              if (index is int && index >= 0 && index < counts.length)
+                select(index);
+            },
+          ),
+        ),
+      );
+    }
     if (materialExpressiveEnabled(context)) {
       return MaterialExpressiveScope(
         skipAutofocus: true,

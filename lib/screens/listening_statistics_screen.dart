@@ -1,3 +1,4 @@
+import 'package:mornye/widgets/app_progress_indicator.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -394,7 +395,8 @@ class _ListeningStatisticsScreenState
                                   fraction: day.value / peakDay,
                                   peak: day.value == peakDay,
                                 )
-                              : LinearProgressIndicator(
+                              : AppProgressIndicator.linear(
+                                  plainFallback: true,
                                   value: day.value / peakDay,
                                   minHeight: 8,
                                   borderRadius: BorderRadius.circular(8),

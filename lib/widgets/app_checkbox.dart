@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:material_3_expressive/material_3_expressive.dart';
 import 'package:mornye/theme/material_expressive.dart';
+import 'package:mornye/widgets/ios_system_view.dart';
 
 /// Checkbox row for Material dialogs and sheets. Expressive builds use the
 /// M3E checkbox; reduced motion falls back to the static Material tile.
@@ -29,7 +31,7 @@ class AppCheckboxListTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (!materialExpressiveEnabled(context)) {
+    if (!usesIosVisualStyle && !materialExpressiveEnabled(context)) {
       return CheckboxListTile(
         value: value,
         onChanged: onChanged,
@@ -40,9 +42,11 @@ class AppCheckboxListTile extends StatelessWidget {
         controlAffinity: controlAffinity,
       );
     }
-    final checkbox = MaterialExpressiveScope(
-      child: M3ECheckbox(value: value, onChanged: onChanged),
-    );
+    final checkbox = usesIosVisualStyle
+        ? CupertinoCheckbox(value: value, onChanged: onChanged)
+        : MaterialExpressiveScope(
+            child: M3ECheckbox(value: value, onChanged: onChanged),
+          );
     final checkboxLeads = controlAffinity == ListTileControlAffinity.leading;
     return MergeSemantics(
       child: ListTile(

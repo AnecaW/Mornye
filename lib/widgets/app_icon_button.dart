@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:material_3_expressive/material_3_expressive.dart';
 import 'package:mornye/theme/material_expressive.dart';
 import 'package:mornye/widgets/app_icon.dart';
+import 'package:mornye/widgets/ios_system_view.dart';
 
 enum _AppIconButtonVariant { standard, filled, tonal }
 
@@ -90,7 +92,39 @@ class AppIconButton extends StatelessWidget {
     final selectedIcon = this.selectedIcon == null
         ? null
         : symbolIconWidget(this.selectedIcon!);
-    if (!materialExpressiveEnabled(context) || _keepsMaterialLayout) {
+    if (usesIosVisualStyle && style == null && !_keepsMaterialLayout) {
+      final colors = Theme.of(context).colorScheme;
+      final foreground =
+          color ??
+          (_variant == _AppIconButtonVariant.filled
+              ? colors.onPrimary
+              : colors.onSurface);
+      final button = Semantics(
+        selected: isSelected,
+        child: CupertinoButton(
+          minimumSize: const Size(48, 48),
+          padding: const EdgeInsets.all(8),
+          borderRadius: BorderRadius.circular(28),
+          color: switch (_variant) {
+            _AppIconButtonVariant.standard => null,
+            _AppIconButtonVariant.filled => colors.primary,
+            _AppIconButtonVariant.tonal =>
+              CupertinoColors.tertiarySystemFill.resolveFrom(context),
+          },
+          onPressed: onPressed,
+          child: IconTheme.merge(
+            data: IconThemeData(size: iconSize ?? 24, color: foreground),
+            child: isSelected == true ? selectedIcon ?? icon : icon,
+          ),
+        ),
+      );
+      return tooltip == null
+          ? button
+          : Tooltip(message: tooltip!, child: button);
+    }
+    if (usesIosVisualStyle ||
+        !materialExpressiveEnabled(context) ||
+        _keepsMaterialLayout) {
       return switch (_variant) {
         _AppIconButtonVariant.standard => IconButton(
           icon: icon,

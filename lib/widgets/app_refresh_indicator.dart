@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:material_3_expressive/material_3_expressive.dart';
 import 'package:mornye/theme/material_expressive.dart';
+import 'package:mornye/widgets/ios_system_view.dart';
 
 /// Pull-to-refresh with the expressive shape-morphing indicator on Material.
 /// Mornye and reduced motion keep Flutter's [RefreshIndicator].
@@ -95,9 +96,9 @@ class _AppRefreshIndicatorState extends State<AppRefreshIndicator> {
 
   @override
   Widget build(BuildContext context) {
-    _usesExpressive = materialExpressiveEnabled(context);
+    _usesExpressive = !usesIosVisualStyle && materialExpressiveEnabled(context);
     if (!_usesExpressive) {
-      return RefreshIndicator(
+      return RefreshIndicator.adaptive(
         key: _materialKey,
         onRefresh: widget.onRefresh,
         notificationPredicate: widget.notificationPredicate,

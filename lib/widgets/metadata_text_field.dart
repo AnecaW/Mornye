@@ -81,7 +81,8 @@ class MetadataTextField extends StatelessWidget {
             ),
             const Divider(height: 0.5),
           ] else
-            TextField(
+            AppTextField(
+              forcePlain: true,
               controller: controller,
               keyboardType: keyboard,
               inputFormatters: inputFormatters,

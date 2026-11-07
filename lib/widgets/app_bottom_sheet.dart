@@ -8,6 +8,7 @@ import 'package:mornye/utils/desktop_platform.dart';
 import 'package:mornye/widgets/app_icon.dart';
 import 'package:mornye/widgets/app_icon_button.dart';
 import 'package:mornye/widgets/mornye_chrome.dart';
+import 'package:mornye/widgets/ios_system_view.dart';
 import 'package:mornye/theme/mornye_icons.dart';
 
 /// The drag handle shown at the top of every modal sheet.
@@ -408,6 +409,7 @@ Future<T?> showAppModalBottomSheet<T>({
     );
   }
   final mornye = context.isMornye;
+  final iosGlass = usesIosSystemViews && mornyeGlass && backgroundColor == null;
   return showModalBottomSheet<T>(
     context: context,
     sheetAnimationStyle: AppMotion.surfaceEntrance(context),
@@ -418,12 +420,12 @@ Future<T?> showAppModalBottomSheet<T>({
     useSafeArea: useSafeArea,
     showDragHandle: showDragHandle,
     constraints: constraints,
-    backgroundColor: mornye ? Colors.transparent : backgroundColor,
-    barrierColor: mornye
+    backgroundColor: mornye || iosGlass ? Colors.transparent : backgroundColor,
+    barrierColor: mornye || usesIosSystemViews
         ? CupertinoDynamicColor.resolve(kCupertinoModalBarrierColor, context)
         : null,
-    elevation: mornye ? 0 : null,
-    builder: (context) => mornye && mornyeGlass
+    elevation: mornye || iosGlass ? 0 : null,
+    builder: (context) => (mornye && mornyeGlass) || iosGlass
         ? MornyeGlassPanel.overlay(child: Builder(builder: builder))
         : builder(context),
   );

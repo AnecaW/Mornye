@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:material_3_expressive/material_3_expressive.dart';
 import 'package:mornye/theme/material_expressive.dart';
 import 'package:mornye/widgets/app_icon.dart';
+import 'package:mornye/widgets/ios_system_view.dart';
 
 /// Expressive actions retain caller colors, disabled states and flexible labels.
 class ExpressiveButton extends StatelessWidget {
@@ -29,7 +31,40 @@ class ExpressiveButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final icon = this.icon == null ? null : symbolIconWidget(this.icon!);
-    if (!materialExpressiveEnabled(context)) {
+    if (usesIosVisualStyle && style == null) {
+      final theme = Theme.of(context);
+      final colors = theme.colorScheme;
+      final prominent = !text && !outlined && !tonal;
+      final foreground = prominent ? colors.onPrimary : colors.primary;
+      return CupertinoButton(
+        minimumSize: const Size(48, 48),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        borderRadius: BorderRadius.circular(28),
+        color: prominent
+            ? colors.primary
+            : text
+            ? null
+            : CupertinoColors.tertiarySystemFill.resolveFrom(context),
+        onPressed: onPressed,
+        child: DefaultTextStyle.merge(
+          style: (theme.textTheme.labelLarge ?? const TextStyle()).copyWith(
+            color: foreground,
+          ),
+          child: IconTheme.merge(
+            data: IconThemeData(color: foreground, size: 20),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                if (icon != null) ...[icon, const SizedBox(width: 8)],
+                Flexible(child: child),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+    if (usesIosVisualStyle || !materialExpressiveEnabled(context)) {
       if (icon != null) {
         // Keep the standard icon spacing and asymmetric padding.
         if (text) {

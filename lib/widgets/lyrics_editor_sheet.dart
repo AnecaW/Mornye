@@ -1,3 +1,4 @@
+import 'package:mornye/widgets/app_text_field.dart';
 import 'dart:async';
 
 import 'package:audio_service/audio_service.dart' show MediaItem;
@@ -712,7 +713,8 @@ class _LyricsEditorRow extends StatelessWidget {
                 timeChip,
                 const SizedBox(width: 4),
                 Expanded(
-                  child: TextField(
+                  child: AppTextField(
+                    forcePlain: true,
                     controller: line.text,
                     focusNode: line.focus,
                     minLines: 1,

@@ -155,7 +155,8 @@ class _LinkPinDialogState extends State<LinkPinDialog> {
           )
         : Semantics(
             label: l10n.linkPinField,
-            child: TextField(
+            child: AppTextField(
+              forcePlain: true,
               key: LinkPinDialog.fieldKey,
               controller: _pin,
               enabled: !_busy,

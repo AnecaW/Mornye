@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/cupertino.dart' show CupertinoIcons;
+import 'package:flutter/cupertino.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mornye/providers/runtime_profile_provider.dart';
 import 'package:mornye/theme/app_tokens.dart';
@@ -7,6 +7,7 @@ import 'package:mornye/theme/mornye_theme.dart';
 import 'package:mornye/widgets/app_icon.dart';
 import 'package:mornye/widgets/app_icon_button.dart';
 import 'package:mornye/widgets/mornye_chrome.dart';
+import 'package:mornye/widgets/ios_system_view.dart';
 
 /// The standard search field used by top-level app surfaces.
 ///
@@ -59,6 +60,67 @@ class AppSearchField extends StatelessWidget {
     final radius = BorderRadius.circular(
       mornye ? glassRadius : context.tokens.radiusSheet,
     );
+
+    if (usesIosVisualStyle) {
+      final input = ValueListenableBuilder<TextEditingValue>(
+        valueListenable: controller,
+        builder: (context, value, _) => CupertinoTextField(
+          controller: controller,
+          focusNode: focusNode,
+          autofocus: autofocus,
+          textInputAction: TextInputAction.search,
+          placeholder: hintText,
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+            fontSize: compact ? 14 : null,
+            color: colorScheme.onSurface,
+          ),
+          prefix: Padding(
+            padding: EdgeInsetsDirectional.only(start: compact ? 8 : 12),
+            child: prefixIcon ?? const Icon(CupertinoIcons.search, size: 20),
+          ),
+          suffix:
+              suffixIcon ??
+              (value.text.isEmpty
+                  ? null
+                  : AppIconButton(
+                      tooltip: clearTooltip,
+                      icon: const Icon(
+                        CupertinoIcons.clear_circled_solid,
+                        size: 20,
+                      ),
+                      onPressed: () {
+                        controller.clear();
+                        onClear();
+                      },
+                    )),
+          padding: EdgeInsets.symmetric(
+            horizontal: compact ? 8 : 12,
+            vertical: compact ? 8 : 16,
+          ),
+          decoration: mornye
+              ? null
+              : BoxDecoration(
+                  color: CupertinoColors.tertiarySystemFill.resolveFrom(
+                    context,
+                  ),
+                  borderRadius: radius,
+                ),
+          onChanged: onChanged,
+          onSubmitted: onSubmitted,
+          onTapOutside: (_) => FocusScope.of(context).unfocus(),
+        ),
+      );
+      final field = compact ? SizedBox(height: height, child: input) : input;
+      if (!mornye) return field;
+      return Consumer(
+        builder: (context, ref, _) => MornyeGlass.navigation(
+          radius: glassRadius,
+          blurEnabled: ref.watch(mornyeBlurEnabledProvider),
+          samplesBackdrop: samplesBackdrop,
+          child: field,
+        ),
+      );
+    }
 
     final field = ValueListenableBuilder<TextEditingValue>(
       valueListenable: controller,

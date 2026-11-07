@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:material_3_expressive/material_3_expressive.dart';
 import 'package:mornye/theme/material_expressive.dart';
 import 'package:mornye/widgets/app_icon.dart';
 import 'package:mornye/widgets/expressive_button_group.dart';
+import 'package:mornye/widgets/ios_system_view.dart';
 
 /// Compact expressive transport/header actions with the same accessible target
 /// and tooltip as the standard Material fallback.
@@ -41,6 +43,38 @@ class ExpressiveIconButton extends StatelessWidget {
       foregroundColor,
       backgroundColor,
     );
+    if (usesIosVisualStyle) {
+      final states = <WidgetState>{if (onPressed == null) WidgetState.disabled};
+      final target = Size(
+        ExpressiveButtonGroupSlot.widthOf(context) ?? width ?? size,
+        size,
+      );
+      return Tooltip(
+        message: tooltip,
+        child: Semantics(
+          selected: selected,
+          child: SizedBox.fromSize(
+            size: target,
+            child: CupertinoButton(
+              padding: EdgeInsets.zero,
+              minimumSize: target,
+              borderRadius: BorderRadius.circular(size / 2),
+              color: fill.backgroundColor?.resolve(states),
+              disabledColor:
+                  fill.backgroundColor?.resolve(states) ?? Colors.transparent,
+              onPressed: onPressed,
+              child: IconTheme.merge(
+                data: IconThemeData(
+                  size: iconSize,
+                  color: fill.foregroundColor?.resolve(states),
+                ),
+                child: icon,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
     if (!materialExpressiveEnabled(context)) {
       return IconButton(
         icon: icon,

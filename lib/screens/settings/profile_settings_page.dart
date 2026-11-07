@@ -1,3 +1,4 @@
+import 'package:mornye/widgets/app_text_field.dart';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
@@ -148,7 +149,8 @@ class _ProfileSettingsPageState extends ConsumerState<ProfileSettingsPage> {
                       children: [
                         Padding(
                           padding: const EdgeInsets.all(20),
-                          child: TextField(
+                          child: AppTextField(
+                            forcePlain: true,
                             controller: _name,
                             enabled: !_busy,
                             maxLength: 50,

@@ -783,8 +783,8 @@ class _SetupScreenState extends ConsumerState<SetupScreen>
                 ? SizedBox(
                     width: 20,
                     height: 20,
-                    child: CircularProgressIndicator(
-                      color: colorScheme.onPrimary,
+                    child: CircularProgressIndicator.adaptive(
+                      valueColor: AlwaysStoppedAnimation(colorScheme.onPrimary),
                     ),
                   )
                 : Text(context.l10n.setupGetStarted),

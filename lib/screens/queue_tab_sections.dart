@@ -357,7 +357,24 @@ extension _QueueTabSections on _QueueTabState {
     final labels = [l10n.historyFilterAlbums, l10n.historyFilterSingles];
     final selected = _albumsShowSingles ? 1 : 0;
     final Widget toggle;
-    if (materialExpressiveEnabled(context)) {
+    if (usesIosVisualStyle) {
+      toggle = SizedBox(
+        height: 48,
+        child: CupertinoSlidingSegmentedControl<int>(
+          groupValue: selected,
+          children: {
+            for (final (index, label) in labels.indexed)
+              index: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Text(label),
+              ),
+          },
+          onValueChanged: (index) {
+            if (index != null) _setAlbumsShowSingles(index == 1);
+          },
+        ),
+      );
+    } else if (materialExpressiveEnabled(context)) {
       toggle = MaterialExpressiveScope(
         skipAutofocus: true,
         child: M3EButtonGroup(

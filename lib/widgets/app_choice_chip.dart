@@ -4,6 +4,7 @@ import 'package:material_3_expressive/material_3_expressive.dart';
 import 'package:mornye/theme/material_expressive.dart';
 import 'package:mornye/theme/mornye_theme.dart';
 import 'package:mornye/widgets/app_icon.dart';
+import 'package:mornye/widgets/ios_system_view.dart';
 
 /// A single tonal selection inside a sheet, without a second glass layer.
 class AppChoiceChip extends StatelessWidget {
@@ -26,7 +27,9 @@ class AppChoiceChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (materialExpressiveEnabled(context) && label is Text) {
+    if (!usesIosVisualStyle &&
+        materialExpressiveEnabled(context) &&
+        label is Text) {
       final text = label as Text;
       return MaterialExpressiveScope(
         child: M3EChip(
@@ -39,7 +42,7 @@ class AppChoiceChip extends StatelessWidget {
         ),
       );
     }
-    if (!context.isMornye) {
+    if (!context.isMornye && !usesIosVisualStyle) {
       final icon = this.icon == null ? null : symbolIconWidget(this.icon!);
       final content = count == null
           ? label

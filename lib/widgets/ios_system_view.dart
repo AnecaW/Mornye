@@ -9,6 +9,9 @@ import 'package:flutter/services.dart';
 
 bool get usesIosSystemViews => !kIsWeb && Platform.isIOS;
 
+bool get usesIosVisualStyle =>
+    !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
+
 Map<String, Object?> iosSystemAppearance(BuildContext context) => {
   'dark': Theme.of(context).brightness == Brightness.dark,
   'rtl': Directionality.of(context) == TextDirection.rtl,

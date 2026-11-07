@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:material_3_expressive/material_3_expressive.dart';
 import 'package:mornye/theme/material_expressive.dart';
 import 'package:mornye/theme/mornye_theme.dart';
+import 'package:mornye/widgets/ios_system_view.dart';
 
 /// One inline surface, matching the metadata groups and dialog controls.
 class AppContentCard extends StatelessWidget {
@@ -40,7 +41,8 @@ class AppContentCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (!context.isMornye || !mornyeSurface) {
-      if (!context.isMornye &&
+      if (!usesIosVisualStyle &&
+          !context.isMornye &&
           materialExpressiveEnabled(context) &&
           (shape == null || shape is RoundedRectangleBorder)) {
         final radius = shape is RoundedRectangleBorder

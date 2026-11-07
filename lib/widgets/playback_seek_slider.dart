@@ -3,6 +3,7 @@ import 'package:mornye/theme/mornye_theme.dart';
 import 'package:mornye/utils/playback_seek_preview.dart';
 import 'package:mornye/widgets/expressive_seek_track.dart';
 import 'package:mornye/widgets/mornye_player_slider.dart';
+import 'package:mornye/widgets/ios_system_view.dart';
 
 /// Previews scrubbing locally and seeks once when the gesture ends.
 class PlaybackSeekSlider extends StatefulWidget {
@@ -90,7 +91,7 @@ class _PlaybackSeekSliderState extends State<PlaybackSeekSlider> {
     final durationMs = widget.duration.inMilliseconds;
     final enabled = durationMs > 0;
     final maxMs = enabled ? durationMs.toDouble() : 1.0;
-    if (context.isMornye) {
+    if (context.isMornye || usesIosVisualStyle) {
       final currentMs = (_previewMs ?? widget.position.inMilliseconds)
           .clamp(0, maxMs)
           .toDouble();
@@ -123,7 +124,11 @@ class _PlaybackSeekSliderState extends State<PlaybackSeekSlider> {
             value: enabled ? currentMs : 0,
             max: maxMs,
             trackHeight: widget.hairline ? 2 : 6,
-            height: widget.hairline ? 10 : 44,
+            height: widget.hairline
+                ? 10
+                : context.isMornye
+                ? 44
+                : 48,
             inset: widget.hairline || widget.edgeAligned
                 ? 0
                 : MornyePlayerSlider.horizontalInset,

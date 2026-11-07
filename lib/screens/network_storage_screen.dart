@@ -1,3 +1,4 @@
+import 'package:mornye/widgets/app_text_field.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -831,7 +832,8 @@ class _NetworkConnectionFormState extends State<_NetworkConnectionForm> {
           ),
           Semantics(
             label: label,
-            child: TextFormField(
+            child: AppTextField(
+              forcePlain: true,
               key: ValueKey(label),
               controller: controller,
               enabled: !_busy,

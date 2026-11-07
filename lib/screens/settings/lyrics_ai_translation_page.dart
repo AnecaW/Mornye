@@ -495,7 +495,8 @@ class _TextSheetBodyState extends State<_TextSheetBody> {
           )
         // A key keeps its dedicated field, as other credentials do.
         : widget.secret
-        ? TextField(
+        ? AppTextField(
+            forcePlain: true,
             controller: _controller,
             autofocus: true,
             obscureText: true,

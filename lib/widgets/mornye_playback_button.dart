@@ -172,7 +172,9 @@ class _MornyePlaybackButtonState extends State<MornyePlaybackButton>
                       ? const Center(
                           child: SizedBox.square(
                             dimension: 32,
-                            child: CircularProgressIndicator(strokeWidth: 3),
+                            child: CircularProgressIndicator.adaptive(
+                              strokeWidth: 3,
+                            ),
                           ),
                         )
                       : KeyedSubtree(

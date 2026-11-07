@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:material_3_expressive/material_3_expressive.dart';
 import 'package:mornye/theme/material_expressive.dart';
+import 'package:mornye/widgets/ios_system_view.dart';
 
 /// Task progress (downloads, scans, updates), determinate or not.
 ///
@@ -17,6 +19,7 @@ class AppProgressIndicator extends StatelessWidget {
     this.semanticsLabel,
     this.semanticsValue,
     this.wavy = true,
+    this.plainFallback = false,
   }) : strokeWidth = null,
        strokeCap = null,
        _circular = false;
@@ -34,6 +37,7 @@ class AppProgressIndicator extends StatelessWidget {
     this.wavy = true,
   }) : minHeight = null,
        borderRadius = null,
+       plainFallback = false,
        _circular = true;
 
   /// Progress in `0..1`, or null for indeterminate.
@@ -55,12 +59,63 @@ class AppProgressIndicator extends StatelessWidget {
   /// step or refresh, such as goals, use the flat expressive track at the
   /// caller's thickness instead.
   final bool wavy;
+  final bool plainFallback;
   final bool _circular;
 
   @override
   Widget build(BuildContext context) {
     final value = this.value?.clamp(0.0, 1.0);
-    if (!materialExpressiveEnabled(context)) {
+    if (usesIosSystemViews && _circular) {
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          final extent = constraints.biggest.shortestSide;
+          final side = extent.isFinite ? extent : 48.0;
+          if (side <= 0) return const SizedBox.shrink();
+          return Semantics(
+            label: semanticsLabel,
+            value:
+                semanticsValue ??
+                (value == null ? null : '${(value * 100).round()}%'),
+            child: SizedBox.square(
+              dimension: side,
+              child: value == null
+                  ? CupertinoActivityIndicator(
+                      radius: side / 2,
+                      color: color,
+                      animating:
+                          TickerMode.valuesOf(context).enabled &&
+                          !MediaQuery.disableAnimationsOf(context),
+                    )
+                  : CupertinoActivityIndicator.partiallyRevealed(
+                      radius: side / 2,
+                      color: color,
+                      progress: value,
+                    ),
+            ),
+          );
+        },
+      );
+    }
+    if (usesIosSystemViews && value != null) {
+      return SizedBox(
+        height: minHeight ?? 4,
+        width: double.infinity,
+        child: IosSystemView(
+          kind: 'progress',
+          configuration: {
+            ...iosSystemAppearance(context),
+            'value': value,
+            'label': semanticsLabel,
+            'description': semanticsValue,
+            'tint': color?.toARGB32(),
+            'trackTint': trackColor?.toARGB32(),
+          },
+        ),
+      );
+    }
+    if (plainFallback ||
+        usesIosVisualStyle ||
+        !materialExpressiveEnabled(context)) {
       return _circular
           ? CircularProgressIndicator(
               value: value,
